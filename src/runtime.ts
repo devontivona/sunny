@@ -1,10 +1,13 @@
+import { start as startWorkflow } from 'workflow/api';
+import { runScheduledJob } from '../workflows/scheduledJob.js';
 import { createAgentRunner } from './agent/loop.js';
 import { loadConfig, type SunnyConfig } from './config/index.js';
-import { createDb, runMigrations } from './db/client.js';
+import { createDb, runMigrations, type Db } from './db/client.js';
 import { ConversationStore } from './gateway/store.js';
 import { SendblueGateway } from './gateway/sendblue.js';
 import type { ChannelEvent, Gateway } from './gateway/types.js';
 import { initMemory } from './memory/index.js';
+import { startScheduler } from './scheduler/index.js';
 import { logger } from './logger.js';
 
 const log = logger('runtime');
@@ -13,6 +16,7 @@ export interface Runtime {
   config: SunnyConfig;
   gateway: Gateway;
   store: ConversationStore;
+  db: Db;
 }
 
 let startedPromise: Promise<Runtime> | null = null;
@@ -56,10 +60,27 @@ async function start(): Promise<Runtime> {
       await gateway.send(event.threadId, { text: `echo: ${event.text}` });
     });
   } else {
-    gateway.onInbound(createAgentRunner({ config, store, gateway }));
+    gateway.onInbound(createAgentRunner({ config, store, gateway, db }));
   }
 
   await gateway.start();
+
+  // Scheduling (D-SC2): the ~60s ticker dispatches due schedules as durable jobs.
+  startScheduler({
+    db,
+    dispatch: async (schedule, runId) => {
+      await startWorkflow(runScheduledJob, [
+        {
+          scheduleId: schedule.id,
+          runId,
+          threadId: schedule.threadId,
+          prompt: schedule.prompt,
+          ownerName: config.owner.name,
+        },
+      ]);
+    },
+  });
+
   log.info('runtime started');
-  return { config, gateway, store };
+  return { config, gateway, store, db };
 }

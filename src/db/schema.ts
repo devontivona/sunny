@@ -30,3 +30,38 @@ export const messages = pgTable(
 
 export type MessageRow = typeof messages.$inferSelect;
 export type NewMessageRow = typeof messages.$inferInsert;
+
+/**
+ * Persisted schedules (scheduling D-SC1/2). The table is the source of truth —
+ * a ~60s ticker dispatches due rows as Tier-2 durable jobs. Survives restarts.
+ */
+export const schedules = pgTable(
+  'schedules',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    kind: text('kind').notNull(), // 'once' | 'interval' | 'cron'
+    spec: text('spec').notNull(), // ISO timestamp | duration (e.g. '2h') | cron expr
+    prompt: text('prompt').notNull(), // what Sunny should do when it fires
+    threadId: text('thread_id').notNull(), // delivery target (default: owner DM)
+    timezone: text('timezone').notNull(),
+    label: text('label'),
+    nextRunAt: timestamp('next_run_at', { withTimezone: true }),
+    active: boolean('active').notNull().default(true),
+    lastRunAt: timestamp('last_run_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('schedules_due_idx').on(t.active, t.nextRunAt)],
+);
+
+/** Run history for schedules (scheduling D-SC5: retained for inspection). */
+export const scheduleRuns = pgTable('schedule_runs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  scheduleId: uuid('schedule_id').notNull(),
+  firedAt: timestamp('fired_at', { withTimezone: true }).notNull().defaultNow(),
+  status: text('status').notNull(), // 'running' | 'completed' | 'failed'
+  output: text('output'),
+  error: text('error'),
+});
+
+export type ScheduleRow = typeof schedules.$inferSelect;
+export type NewScheduleRow = typeof schedules.$inferInsert;

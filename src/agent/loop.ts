@@ -2,11 +2,14 @@ import { ToolLoopAgent, stepCountIs, type ModelMessage } from 'ai';
 import type { SunnyConfig } from '../config/index.js';
 import type { ChannelEvent, Gateway } from '../gateway/types.js';
 import type { ConversationStore, StoredMessage } from '../gateway/store.js';
+import type { Db } from '../db/client.js';
 import { loadCore, memoryPaths } from '../memory/index.js';
 import { logger } from '../logger.js';
+import { ensureConsolidationSchedule } from '../scheduler/index.js';
 import { getModel, anthropicProviderOptions } from './model.js';
 import { buildSystemPrompt } from './prompt.js';
 import { createMemoryTools } from './tools/memory.js';
+import { createScheduleTools } from './tools/schedule.js';
 import { createSendMessageTool, type SendCounter } from './tools/sendMessage.js';
 import { createStartJobTool } from './tools/startJob.js';
 
@@ -16,6 +19,7 @@ export interface AgentRunnerDeps {
   config: SunnyConfig;
   store: ConversationStore;
   gateway: Gateway;
+  db: Db;
 }
 
 /**
@@ -30,13 +34,21 @@ export interface AgentRunnerDeps {
  * work (it is not the intended path).
  */
 export function createAgentRunner(deps: AgentRunnerDeps) {
-  const { config, store, gateway } = deps;
+  const { config, store, gateway, db } = deps;
   const paths = memoryPaths(config.runtimeDir);
   const memoryTools = createMemoryTools(config, store);
 
   return async function runTurn(event: ChannelEvent): Promise<void> {
     const startedAt = Date.now();
     await gateway.startTyping(event.threadId);
+
+    // Seed the nightly memory-consolidation schedule once we know the owner's
+    // delivery thread (4.7, idempotent). Fire-and-forget; never blocks the turn.
+    if (event.isOwner && !event.isGroup) {
+      void ensureConsolidationSchedule(db, event.threadId, config.timezone).catch((err) =>
+        log.warn('ensureConsolidationSchedule failed', { err: String(err) }),
+      );
+    }
 
     // Always-on core is re-read per run (agent-memory D3), so hand-edits and
     // mid-turn writes take effect immediately.
@@ -46,6 +58,11 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
     const tools = {
       send_message: createSendMessageTool(gateway, event.threadId, counter),
       start_job: createStartJobTool(event.threadId, config.owner.name),
+      // Self-scheduling only on owner DMs (anti-recursion: scheduled runs never
+      // get these tools; D-SC4). Non-owner/group turns can't schedule.
+      ...(event.isOwner && !event.isGroup
+        ? createScheduleTools(db, event.threadId, config.timezone)
+        : {}),
       ...memoryTools,
     };
     const agent = new ToolLoopAgent({
@@ -76,7 +93,13 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
         delivered = 'silence';
       }
 
-      logTurnSummary(event, result, counter.count, delivered, Date.now() - startedAt);
+      logTurnSummary(
+        event,
+        result as unknown as TurnResult,
+        counter.count,
+        delivered,
+        Date.now() - startedAt,
+      );
     } catch (err) {
       log.error('agent turn failed', {
         threadId: event.threadId,
