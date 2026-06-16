@@ -31,7 +31,7 @@ This change bootstraps Sunny. It is being captured incrementally: subsystem desi
 
 ### New Capabilities
 - `agent-memory`: How Sunny stores, recalls, and curates what it knows about Devon and itself — the always-on core, on-demand topic docs, keyword/semantic recall over message history, and self-scheduled consolidation.
-- `messaging-gateway`: How Sunny sends and receives messages across channels — a normalized gateway interface the agent core speaks, with pluggable channel drivers (iMessage via Chat SDK + Photon first), capability flags per channel, sender authorization, and a self-owned conversation store.
+- `messaging-gateway`: How Sunny sends and receives messages across channels — a normalized gateway interface the agent core speaks, with pluggable channel drivers (iMessage via Chat SDK + Photon first), capability flags per channel, sender authorization, a self-owned conversation store, and an explicit `send_message` output model (raw model text is private; Sunny speaks only by calling the tool — D-MG8).
 - `durable-execution`: How Sunny runs work so it survives restarts — fast in-process conversational turns made idempotent per message, plus durable Workflow DevKit jobs for long/async tasks, on one Postgres that also holds messages, FTS, and vectors.
 - `scheduling`: How Sunny schedules itself — persisted one-shot/interval/cron schedules dispatched as durable jobs, with an anti-recursion guard, gateway delivery of output, and cost caps on autonomous runs.
 - `security-permissions`: How Sunny stays safe despite untrusted content — identity, smart approval tiers with high-consequence actions hard-gated, a hard blocklist, an isolated credentialed browser, prompt-injection containment, and audit logging.

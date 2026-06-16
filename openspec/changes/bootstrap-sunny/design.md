@@ -165,7 +165,30 @@ The gateway authorizes inbound senders before the agent acts. For a single user 
 
 The iMessage transport runs on **Photon's Spectrum Cloud**: Sunny runs on Devon's Linux home server, and Photon handles the Mac-relay infrastructure (no Mac required by Devon, full feature set incl. reactions/typing/edit, free→$25 tier). The tradeoff accepted is a managed Photon/Spectrum Cloud dependency in the message path; this is mitigated by D-MG1's `Gateway` seam, which keeps the transport swappable (to local macOS mode, self-hosted gRPC, or Sendblue) without agent changes.
 
+### D-MG8 — Agent output model: explicit `send_message`, raw model text is private
+
+Sunny does **not** auto-pipe the model's text to the channel. The model's raw output is **private** (reasoning/scratchpad); Sunny talks to the user **only by calling a `send_message` tool**. This decouples *thinking* from *speaking* so Sunny can reason across many steps and tool calls, then emit one (or a few) deliberate, concise messages — the right fit for a low-text-density channel like iMessage. It also matches Anthropic's documented guidance (a `send_to_user`-style tool) and the property that **tool inputs are never summarized**, so the user receives exactly what Sunny wrote. Three complementary layers:
+
+```
+ ADAPTIVE THINKING  in-step, private, ephemeral (Anthropic `thinking:{adaptive}`,
+                    omitted-by-default on Opus 4.8 — never shown to the user). (D-PS3)
+ SCRATCHPAD / NOTES cross-step + cross-session working memory — the agent-memory
+                    notes/files surface, distinct from user messages.
+ send_message(text) the ONLY path to the user. Verbatim, deliberate, concise.
+                    Multiple calls per turn allowed (multi-bubble); sending does NOT
+                    end the turn (reason → send → keep working → send again).
+```
+
+Specifics:
+- **Silence is free:** not calling `send_message` = stay silent (cleaner than Hermes' sentinel token); the system prompt blesses ending a turn without sending when there's nothing useful to say.
+- **`send_message` is the natural hook** for typing indicators (fire on turn start / per send), message chunking, and gateway capability-flagging (D-MG3).
+- **`send_message` is owner-directed:** in a group, it targets the thread; it carries no special privilege (it's gated like any tool, though it's low-consequence).
+
+**Failure mode + guard (the one real risk):** the agent reasons/works and ends the turn **without ever calling `send_message`**, leaving the owner in silence — Anthropic notes the tool is "rarely called" without explicit instruction. Mitigations: (1) **system-prompt elicitation** ("when you have content the user must read, call `send_message`; use it only for user-facing content, not reasoning/narration"); (2) a **harness guard** — if a turn ends with no `send_message` and no *deliberate* silence signal, inject a nudge ("summarize for the user now") before completing. This supersedes the implicit "run to completion → auto-send the final assistant text" in durable-execution D-DE3.
+
 ### Rejected alternatives (messaging-gateway)
+
+- **Auto-pipe model text → channel (with a silence token):** simplest, and what Hermes/OpenClaw do — but it dumps reasoning/narration into a low-density channel and gives the agent no first-class control over each message; relies on the model self-censoring. Rejected for the "think a lot, say a little" goal in favor of D-MG8.
 
 - **Build directly on `spectrum-ts`:** loses Chat SDK's `toAiMessages()` / thread-state / streaming and has no documented AI SDK integration — more hand-rolling for a narrower channel set.
 - **Bind the agent directly to one iMessage adapter (no seam):** couples the agent to the youngest, most vendor-coupled layer; a Photon outage or pricing change would force agent rewrites.
@@ -236,7 +259,7 @@ Tier 2 runs on WDK with `@workflow/world-postgres` (Postgres state + graphile-wo
 
 ### D-DE3 — Single-write persistence, no streaming
 
-The agent runs to completion (`agent.generate()` for Tier 1, `DurableAgent` run-to-done for Tier 2); messages are persisted **once** on completion (per Discussion #688's `collectUIMessages` → `saveMessages` pattern), never per replayed step. No resumable-stream layer is wired up. This sidesteps the only real integration seam (choosing a persistence owner) by making the workflow/turn the single writer.
+The agent runs to completion (`agent.generate()` for Tier 1, `DurableAgent` run-to-done for Tier 2). User-facing output is **not** the final assistant text — it is whatever the agent emitted via `send_message` calls during the run (D-MG8); the raw model text is private. No resumable-stream layer is wired up. Each `send_message` delivery and the inbound/outbound message records are persisted to the conversation store (idempotently, so a resumed run doesn't re-deliver a message it already sent — keyed by send id). This keeps the workflow/turn the single source of truth while making the agent's *speaking* an explicit, auditable action rather than a side effect of the final text.
 
 ### D-DE4 — One Postgres for everything DB-backed
 

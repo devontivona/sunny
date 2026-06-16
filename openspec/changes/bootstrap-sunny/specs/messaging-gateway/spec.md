@@ -1,5 +1,32 @@
 ## ADDED Requirements
 
+### Requirement: Explicit send-message output model
+Sunny SHALL deliver user-facing messages only by an explicit `send_message` action; the model's raw text output SHALL NOT be auto-delivered to the channel. The agent MAY call `send_message` multiple times within a turn, and calling it SHALL NOT end the turn. A turn that calls `send_message` zero times SHALL result in no message to the user (silence). The model's in-step reasoning and any scratchpad/notes SHALL NOT be delivered to the user.
+
+#### Scenario: Only explicit sends reach the user
+- **WHEN** the agent produces internal reasoning or scratchpad text during a turn
+- **THEN** none of it is delivered to the user
+- **AND** the user receives only the content of `send_message` calls
+
+#### Scenario: Multiple sends in one turn
+- **WHEN** the agent calls `send_message` more than once in a turn
+- **THEN** each call delivers a separate message and the turn continues
+
+#### Scenario: Silence is allowed
+- **WHEN** the agent ends a turn without calling `send_message` and there is nothing useful to say
+- **THEN** no message is delivered to the user
+
+### Requirement: Guard against unintended silence
+If a turn ends without any `send_message` call and without a deliberate decision to stay silent, the system SHALL prompt the agent to produce a user-facing message rather than completing the turn silently.
+
+#### Scenario: Forgot-to-send nudge
+- **WHEN** a turn would end with no `send_message` call and no deliberate silence signal
+- **THEN** the agent is nudged to send a user-facing message before the turn completes
+
+#### Scenario: Sends are not duplicated on resume
+- **WHEN** a durable run resumes after interruption
+- **THEN** a `send_message` already delivered before the interruption is not delivered again
+
 ### Requirement: Normalized gateway interface
 Sunny's agent core SHALL communicate with all channels through a single normalized gateway interface and SHALL NOT depend directly on any channel SDK or transport library. Inbound messages SHALL be delivered to the agent as a channel-agnostic event containing at least channel, thread identifier, sender identifier, text, attachments, and timestamp. Outbound sends SHALL be expressed against the same interface.
 

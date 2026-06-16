@@ -19,8 +19,9 @@
 - [ ] 2.2 Implement the iMessage driver via Chat SDK + Photon adapter on Spectrum Cloud; HTTP webhook listener for inbound (D-MG1, D-MG7).
 - [ ] 2.3 Own the conversation store: persist every inbound/outbound message to Postgres (messages table) (messaging-gateway R: self-owned store, D-MG2).
 - [ ] 2.4 Sender authorization: allowlist Devon's identity at the gateway (messaging-gateway R: sender authorization, D-MG6).
-- [ ] 2.5 Minimal agent loop (`ToolLoopAgent`) that reads recent messages from the store, calls Opus, persists + sends a reply. **Milestone: text Sunny, get a reply.**
-- [ ] 2.6 Per-channel capability flags + graceful degradation; no token streaming (complete messages) (D-MG3, D-DE3).
+- [ ] 2.5 Minimal agent loop (`ToolLoopAgent`) that reads recent messages from the store, calls Opus, and talks to the user **only via a `send_message` tool** (raw model text private). **Milestone: text Sunny, get a reply.** (D-MG8)
+- [ ] 2.5a Output model (D-MG8): `send_message(text)` tool (multi-call per turn, doesn't end the turn, idempotent on resume); **adaptive thinking** for in-step reasoning (never surfaced); **scratchpad/notes** via the memory surface for cross-step working memory; **silence = not calling send**; **system-prompt elicitation** + a **forgot-to-send guard** (nudge if a turn ends with no send and no deliberate silence) (messaging-gateway R: explicit send-message, unintended-silence guard).
+- [ ] 2.6 Per-channel capability flags + graceful degradation; no token streaming (complete messages); typing indicator on turn start / per send (D-MG3, D-MG8, D-DE3).
 
 ## 3. Phase 2 — Memory
 
