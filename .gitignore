@@ -1,0 +1,27 @@
+# Installed third-party reference skills (managed via `npx skills add`)
+.agents/
+.claude/skills/ai-sdk
+.claude/skills/chat-sdk
+.claude/skills/workflow
+
+# Node / build
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+
+# Environment & secrets — never commit
+.env
+.env.*
+*.env
+secrets/
+*op-service-account*
+*.token
+
+# Runtime state (lives under ~/.sunny, never in the repo)
+.sunny/
+
+# OS / editor
+.DS_Store
+*.log
+*.swp
