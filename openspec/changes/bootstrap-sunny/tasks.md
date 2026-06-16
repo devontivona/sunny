@@ -1,30 +1,34 @@
-> Build plan for bootstrap-sunny. Phases are ordered so each builds on a working
-> predecessor; a "walking skeleton" (Phase 1) is reachable early, then capabilities
-> layer on. Each group references its spec under `specs/<capability>/` and the
-> design decisions (D-*) in `design.md`.
+> Build plan for bootstrap-sunny. Optimized to reach a **live, testable iMessage
+> loop as fast as possible** (Phase 1, Milestone B: "text Sunny → get a real Opus
+> reply"), then layer intelligence-visible capabilities one phase at a time so each
+> step is observable on the live agent. Heavy infra (Postgres, 1Password, systemd)
+> is deferred to the phase that first needs it — it is NOT required for the first
+> reply. Each group references its spec under `specs/<capability>/` and the design
+> decisions (D-*) in `design.md`.
 
-## 1. Phase 0 — Foundation & infrastructure
+## 1. Phase 0 — Minimal foundation (just enough to text Sunny)
 
 - [ ] 1.1 Scaffold the Node LTS + TypeScript project (D-PS1): `package.json`, `tsconfig`, the `src/` layout (D-PS2), lint/format, env loading.
-- [ ] 1.2 Stand up Postgres locally and wire Drizzle (schema + migrations harness) (D-PS1, D-DE4).
-- [ ] 1.3 Install/pin core deps: `ai` (v6), `@ai-sdk/anthropic`, `chat`, `@workflow/world-postgres`, `@1password/sdk`, Drizzle, an OTel SDK. Pin `@1password/sdk` (0.x).
-- [ ] 1.4 Create the `~/.sunny/` runtime contract: `memory/` + `skills/` under a **single git repo at `~/.sunny/`** (not nested per-subdir repos); config file loader (non-secret settings) (D-PS5).
-- [ ] 1.5 Wire the model: `anthropic('claude-opus-4-8')`, adaptive thinking + effort defaults, `ANTHROPIC_API_KEY` from env (D-PS3).
-- [ ] 1.6 1Password setup: create the dedicated read-only `Sunny` vault + Service Account; load `OP_SERVICE_ACCOUNT_TOKEN` from a hardened `EnvironmentFile`; SDK wrapper that resolves `op://` refs in the tool layer only (D-CR1, D-CR2, D-CR4).
-- [ ] 1.7 systemd unit for the `sunny` service (`Restart=always`) + Postgres service; document the deploy (D-PS6).
+- [ ] 1.2 Install/pin the loop's core deps only: `ai` (v6), `@ai-sdk/anthropic`, `chat`. (Drizzle/Postgres → Phase 2; `@workflow/world-postgres` → Phase 3; `@1password/sdk` → Phase 4; OTel → Phase 6.)
+- [ ] 1.3 **Critical path to "text Sunny":** Photon/Spectrum Cloud account (free tier) + project secret in env; stand up a **publicly reachable inbound webhook** for dev (tunnel / `devbox` public URL) so Photon can POST inbound messages.
+- [ ] 1.4 Wire the model: `anthropic('claude-opus-4-8')`, adaptive thinking + effort defaults, `ANTHROPIC_API_KEY` from env (D-PS3).
+- [ ] 1.5 `~/.sunny/` config loader (non-secret settings) + create the runtime dir (D-PS5). *(The single `~/.sunny/` git repo for memory+skills lands with Phase 2.)*
 
-## 2. Phase 1 — Walking skeleton (gateway ↔ agent ↔ Opus over iMessage)
+> Deferred out of Phase 0 (moved to where they're first needed): local Postgres + Drizzle → Phase 2 · 1Password vault/Service Account → Phase 4 · systemd always-on deploy → Phase 3. The skeleton runs **foreground in dev** with env-var secrets.
+
+## 2. Phase 1 — Walking skeleton (the fast path to a live loop)
 
 - [ ] 2.1 Define the normalized `Gateway` seam: `ChannelEvent` inbound, `send()` outbound, `capabilities` (messaging-gateway R: normalized interface, D-MG1/3).
-- [ ] 2.2 Implement the iMessage driver via Chat SDK + Photon adapter on Spectrum Cloud; HTTP webhook listener for inbound (D-MG1, D-MG7).
-- [ ] 2.3 Own the conversation store: persist every inbound/outbound message to Postgres (messages table) (messaging-gateway R: self-owned store, D-MG2).
+- [ ] 2.2 Implement the iMessage driver via Chat SDK + Photon adapter on Spectrum Cloud; HTTP webhook listener for inbound (D-MG1, D-MG7). **→ Milestone A: gateway echo — text Sunny, it echoes back (no LLM yet; proves the transport round-trip independent of the agent).**
+- [ ] 2.3 Trivial conversation store (in-memory or local SQLite) for recent-window context. **Promote to Postgres in Phase 2** — the skeleton does not need Postgres (messaging-gateway R: self-owned store, D-MG2).
 - [ ] 2.4 Sender authorization: allowlist Devon's identity at the gateway (messaging-gateway R: sender authorization, D-MG6).
-- [ ] 2.5 Minimal agent loop (`ToolLoopAgent`) that reads recent messages from the store, calls Opus, and talks to the user **only via a `send_message` tool** (raw model text private). **Milestone: text Sunny, get a reply.** (D-MG8)
-- [ ] 2.5a Output model (D-MG8): `send_message(text)` tool (multi-call per turn, doesn't end the turn, idempotent on resume); **adaptive thinking** for in-step reasoning (never surfaced); **scratchpad/notes** via the memory surface for cross-step working memory; **silence = not calling send**; **system-prompt elicitation** + a **forgot-to-send guard** (nudge if a turn ends with no send and no deliberate silence) (messaging-gateway R: explicit send-message, unintended-silence guard).
+- [ ] 2.5 In-process agent loop (`ToolLoopAgent`, Opus) that reads the recent window and talks to the user **only via a `send_message` tool** (raw model text private); adaptive thinking on. **→ Milestone B: text Sunny → get a real Opus reply. (This is the goal — from here you iterate on intelligence live.)** (D-MG8)
+- [ ] 2.5a Output model (D-MG8): `send_message(text)` (multi-call per turn, doesn't end the turn, idempotent on resume); **scratchpad/notes** via the memory surface for cross-step working memory; **silence = not calling send**; **system-prompt elicitation** + a **forgot-to-send guard** (messaging-gateway R: explicit send-message, unintended-silence guard).
 - [ ] 2.6 Per-channel capability flags + graceful degradation; no token streaming (complete messages); typing indicator on turn start / per send (D-MG3, D-MG8, D-DE3).
 
 ## 3. Phase 2 — Memory
 
+- [ ] 3.0 Stand up **local Postgres + Drizzle** (schema + migrations); migrate the conversation store off the Phase-1 trivial store. Create the single `~/.sunny/` git repo for `memory/` + `skills/` (moved from Phase 0; D-PS1, D-DE4, D-PS5).
 - [ ] 3.1 Always-on core: load `USER.md` + `SUNNY.md` + `INDEX.md` each run; render as a byte-stable cached system prefix (agent-memory R: always-on core; D-PS4 caching).
 - [ ] 3.2 Memory write tool (`add`/`replace`/`remove`, no `read`); error-on-overflow forces consolidation (agent-memory R: forced consolidation, D2).
 - [ ] 3.3 On-demand topic docs via `INDEX.md` router; date-tagged facts for temporal reasoning (agent-memory R: topic docs, date-tagged facts; D1, D4).
@@ -37,6 +41,7 @@
 
 ## 4. Phase 3 — Durable execution & scheduling
 
+- [ ] 4.0 Go always-on: systemd unit for the `sunny` service (`Restart=always`) + Postgres service; long-lived WDK worker; document the deploy (moved from Phase 0; D-PS6).
 - [ ] 4.1 Idempotent conversational turns keyed by message id; re-process un-answered messages on restart; inbound dedup; **serialize turns per thread** (durable-execution R: idempotent turns, D-DE1; R7).
 - [ ] 4.1b Double-text steering: per-thread **steer-buffer** drained by AI SDK `prepareStep` so a new owner message folds into the in-flight run at the next step (not a new run, not a kill); `abortSignal` restart only when the message invalidates the task (durable-execution R: double-text steering; R12).
 - [ ] 4.2 WDK on `@workflow/world-postgres`; `start_job` tool that promotes long/async work to a durable Tier-2 job; side effects in `'use step'` (durable-execution R: durable jobs; D-DE1/2).
@@ -48,6 +53,7 @@
 
 ## 5. Phase 4 — Security, tools & credentials
 
+- [ ] 5.0 1Password setup (moved from Phase 0): dedicated read-only `Sunny` vault + Service Account; `OP_SERVICE_ACCOUNT_TOKEN` from a hardened `EnvironmentFile`; `@1password/sdk` wrapper resolving `op://` refs in the tool layer only (D-CR1, D-CR2, D-CR4).
 - [ ] 5.1 Approval tiers: smart risk-assessor on a **cheap fast model (Haiku-class)** + hard-gated categories (money / destructive / act-as-Devon); approvals **durable-suspended** (WDK hook) with an **id-correlated** reply, re-prompt on ambiguity, default-deny on timeout (security R: approval tiers, durable/correlated approvals; D-SEC3; R9, R10).
 - [ ] 5.1a Owner tagging end-to-end: gateway tags `isOwner`; non-owner group messages are answerable but cannot trigger consequence or approve (security R: identity; messaging-gateway R: owner tagging; R1).
 - [ ] 5.2 Hard blocklist (rm -rf /, fork bombs, reading the op token file, weakening own guards) (security R: hard blocklist; D-SEC4).
