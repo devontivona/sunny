@@ -124,7 +124,7 @@ export class SendblueGateway implements Gateway {
     }
     const sent = await thread.post(message.text);
     const sentId = sent?.id ?? randomUUID();
-    this.store.appendOutbound(threadId, sentId, message.text);
+    await this.store.appendOutbound(threadId, sentId, message.text);
     log.info('sent message', { threadId, messageId: sentId });
     if (logContent()) log.info('outbound content', { threadId, text: message.text });
   }
@@ -194,7 +194,7 @@ export class SendblueGateway implements Gateway {
       isOwner: auth.isOwner,
     };
 
-    this.store.appendInbound(event);
+    await this.store.appendInbound(event);
     if (logContent()) {
       log.info('inbound content', {
         from: senderId,

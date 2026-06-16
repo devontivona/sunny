@@ -2,9 +2,11 @@ import { ToolLoopAgent, stepCountIs, type ModelMessage } from 'ai';
 import type { SunnyConfig } from '../config/index.js';
 import type { ChannelEvent, Gateway } from '../gateway/types.js';
 import type { ConversationStore, StoredMessage } from '../gateway/store.js';
+import { loadCore, memoryPaths } from '../memory/index.js';
 import { logger } from '../logger.js';
 import { getModel, anthropicProviderOptions } from './model.js';
 import { buildSystemPrompt, FORGOT_TO_SEND_NUDGE } from './prompt.js';
+import { createMemoryTools } from './tools/memory.js';
 import { createSendMessageTool, type SendCounter } from './tools/sendMessage.js';
 
 const log = logger('agent:loop');
@@ -31,15 +33,22 @@ export interface AgentRunnerDeps {
  */
 export function createAgentRunner(deps: AgentRunnerDeps) {
   const { config, store, gateway } = deps;
-  const instructions = buildSystemPrompt(config);
+  const paths = memoryPaths(config.runtimeDir);
+  const memoryTools = createMemoryTools(config, store);
 
   return async function runTurn(event: ChannelEvent): Promise<void> {
     // Typing indicator on turn start (D-MG8, D-DE3) — degrades to no-op if unsupported.
     await gateway.startTyping(event.threadId);
 
-    const messages = toModelMessages(store.recentWindow(event.threadId), event.isGroup);
+    // Always-on core is re-read per run (agent-memory D3), so hand-edits and
+    // mid-turn writes take effect immediately.
+    const instructions = buildSystemPrompt(config, loadCore(paths));
+    const messages = toModelMessages(await store.recentWindow(event.threadId), event.isGroup);
     const counter: SendCounter = { count: 0 };
-    const tools = { send_message: createSendMessageTool(gateway, event.threadId, counter) };
+    const tools = {
+      send_message: createSendMessageTool(gateway, event.threadId, counter),
+      ...memoryTools,
+    };
     const agent = new ToolLoopAgent({
       model: getModel(config),
       instructions,

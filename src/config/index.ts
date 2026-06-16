@@ -23,8 +23,16 @@ const ConfigSchema = z.object({
     .default({ name: 'Devon', identities: [] }),
   /** Whether to answer in authorized group chats (R1: answerable, owner-only actions). */
   allowGroups: z.boolean().default(true),
-  /** Recent-window size for the trivial conversation store (task 2.3). */
+  /** Recent-window size for the conversation store (task 2.3). */
   recentWindowSize: z.number().int().positive().default(30),
+  /** Caps for the always-on core memory files (agent-memory D2). */
+  memory: z
+    .object({
+      userMaxChars: z.number().int().positive().default(8000),
+      sunnyMaxChars: z.number().int().positive().default(6000),
+      indexMaxChars: z.number().int().positive().default(2000),
+    })
+    .default({ userMaxChars: 8000, sunnyMaxChars: 6000, indexMaxChars: 2000 }),
   server: z
     .object({
       /** HTTP webhook listener port (task 2.2). */
@@ -50,6 +58,11 @@ const DEFAULT_CONFIG_JSON = `{
   },
   "allowGroups": true,
   "recentWindowSize": 30,
+  "memory": {
+    "userMaxChars": 8000,
+    "sunnyMaxChars": 6000,
+    "indexMaxChars": 2000
+  },
   "server": {
     "port": 8787,
     "webhookPath": "/webhooks/sendblue"

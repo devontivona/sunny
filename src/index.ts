@@ -1,5 +1,7 @@
 import { createAgentRunner } from './agent/loop.js';
 import { loadConfig } from './config/index.js';
+import { createDb, runMigrations } from './db/client.js';
+import { initMemory } from './memory/index.js';
 import { SendblueGateway } from './gateway/sendblue.js';
 import { ConversationStore } from './gateway/store.js';
 import type { ChannelEvent, Gateway } from './gateway/types.js';
@@ -15,11 +17,15 @@ try {
   /* no .env file — fine in prod where systemd provides the EnvironmentFile */
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const config = loadConfig();
 
   if (!process.env.ANTHROPIC_API_KEY) {
     log.error('ANTHROPIC_API_KEY is not set — the agent cannot call Opus. Aborting.');
+    process.exit(1);
+  }
+  if (!process.env.DATABASE_URL) {
+    log.error('DATABASE_URL is not set — the conversation store needs Postgres. Aborting.');
     process.exit(1);
   }
   if (config.owner.identities.length === 0) {
@@ -29,7 +35,11 @@ function main(): void {
     );
   }
 
-  const store = new ConversationStore(config.recentWindowSize);
+  const { db } = createDb(process.env.DATABASE_URL);
+  await runMigrations(db);
+  await initMemory(config);
+
+  const store = new ConversationStore(db, config.recentWindowSize);
   let gateway: Gateway;
   try {
     gateway = new SendblueGateway({ config, store });
@@ -50,13 +60,11 @@ function main(): void {
     gateway.onInbound(createAgentRunner({ config, store, gateway }));
   }
 
-  void gateway.start().then(
-    () => startHttpServer(config, gateway),
-    (err) => {
-      log.error('gateway failed to start', { err: String(err) });
-      process.exit(1);
-    },
-  );
+  await gateway.start();
+  startHttpServer(config, gateway);
 }
 
-main();
+main().catch((err) => {
+  log.error('fatal startup error', { err: String(err) });
+  process.exit(1);
+});

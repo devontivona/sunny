@@ -28,15 +28,15 @@
 
 ## 3. Phase 2 — Memory
 
-- [ ] 3.0 Stand up **local Postgres + Drizzle** (schema + migrations); migrate the conversation store off the Phase-1 trivial store. Create the single `~/.sunny/` git repo for `memory/` + `skills/` (moved from Phase 0; D-PS1, D-DE4, D-PS5).
-- [ ] 3.1 Always-on core: load `USER.md` + `SUNNY.md` + `INDEX.md` each run; render as a byte-stable cached system prefix (agent-memory R: always-on core; D-PS4 caching).
-- [ ] 3.2 Memory write tool (`add`/`replace`/`remove`, no `read`); error-on-overflow forces consolidation (agent-memory R: forced consolidation, D2).
-- [ ] 3.3 On-demand topic docs via `INDEX.md` router; date-tagged facts for temporal reasoning (agent-memory R: topic docs, date-tagged facts; D1, D4).
-- [ ] 3.4 Keyword recall: Postgres `tsvector`/GIN FTS over messages + LLM summarization; rolling recent-window + recall for older (agent-memory R: keyword recall; D-OB? n/a).
+- [x] 3.0 Stand up **local Postgres + Drizzle** (schema + migrations); migrate the conversation store off the Phase-1 trivial store. Create the single `~/.sunny/` git repo for `memory/` + `skills/` (moved from Phase 0; D-PS1, D-DE4, D-PS5).
+- [x] 3.1 Always-on core: load `USER.md` + `SUNNY.md` + `INDEX.md` each run; render as a byte-stable cached system prefix (agent-memory R: always-on core; D-PS4 caching).
+- [x] 3.2 Memory write tool (`add`/`replace`/`remove`, no `read`); error-on-overflow forces consolidation (agent-memory R: forced consolidation, D2).
+- [x] 3.3 On-demand topic docs via `INDEX.md` router; date-tagged facts for temporal reasoning (agent-memory R: topic docs, date-tagged facts; D1, D4).
+- [x] 3.4 Keyword recall: Postgres `tsvector`/GIN FTS over messages + LLM summarization; rolling recent-window + recall for older (agent-memory R: keyword recall; D-OB? n/a).
 - [ ] 3.5 Memory-vs-skill boundary in agent instructions; verify caching with `cache_read_input_tokens > 0` (D-PS4).
-- [ ] 3.6 (Deferred-ready) define the recall interface so `pgvector` semantic search slots in later without agent-loop changes (agent-memory R: semantic upgrade path, D5).
-- [ ] 3.7 Cold-start/onboarding: hand-seed a starter `USER.md`; onboarding conversation that records durable facts; memory global to Devon, message window per thread (R11).
-- [ ] 3.8 Serialize all memory-file mutations through a single writer / advisory lock; reads snapshot-at-run-start (R7).
+- [x] 3.6 (Deferred-ready) define the recall interface so `pgvector` semantic search slots in later without agent-loop changes (agent-memory R: semantic upgrade path, D5).
+- [x] 3.7 Cold-start/onboarding: hand-seed a starter `USER.md`; onboarding conversation that records durable facts; memory global to Devon, message window per thread (R11).
+- [x] 3.8 Serialize all memory-file mutations through a single writer / advisory lock; reads snapshot-at-run-start (R7).
 - [ ] 3.9 Enable prompt caching only on multi-step turns / bursts (cache write ≈1.25×); verify `cache_read_input_tokens > 0`; do not assume the always-on core is free (R2, D-PS4).
 
 ## 4. Phase 3 — Durable execution & scheduling

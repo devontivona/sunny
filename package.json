@@ -21,10 +21,14 @@
     "ai": "^6.0.206",
     "chat": "^4.30.0",
     "chat-adapter-sendblue": "^0.2.0",
+    "drizzle-orm": "^0.45.2",
+    "pg": "^8.21.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@types/pg": "^8.20.0",
+    "drizzle-kit": "^0.31.10",
     "prettier": "^3.3.0",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0"
