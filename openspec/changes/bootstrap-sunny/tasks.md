@@ -10,7 +10,7 @@
 
 - [ ] 1.1 Scaffold the Node LTS + TypeScript project (D-PS1): `package.json`, `tsconfig`, the `src/` layout (D-PS2), lint/format, env loading.
 - [ ] 1.2 Install/pin the loop's core deps only: `ai` (v6), `@ai-sdk/anthropic`, `chat`. (Drizzle/Postgres → Phase 2; `@workflow/world-postgres` → Phase 3; `@1password/sdk` → Phase 4; OTel → Phase 6.)
-- [ ] 1.3 **Critical path to "text Sunny":** Photon/Spectrum Cloud account (free tier) + project secret in env; stand up a **publicly reachable inbound webhook** for dev (tunnel / `devbox` public URL) so Photon can POST inbound messages.
+- [ ] 1.3 **Critical path to "text Sunny":** Photon/Spectrum Cloud account (free tier) + project secret in env; expose the **inbound webhook** at a public URL via **`devbox`** (point Photon's webhook at the devbox URL) so Photon can POST inbound messages in dev. *(Nice early dogfood of the same `devbox` skill Sunny uses later for hosting sites. In prod, the home server's own reachable endpoint replaces the devbox URL.)*
 - [ ] 1.4 Wire the model: `anthropic('claude-opus-4-8')`, adaptive thinking + effort defaults, `ANTHROPIC_API_KEY` from env (D-PS3).
 - [ ] 1.5 `~/.sunny/` config loader (non-secret settings) + create the runtime dir (D-PS5). *(The single `~/.sunny/` git repo for memory+skills lands with Phase 2.)*
 
