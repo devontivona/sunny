@@ -38,12 +38,20 @@ Secrets SHALL be injected into the specific command invocation that needs them (
 - **THEN** the value is resolved into that subprocess's environment at run time
 - **AND** is not visible to the model or to other commands
 
-### Requirement: Containment for untrusted-derived commands
-Because command-string classification cannot be fully trusted, commands derived from or operating on untrusted content (web pages, email bodies, skill output) SHALL run within a sandbox/containment boundary with restricted network egress, so a prompt-injected or misclassified command has bounded blast radius.
+### Requirement: Taint-tracking and step-up authorization for untrusted-derived commands
+Sunny SHALL track whether a command's construction was influenced by untrusted content (web pages, email bodies, installed-skill output). Commands with no such influence ("clean") MAY run under the normal command policy with full host access. Commands so influenced ("tainted") SHALL require step-up authorization: a high-friction confirmation that shows the command and flags its untrusted provenance, distinct from an ordinary in-band approval. In unattended runs (no human available to authorize), a tainted command SHALL be blocked and deferred to the owner, or confined to a targeted sandbox. Network egress SHALL be restricted as a backstop regardless.
 
-#### Scenario: Untrusted-derived command is contained
-- **WHEN** Sunny runs a command produced while processing untrusted content
-- **THEN** it executes within a sandbox with restricted egress rather than with unrestricted host access
+#### Scenario: Clean command keeps host access
+- **WHEN** Sunny runs a command derived from the owner's direct instruction with no untrusted content in context
+- **THEN** it runs under the normal command policy without step-up
+
+#### Scenario: Tainted command requires step-up
+- **WHEN** Sunny is about to run a command produced while untrusted content was in context
+- **THEN** it requires step-up authorization showing the command and its untrusted provenance
+
+#### Scenario: Tainted command in an unattended run
+- **WHEN** a tainted command arises during a scheduled/autonomous run with no human to authorize
+- **THEN** it is blocked and deferred to the owner (or confined to a targeted sandbox), not run with full host access
 
 ### Requirement: Credentialed browser tool routing
 The credentialed browser tool SHALL run through the isolated browser profile, SHALL resolve site logins only from its whitelisted references at fill-time within the automation layer, and SHALL treat any credentialed action as approval-required.
