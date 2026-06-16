@@ -5,7 +5,7 @@ import type { ConversationStore, StoredMessage } from '../gateway/store.js';
 import { loadCore, memoryPaths } from '../memory/index.js';
 import { logger } from '../logger.js';
 import { getModel, anthropicProviderOptions } from './model.js';
-import { buildSystemPrompt, FORGOT_TO_SEND_NUDGE } from './prompt.js';
+import { buildSystemPrompt } from './prompt.js';
 import { createMemoryTools } from './tools/memory.js';
 import { createSendMessageTool, type SendCounter } from './tools/sendMessage.js';
 
@@ -21,15 +21,12 @@ export interface AgentRunnerDeps {
  * In-process conversational turn (durable-execution Tier 1, D-DE1; task 2.5).
  *
  * Reads the recent window from Sunny's own store, runs an Opus `ToolLoopAgent`
- * with adaptive thinking, and talks to the user ONLY via the `send_message`
- * tool (D-MG8). Raw model text is never delivered.
+ * with adaptive thinking, and replies.
  *
- * Unintended-silence guard (D-MG8): if a turn produces no `send_message`, a DM
- * is re-run with `toolChoice` forced to `send_message` (thinking disabled, since
- * Anthropic disallows forced tool choice with extended thinking) so a reply is
- * guaranteed; a group gets a soft nudge and may legitimately stay silent.
- *
- * → Milestone B: text Sunny, get a real Opus reply.
+ * Output model (D-MG8): Sunny speaks ONLY by calling `send_message` (raw model
+ * text is private). A telemetered safety net delivers the final text if a turn
+ * produced no send — it should trend to zero; if it fires, the elicitation needs
+ * work (it is not the intended path).
  */
 export function createAgentRunner(deps: AgentRunnerDeps) {
   const { config, store, gateway } = deps;
@@ -37,7 +34,7 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
   const memoryTools = createMemoryTools(config, store);
 
   return async function runTurn(event: ChannelEvent): Promise<void> {
-    // Typing indicator on turn start (D-MG8, D-DE3) — degrades to no-op if unsupported.
+    const startedAt = Date.now();
     await gateway.startTyping(event.threadId);
 
     // Always-on core is re-read per run (agent-memory D3), so hand-edits and
@@ -58,43 +55,77 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
     });
 
     try {
-      await agent.generate({ prompt: messages });
+      const result = await agent.generate({ prompt: messages });
 
-      if (counter.count === 0) {
-        if (event.isGroup) {
-          // Group: a reply may not be expected. Soft nudge once; silence is OK.
-          log.debug('no send in group turn; soft nudge', { threadId: event.threadId });
-          await agent.generate({
-            prompt: [...messages, { role: 'user', content: FORGOT_TO_SEND_NUDGE }],
-          });
-          if (counter.count === 0) {
-            log.info('group turn ended in deliberate silence', { threadId: event.threadId });
-          }
-        } else {
-          // DM: a reply is expected. Force send_message via toolChoice. Anthropic
-          // forbids forced tool choice with extended thinking, so disable it here.
-          log.debug('no send in DM turn; forcing a reply', { threadId: event.threadId });
-          const forced = new ToolLoopAgent({
-            model: getModel(config),
-            instructions,
-            tools,
-            stopWhen: stepCountIs(1),
-            toolChoice: { type: 'tool', toolName: 'send_message' },
-            providerOptions: { anthropic: { thinking: { type: 'disabled' as const } } },
-          });
-          await forced.generate({ prompt: messages });
-          if (counter.count === 0) {
-            log.error('forced reply still produced no send', { threadId: event.threadId });
-          }
-        }
+      let delivered: 'send_message' | 'fallback_text' | 'silence';
+      if (counter.count > 0) {
+        // Intended path: Sunny spoke via send_message (one or more bubbles).
+        delivered = 'send_message';
+      } else if (result.text.trim()) {
+        // Safety net, NOT the design: the model put its reply in private scratch
+        // instead of calling send_message. Deliver it so the user isn't ghosted,
+        // but flag loudly — this should trend to zero as the elicitation holds.
+        log.warn('no send_message; delivering scratch text as fallback (fix elicitation)', {
+          threadId: event.threadId,
+        });
+        await gateway.send(event.threadId, { text: result.text.trim() });
+        delivered = 'fallback_text';
+      } else {
+        delivered = 'silence';
       }
+
+      logTurnSummary(event, result, counter.count, delivered, Date.now() - startedAt);
     } catch (err) {
-      log.error('agent turn failed', { threadId: event.threadId, err: String(err) });
+      log.error('agent turn failed', {
+        threadId: event.threadId,
+        err: err instanceof Error ? (err.stack ?? err.message) : String(err),
+      });
       await gateway.send(event.threadId, {
         text: 'Sorry — I hit an error handling that. Mind trying again?',
       });
     }
   };
+}
+
+/** Minimal shape of the bits of the generate result we report on. */
+interface TurnResult {
+  steps?: Array<{ toolCalls?: Array<{ toolName: string }> }>;
+  finishReason?: string;
+  text?: string;
+  totalUsage?: { inputTokens?: number; outputTokens?: number; cachedInputTokens?: number };
+}
+
+/** Per-turn observability: tools used, delivery path, tokens, latency. */
+function logTurnSummary(
+  event: ChannelEvent,
+  result: TurnResult,
+  sendCount: number,
+  delivered: string,
+  ms: number,
+): void {
+  // Aggregate across steps — result.toolCalls only reflects the final step.
+  const toolCounts: Record<string, number> = {};
+  for (const step of result.steps ?? []) {
+    for (const call of step.toolCalls ?? []) {
+      toolCounts[call.toolName] = (toolCounts[call.toolName] ?? 0) + 1;
+    }
+  }
+  const usage = result.totalUsage;
+  log.info('turn', {
+    threadId: event.threadId,
+    isGroup: event.isGroup,
+    isOwner: event.isOwner,
+    steps: result.steps?.length ?? 1,
+    finish: result.finishReason,
+    tools: toolCounts,
+    sendCount,
+    textLen: result.text?.length ?? 0,
+    delivered,
+    tokensIn: usage?.inputTokens ?? null,
+    tokensOut: usage?.outputTokens ?? null,
+    cachedIn: usage?.cachedInputTokens ?? null,
+    ms,
+  });
 }
 
 /**
