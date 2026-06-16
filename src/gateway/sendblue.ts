@@ -46,6 +46,7 @@ export class SendblueGateway implements Gateway {
   private readonly store: ConversationStore;
   private readonly authorizer: Authorizer;
   private readonly chat: Chat<{ sendblue: Adapter }>;
+  private readonly adapter: Adapter;
   /** Live thread handles by threadId, refreshed on every inbound message. */
   private readonly activeThreads = new Map<string, Thread>();
   private inboundHandler: InboundHandler | null = null;
@@ -90,6 +91,7 @@ export class SendblueGateway implements Gateway {
       logger: new ConsoleLogger('info', 'sendblue'),
     });
 
+    this.adapter = adapter;
     this.chat = new Chat<{ sendblue: Adapter }>({
       userName: 'sunny',
       adapters: { sendblue: adapter },
@@ -116,16 +118,19 @@ export class SendblueGateway implements Gateway {
 
   async send(threadId: string, message: OutboundMessage): Promise<void> {
     const thread = this.activeThreads.get(threadId);
-    if (!thread) {
-      // Proactive sends to a thread not seen this session use adapter.postMessage
-      // (Sendblue REST send by id); wired into the gateway in Phase 3.
-      log.warn('no live thread handle for send; dropping', { threadId });
-      return;
+    let sentId: string;
+    if (thread) {
+      // Reply within the current session — use the live thread handle.
+      const sent = await thread.post(message.text);
+      sentId = sent?.id ?? randomUUID();
+    } else {
+      // Proactive send (no live thread this session, e.g. a scheduled run or a
+      // durable job completing after a restart): Sendblue REST send by thread id.
+      const sent = await this.adapter.postMessage(threadId, message.text);
+      sentId = (sent as { id?: string })?.id ?? randomUUID();
     }
-    const sent = await thread.post(message.text);
-    const sentId = sent?.id ?? randomUUID();
     await this.store.appendOutbound(threadId, sentId, message.text);
-    log.info('sent message', { threadId, messageId: sentId });
+    log.info('sent message', { threadId, messageId: sentId, proactive: !thread });
     if (logContent()) log.info('outbound content', { threadId, text: message.text });
   }
 

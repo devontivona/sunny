@@ -8,6 +8,7 @@ import { getModel, anthropicProviderOptions } from './model.js';
 import { buildSystemPrompt } from './prompt.js';
 import { createMemoryTools } from './tools/memory.js';
 import { createSendMessageTool, type SendCounter } from './tools/sendMessage.js';
+import { createStartJobTool } from './tools/startJob.js';
 
 const log = logger('agent:loop');
 
@@ -44,6 +45,7 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
     const counter: SendCounter = { count: 0 };
     const tools = {
       send_message: createSendMessageTool(gateway, event.threadId, counter),
+      start_job: createStartJobTool(event.threadId, config.owner.name),
       ...memoryTools,
     };
     const agent = new ToolLoopAgent({
