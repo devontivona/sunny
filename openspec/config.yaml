@@ -15,8 +15,8 @@ context: |
   - Durability: Vercel Workflow DevKit (@workflow/world-postgres), long-lived
     worker (not serverless). Two-tier: in-process conversational turns +
     durable Tier-2 jobs.
-  - Messaging: Vercel Chat SDK (`chat`) + Photon vercel-chat-adapter-imessage
-    (spectrum-ts) on Spectrum Cloud, behind a thin custom Gateway seam.
+  - Messaging: Vercel Chat SDK (`chat`) + chat-adapter-sendblue (Sendblue's
+    hosted iMessage API), behind a thin custom Gateway seam.
   - Secrets: 1Password via @1password/sdk + a read-only Service Account scoped
     to a dedicated `Sunny` vault. The LLM never sees secret values, only
     `op://` references; each tool whitelists the refs it may resolve.

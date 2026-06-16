@@ -96,7 +96,7 @@ Sunny owns the memory files, but they are plain markdown Devon can hand-edit. Th
 
 Sunny's primary interface is iMessage, with other channels (Telegram, email, CLI, web) added over time. iMessage has no official API; every gateway is an unofficial bridge that requires Apple infrastructure somewhere.
 
-Research clarified that the candidate frameworks are **stacked layers, not rivals**: the Vercel **Chat SDK** (`npm install chat`, ~12 channels, first-class AI SDK integration via `toAiMessages()`) is the channel-abstraction layer; Photon's **`vercel-chat-adapter-imessage`** is an adapter that plugs *into* Chat SDK and is itself built on **`spectrum-ts`** (the iMessage transport over Spectrum Cloud / self-hosted gRPC / local macOS DB).
+The candidate frameworks are **stacked layers, not rivals**: the Vercel **Chat SDK** (`npm install chat`, ~12 channels, first-class AI SDK integration via `toAiMessages()`) is the channel-abstraction layer; **Sendblue's `chat-adapter-sendblue`** is a published adapter that plugs *into* Chat SDK, providing iMessage (and SMS/RCS) over **Sendblue's hosted API** (no Mac required). Inbound arrives as a signed webhook; outbound is a REST send addressed by phone number or durable group id.
 
 A critical constraint: **the iMessage transport provides no message history** (history and thread-info are unsupported in all three transport modes). The agent must own its own conversation store regardless — which dovetails with the `agent-memory` design, where the Postgres message archive (with tsvector FTS) already is that store.
 
@@ -104,13 +104,12 @@ A critical constraint: **the iMessage transport provides no message history** (h
 
 **Goals:**
 - A single normalized interface the agent core speaks; every channel is a pluggable driver behind it.
-- iMessage working first, cheaply, for 1:1 DMs and reactive group participation.
+- iMessage working first, reliably, for 1:1 DMs and group participation.
 - Adding a new channel later = adding one adapter, no agent-loop changes.
 - Keep the youngest, most vendor-coupled piece (the iMessage transport) swappable.
 - Own the conversation store; never depend on the transport for history.
 
 **Non-Goals:**
-- Proactive/initiated group messaging that survives restarts (deferred; needs Sendblue's durable group IDs).
 - Programmatic group creation / cold outreach.
 
 ## Decisions (messaging-gateway)
@@ -119,7 +118,7 @@ A critical constraint: **the iMessage transport provides no message history** (h
 
 ```
    Agent core (AI SDK ToolLoopAgent, Opus)
-        │   speaks ONLY ▼  (never imports `chat` or `spectrum-ts`)
+        │   speaks ONLY ▼  (never imports `chat` or the transport adapter)
    ┌────┴───────────────────────────────────┐
    │  Gateway seam  (~custom interface)      │  normalize · route · authorize
    └────┬───────────────────────────────────┘
@@ -127,11 +126,11 @@ A critical constraint: **the iMessage transport provides no message history** (h
    │  Vercel Chat SDK  (npm i chat)          │  channel abstraction, adapters{}
    └────┬───────────────────────────────────┘
    ┌────▼───────────────────────────────────┐
-   │  photon vercel-chat-adapter-imessage    │  iMessage transport (on spectrum-ts)
+   │  chat-adapter-sendblue                  │  iMessage transport (Sendblue API)
    └─────────────────────────────────────────┘
 ```
 
-The agent loop depends only on the internal `Gateway` interface, not on Chat SDK or Photon types. This is "build on Chat SDK with a (c)-style seam": we get Chat SDK's AI SDK integration and multi-channel `adapters{}` map, but can re-implement the seam on a different transport (Sendblue, raw spectrum-ts, local macOS DB) without touching the agent.
+The agent loop depends only on the internal `Gateway` interface, not on Chat SDK or Sendblue types. This is "build on Chat SDK with a (c)-style seam": we get Chat SDK's AI SDK integration and multi-channel `adapters{}` map, but can re-implement the seam on a different transport (another provider, a self-hosted bridge, local macOS DB) without touching the agent.
 
 ### D-MG2 — Sunny owns the conversation store
 
@@ -147,23 +146,23 @@ The gateway normalizes to a channel-agnostic shape and feature-detects capabilit
  capabilities: { reactions, readReceipts, typing, groups, proactiveGroup }
 ```
 
-Sunny queries a channel's `capabilities` and degrades gracefully (e.g., Photon strips Markdown and has no read receipts; local-mode iMessage lacks reactions/typing). The agent never hard-codes iMessage semantics.
+Sunny queries a channel's `capabilities` and degrades gracefully (e.g., iMessage delivers plain text — no rich Markdown — and has no read receipts). The agent never hard-codes iMessage semantics.
 
-### D-MG4 — Start on Photon free; DMs full, groups reactive-only
+### D-MG4 — Sendblue: DMs and groups both addressable
 
-Photon's free shared-pool tier covers a single user: 1:1 DMs are addressed by phone number (so Sunny can both reply and proactively message Devon, across restarts), and per-conversation stability keeps the thread stable. **Group chats are reactive-only**: the transport hands Sunny a live group handle only when an inbound group message arrives, valid for the current process session and lost on restart, with no send-by-id. So Sunny can reply in groups (each inbound message re-hands the group), but cannot reliably initiate to a group after a restart. The `proactiveGroup` capability flag is therefore `false` on the Photon driver.
+Sendblue addresses by phone number and exposes **durable `group_id`s**, so Sunny can both reply and **proactively** message Devon — and participate in groups — across restarts. 1:1 DMs and groups are both first-class: inbound arrives via a signed webhook, outbound is a REST send by id. The `proactiveGroup` capability flag is therefore `true` on the Sendblue driver. Group *creation* / cold outreach remains out of scope (D-MG5 non-goals).
 
-### D-MG5 — Proactive/persistent groups are a deferred, swappable upgrade
+### D-MG5 — The transport is the deliberately swappable layer
 
-If proactive or restart-durable group messaging becomes needed, swap the iMessage driver to **Sendblue** (durable `group_id`, ~$100/mo) behind the same `Gateway` seam — optionally running DMs on Photon and groups on Sendblue. No agent-loop changes. Group *creation* (Photon Business $250 / Sendblue Enterprise) remains out of scope.
+The iMessage transport is the most vendor-coupled piece, so it sits behind the `Gateway` seam (D-MG1) and is replaceable with no agent-loop changes. If Sendblue's cost, policies, or reliability change, the driver can be re-pointed at another iMessage transport (a self-hosted bridge, local macOS DB, or another provider). Group *creation* and cold outreach remain out of scope regardless of transport.
 
 ### D-MG6 — Sender authorization at the gateway
 
 The gateway authorizes inbound senders before the agent acts. For a single user this starts as an allowlist of Devon's identity; the fuller cryptographic DM-pairing model (TTL codes, lockout) belongs to the `security-permissions` capability and will wrap this.
 
-### D-MG7 — iMessage runtime placement: Spectrum Cloud
+### D-MG7 — iMessage runtime: Sendblue hosted API
 
-The iMessage transport runs on **Photon's Spectrum Cloud**: Sunny runs on Devon's Linux home server, and Photon handles the Mac-relay infrastructure (no Mac required by Devon, full feature set incl. reactions/typing/edit, free→$25 tier). The tradeoff accepted is a managed Photon/Spectrum Cloud dependency in the message path; this is mitigated by D-MG1's `Gateway` seam, which keeps the transport swappable (to local macOS mode, self-hosted gRPC, or Sendblue) without agent changes.
+The iMessage transport runs on **Sendblue's hosted API**: Sunny runs on Devon's Linux home server and Sendblue handles the Apple-relay infrastructure (no Mac required by Devon, full feature set incl. reactions/typing). The tradeoff accepted is a managed, paid (~$100/mo) dependency in the message path; this is mitigated by D-MG1's `Gateway` seam, which keeps the transport swappable without agent changes.
 
 ### D-MG8 — Agent output model: explicit `send_message`, raw model text is private
 
@@ -190,15 +189,15 @@ Specifics:
 
 - **Auto-pipe model text → channel (with a silence token):** simplest, and what Hermes/OpenClaw do — but it dumps reasoning/narration into a low-density channel and gives the agent no first-class control over each message; relies on the model self-censoring. Rejected for the "think a lot, say a little" goal in favor of D-MG8.
 
-- **Build directly on `spectrum-ts`:** loses Chat SDK's `toAiMessages()` / thread-state / streaming and has no documented AI SDK integration — more hand-rolling for a narrower channel set.
-- **Bind the agent directly to one iMessage adapter (no seam):** couples the agent to the youngest, most vendor-coupled layer; a Photon outage or pricing change would force agent rewrites.
-- **Sendblue now:** ~4× the cost; its only structural edge (durable group IDs / proactive groups) isn't needed until proactive group messaging is. Kept as a swappable upgrade.
+- **Build directly on a raw provider SDK / self-hosted bridge:** loses Chat SDK's `toAiMessages()` / thread-state and AI SDK integration — more hand-rolling for a narrower channel set.
+- **Bind the agent directly to one iMessage adapter (no seam):** couples the agent to the youngest, most vendor-coupled layer; a transport outage or pricing change would force agent rewrites.
+- **A self-hosted / on-device iMessage bridge as the primary path:** lower running cost, but requires babysitting Mac-relay infrastructure and ships less mature tooling; rejected in favor of Sendblue's managed API + a *published* Chat SDK adapter for reliability. Kept as a fallback behind the seam (D-MG5).
 
 ## Risks / Trade-offs (messaging-gateway)
 
 - **iMessage TOS / ban risk:** inherent to all unofficial bridges. A single-user, balanced send/receive, low-volume profile is low-risk; cloud mode shifts relay/ban exposure off Devon's own Apple ID.
-- **Vendor/business risk on the transport:** Photon and `spectrum-ts` are new (2026). The `Gateway` seam is the mitigation — the transport is the deliberately swappable piece.
-- **Group reactive-only limitation:** Sunny cannot initiate to a group after a restart on Photon. Accepted to start; D-MG5 is the escape hatch.
+- **Vendor/business risk on the transport:** Sendblue is a managed, paid third-party dependency. The `Gateway` seam is the mitigation — the transport is the deliberately swappable piece.
+- **Cost:** Sendblue is ~$100/mo — a real ongoing cost, accepted for reliability and durable group messaging; the seam (D-MG5) keeps a cheaper transport swappable if needed.
 - **Markdown/format loss + missing features over iMessage:** handled via capability flags and graceful degradation (D-MG3), not assumptions.
 
 ---
@@ -798,11 +797,11 @@ The always-on memory core + skill metadata + tool definitions form a **stable sy
 
 ### D-PS5 — Config & secrets
 
-Non-secret settings live in a config file under `~/.sunny/` (approval mode, cost/rate caps, the `Sunny` vault name, channel/Photon config, timezone, model id, always-on caps). Secrets are env-only — `ANTHROPIC_API_KEY` and `OP_SERVICE_ACCOUNT_TOKEN` — loaded from a hardened systemd `EnvironmentFile` (root-owned `0600`), never in the repo or logs (ties to credentials D-CR4).
+Non-secret settings live in a config file under `~/.sunny/` (approval mode, cost/rate caps, the `Sunny` vault name, channel config, timezone, model id, always-on caps). Secrets are env-only — `ANTHROPIC_API_KEY` and `OP_SERVICE_ACCOUNT_TOKEN` — loaded from a hardened systemd `EnvironmentFile` (root-owned `0600`), never in the repo or logs (ties to credentials D-CR4).
 
 ### D-PS6 — Deployment on the Linux home server
 
-A single long-lived `sunny` systemd service hosts: the HTTP webhook listener for Photon/Spectrum Cloud inbound, the WDK Postgres-world worker, and the scheduler tick — plus a Postgres service. `Restart=always` (durability depends on restart survival, per `durable-execution` D-DE1). Not serverless (WDK's Postgres world wants a long-lived process — appropriate here).
+A single long-lived `sunny` systemd service hosts: the HTTP webhook listener for Sendblue inbound, the WDK Postgres-world worker, and the scheduler tick — plus a Postgres service. `Restart=always` (durability depends on restart survival, per `durable-execution` D-DE1). Not serverless (WDK's Postgres world wants a long-lived process — appropriate here).
 
 ## Risks / Trade-offs (project-skeleton)
 

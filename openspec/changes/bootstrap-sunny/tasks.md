@@ -8,23 +8,23 @@
 
 ## 1. Phase 0 — Minimal foundation (just enough to text Sunny)
 
-- [ ] 1.1 Scaffold the Node LTS + TypeScript project (D-PS1): `package.json`, `tsconfig`, the `src/` layout (D-PS2), lint/format, env loading.
-- [ ] 1.2 Install/pin the loop's core deps only: `ai` (v6), `@ai-sdk/anthropic`, `chat`. (Drizzle/Postgres → Phase 2; `@workflow/world-postgres` → Phase 3; `@1password/sdk` → Phase 4; OTel → Phase 6.)
-- [ ] 1.3 **Critical path to "text Sunny":** Photon/Spectrum Cloud account (free tier) + project secret in env; expose the **inbound webhook** at a public URL via **`devbox`** (point Photon's webhook at the devbox URL) so Photon can POST inbound messages in dev. *(Nice early dogfood of the same `devbox` skill Sunny uses later for hosting sites. In prod, the home server's own reachable endpoint replaces the devbox URL.)*
-- [ ] 1.4 Wire the model: `anthropic('claude-opus-4-8')`, adaptive thinking + effort defaults, `ANTHROPIC_API_KEY` from env (D-PS3).
-- [ ] 1.5 `~/.sunny/` config loader (non-secret settings) + create the runtime dir (D-PS5). *(The single `~/.sunny/` git repo for memory+skills lands with Phase 2.)*
+- [x] 1.1 Scaffold the Node LTS + TypeScript project (D-PS1): `package.json`, `tsconfig`, the `src/` layout (D-PS2), lint/format, env loading.
+- [x] 1.2 Install/pin the loop's core deps only: `ai` (v6), `@ai-sdk/anthropic`, `chat`. (Drizzle/Postgres → Phase 2; `@workflow/world-postgres` → Phase 3; `@1password/sdk` → Phase 4; OTel → Phase 6.)
+- [x] 1.3 **Critical path to "text Sunny":** Sendblue account + API key/secret in env; expose the **inbound webhook** at a public URL via **`devbox`** (set that URL as Sendblue's Receive webhook) so Sendblue can POST inbound messages in dev. *(Nice early dogfood of the same `devbox` skill Sunny uses later for hosting sites. In prod, the home server's own reachable endpoint replaces the devbox URL.)*
+- [x] 1.4 Wire the model: `anthropic('claude-opus-4-8')`, adaptive thinking + effort defaults, `ANTHROPIC_API_KEY` from env (D-PS3).
+- [x] 1.5 `~/.sunny/` config loader (non-secret settings) + create the runtime dir (D-PS5). *(The single `~/.sunny/` git repo for memory+skills lands with Phase 2.)*
 
 > Deferred out of Phase 0 (moved to where they're first needed): local Postgres + Drizzle → Phase 2 · 1Password vault/Service Account → Phase 4 · systemd always-on deploy → Phase 3. The skeleton runs **foreground in dev** with env-var secrets.
 
 ## 2. Phase 1 — Walking skeleton (the fast path to a live loop)
 
-- [ ] 2.1 Define the normalized `Gateway` seam: `ChannelEvent` inbound, `send()` outbound, `capabilities` (messaging-gateway R: normalized interface, D-MG1/3).
-- [ ] 2.2 Implement the iMessage driver via Chat SDK + Photon adapter on Spectrum Cloud; HTTP webhook listener for inbound (D-MG1, D-MG7). **→ Milestone A: gateway echo — text Sunny, it echoes back (no LLM yet; proves the transport round-trip independent of the agent).**
-- [ ] 2.3 Trivial conversation store (in-memory or local SQLite) for recent-window context. **Promote to Postgres in Phase 2** — the skeleton does not need Postgres (messaging-gateway R: self-owned store, D-MG2).
-- [ ] 2.4 Sender authorization: allowlist Devon's identity at the gateway (messaging-gateway R: sender authorization, D-MG6).
-- [ ] 2.5 In-process agent loop (`ToolLoopAgent`, Opus) that reads the recent window and talks to the user **only via a `send_message` tool** (raw model text private); adaptive thinking on. **→ Milestone B: text Sunny → get a real Opus reply. (This is the goal — from here you iterate on intelligence live.)** (D-MG8)
-- [ ] 2.5a Output model (D-MG8): `send_message(text)` (multi-call per turn, doesn't end the turn, idempotent on resume); **scratchpad/notes** via the memory surface for cross-step working memory; **silence = not calling send**; **system-prompt elicitation** + a **forgot-to-send guard** (messaging-gateway R: explicit send-message, unintended-silence guard).
-- [ ] 2.6 Per-channel capability flags + graceful degradation; no token streaming (complete messages); typing indicator on turn start / per send (D-MG3, D-MG8, D-DE3).
+- [x] 2.1 Define the normalized `Gateway` seam: `ChannelEvent` inbound, `send()` outbound, `capabilities` (messaging-gateway R: normalized interface, D-MG1/3).
+- [x] 2.2 Implement the iMessage driver via Chat SDK + Sendblue adapter; HTTP webhook listener for inbound (D-MG1, D-MG7). **→ Milestone A: gateway echo — text Sunny, it echoes back (no LLM yet; proves the transport round-trip independent of the agent).**
+- [x] 2.3 Trivial conversation store (in-memory or local SQLite) for recent-window context. **Promote to Postgres in Phase 2** — the skeleton does not need Postgres (messaging-gateway R: self-owned store, D-MG2).
+- [x] 2.4 Sender authorization: allowlist Devon's identity at the gateway (messaging-gateway R: sender authorization, D-MG6).
+- [x] 2.5 In-process agent loop (`ToolLoopAgent`, Opus) that reads the recent window and talks to the user **only via a `send_message` tool** (raw model text private); adaptive thinking on. **→ Milestone B: text Sunny → get a real Opus reply. (This is the goal — from here you iterate on intelligence live.)** (D-MG8)
+- [x] 2.5a Output model (D-MG8): `send_message(text)` (multi-call per turn, doesn't end the turn, idempotent on resume); **scratchpad/notes** via the memory surface for cross-step working memory; **silence = not calling send**; **system-prompt elicitation** + a **forgot-to-send guard** (messaging-gateway R: explicit send-message, unintended-silence guard).
+- [x] 2.6 Per-channel capability flags + graceful degradation; no token streaming (complete messages); typing indicator on turn start / per send (D-MG3, D-MG8, D-DE3).
 
 ## 3. Phase 2 — Memory
 

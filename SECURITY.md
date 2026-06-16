@@ -189,7 +189,7 @@ eliminate them.
    Service Account token reads the whole Sunny vault; the persistent browser cookie
    store is a live-session surface. A host-level compromise that isn't *via* the agent
    (a bad dependency, an SSH foothold) sidesteps every gate here.
-5. **Supply chain.** The Vercel SDKs, Photon adapter, himalaya, `@1password/sdk`, and
+5. **Supply chain.** The Vercel SDKs, Sendblue adapter, himalaya, `@1password/sdk`, and
    every npm dependency run in-process with the token; a compromised dependency is not
    visible to these gates.
 6. **Memory / self-skill poisoning (slow burn).** Memory writes are low-friction;
@@ -205,7 +205,7 @@ eliminate them.
    moment (no human to step up). Tainted commands block/defer there, but that depends
    entirely on taint-tracking (#2). Spend/step caps bound *runaway*, not a single
    targeted malicious action.
-10. **Approval-channel trust.** Approvals ride iMessage via Photon/Spectrum Cloud; a
+10. **Approval-channel trust.** Approvals ride iMessage via Sendblue; a
     compromised transport or a spoofed number could forge an approval. The 2FA second
     factor is the mitigation for tainted commands.
 
