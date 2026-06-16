@@ -4,7 +4,7 @@ Sunny is a self-hosted personal AI agent. Its primary interface is iMessage — 
 
 Memory is the part of Sunny that makes it feel like a personal assistant rather than a stateless chatbot with a phone number. Devon's hard requirements: **data ownership/privacy** (this is his whole personal life), **inspectability** (plain files he can read, hand-edit, and `git`), **no vendor lock-in**, and **low/no monthly cost**.
 
-This design covers the `agent-memory` capability only. Other Sunny subsystems are designed in subsequent passes and appended to this document.
+This document now captures the design for **all** of Sunny's capabilities — one section per capability, memory first — plus a project-skeleton section and a post-design Review Resolutions section. The `agent-memory` section directly below is the first.
 
 ## Goals / Non-Goals
 
@@ -17,7 +17,7 @@ This design covers the `agent-memory` capability only. Other Sunny subsystems ar
 - A semantic-recall upgrade path that preserves the single-file, self-hosted, $0 properties.
 
 **Non-Goals:**
-- Multi-user / multi-tenant memory (Sunny serves exactly one person).
+- Multi-user / multi-tenant *memory* — Sunny models exactly one owner (Devon). This is about the *memory model*, not the interface: Sunny still operates in multi-participant contexts (group iMessages), where it answers other participants but Devon remains the sole approver of consequential actions (see Review Resolutions R1).
 - A managed/cloud memory service.
 - A graph database or temporal knowledge graph as part of the initial build.
 - Embeddings/vector search in the first version (added only when keyword recall demonstrably fails).
@@ -247,6 +247,7 @@ The message archive (+ tsvector FTS), `pgvector` embeddings (later), and WDK exe
 - **Homegrown SQLite checkpoint runner:** fewer moving parts and no Postgres daemon, but we would own and maintain the durability/resume/retry code. Rejected in favor of WDK's battle-tested durability now that the Vercel stack is confirmed to compose cleanly.
 - **Everything through a durable workflow (including trivial turns):** unnecessary Postgres round-trips and latency on "ok thanks"; Tier 1's idempotent re-processing already gives reboot safety for conversational turns.
 - **User-facing resumable token streaming:** irrelevant for iMessage's complete-message delivery; would add Redis/`WorkflowChatTransport` complexity for no benefit.
+- **Managed/serverless Postgres (e.g. Neon):** rejected for the always-on home-server case. Three concerns: (1) **privacy** — messages, FTS, and embeddings would then live in a third-party cloud, contradicting the self-hosted/no-egress ethos (the whole reason memory's soul stays local). (2) **WDK fit** — the Postgres world runs a long-lived worker using `LISTEN/NOTIFY` + `graphile-worker` polling; serverless Postgres (autosuspend / scale-to-zero, PgBouncer pooling) fits poorly with persistent worker connections and `LISTEN/NOTIFY`. (3) **Latency** — durable execution writes per step, so per-query network round-trips (tens of ms) accumulate vs. local sub-ms. Local Postgres is trivial to run (Docker/apt) on an always-on box, so the lock-in/ops "savings" of a managed service don't apply here. **Use local Postgres.** (Neon stays a fine option if Sunny ever moves to a cloud host where there's no always-on box anyway.)
 
 ## Risks / Trade-offs (durable-execution)
 
@@ -464,30 +465,45 @@ Sunny's value is in its tools: shell on the host, a web-research fetcher, a cred
 
 ## Decisions (tool-access)
 
-### D-TA1 — Tools declare risk tier + allowed credential references
+### D-TA1 — Tools are thin; skills are comprehensive
 
-Every tool registers with: a **risk tier** (auto / approval / forbidden-by-default), and the **explicit `op://` references** it is permitted to resolve (default: none). The runtime enforces gating from the risk tier (D-SEC3) and reference resolution from the whitelist (D-CR3). No tool resolves a reference it didn't declare.
+The **tool surface stays small**; capability lives in **skills** that *compose* tools. A capability is promoted to a dedicated tool only when the harness needs to **gate, audit, or bind a credential to it** (the standard "promote-to-a-dedicated-tool" criterion). So the catalog splits in two:
 
-### D-TA2 — Initial tool catalog and tiers
+- **Primitive tools** — thin, general capabilities (shell, file read, web fetch/search). Comprehensive procedures are built *on top* of these as skills, not as new tools.
+- **Dedicated gated tools** — promoted specifically because they are high-consequence / credentialed and must be reliably gated, audited, and credential-bound (send-email, a credentialed-browser action, publish/deploy). A skill's high-consequence steps route through these.
+
+Every tool registers with a **risk tier** (auto / approval / forbidden-by-default) and the **explicit `op://` references** it may resolve (default: none). The runtime enforces gating (D-SEC3) and reference resolution (D-CR3). No tool resolves a reference it didn't declare. Skills inherit this: a skill can only do what the tools it calls allow (D-SK6).
+
+### D-TA2 — Initial catalog
 
 ```
-  Tool                      Risk tier     Credentials
+  PRIMITIVE TOOLS           Risk tier     Credentials
   ─────────────────────────────────────────────────────────────
   web search / fetch        auto          none (untrusted output → D-SEC6)
   shell (read-only)         auto          none
   shell (write/destructive) approval      none  (blocklist still applies)
   read files (non-secret)   auto          none
   memory read/write         auto          none
-  build site (devbox)       auto          none
-  deploy / expose publicly  approval      maybe host/deploy key
-  email read                auto*         email creds (read scope)   *content untrusted
-  email send                approval      email creds (send scope)   acts as Devon
+
+  DEDICATED GATED TOOLS     (promoted for gating + credential binding)
+  ─────────────────────────────────────────────────────────────
+  send email                approval      email creds (send scope) — acts as Devon
   credentialed browser      approval      whitelisted site login(s); isolated profile (D-SEC5)
-  todos                     approval      todo-service token
+  publish / deploy publicly approval      maybe host/deploy key
   install a skill           approval      none  (runs direct per D-SEC5)
 ```
 
-Tiers map to D-SEC3 gating; "acting as Devon" tools (email send, credentialed browser) are hard-gated.
+```
+  CAPABILITIES AS SKILLS    (compose the tools above; not tools themselves)
+  ─────────────────────────────────────────────────────────────
+  build / run / host sites  → the `devbox` skill (over shell); public deploy
+                              routes through the gated publish/deploy tool
+  email read / triage       → an email skill over shell + the himalaya CLI
+                              (R5); sending routes through the gated send-email tool
+  research, todos, etc.     → skills composing web fetch / shell / http
+```
+
+Tiers map to D-SEC3 gating; "acting as Devon" tools (send email, credentialed browser) are hard-gated regardless of smart-mode. *(This supersedes the earlier catalog that listed `build site (devbox)` and `todos` as tools — those are skills.)*
 
 ### D-TA3 — Credentialed browser specifics
 
@@ -510,7 +526,11 @@ The browser tool runs in the isolated profile (D-SEC5), fills credentials resolv
 
 ## Context (agent-skills)
 
-A central part of Sunny's vision is that it can **install, write, and learn its own skills** — modular, file-based units of procedure that teach it how to do things. Research established that the `agentskills.io` `SKILL.md` format is a real, multi-vendor open standard (the same one Claude Code, `skills.sh`, and the Vercel skills already installed in this repo use), with progressive disclosure for context efficiency and shipping prior art for runtime self-authoring (Anthropic's skill-creator). `skills.sh` is a zero-curation registry, so installed skills must be treated as untrusted code.
+A central part of Sunny's vision is that it can **install, write, and learn its own skills** — modular, file-based units of procedure that teach it how to do things. Research established that the `agentskills.io` `SKILL.md` format is a real, multi-vendor open standard (Claude Code, Cursor, Hermes, OpenClaw, the Vercel skills already in this repo), with progressive disclosure for context efficiency and shipping prior art for runtime self-authoring (Anthropic's skill-creator).
+
+**Install sources — `skills.sh` is a discovery index, not the substrate.** Because the format is just a `SKILL.md` in a Git repo and `npx skills add owner/repo` installs from *any* Git source (GitHub/GitLab shorthand, full URLs, per-skill paths, local dirs), the real "registry" is **Git + the format**. `skills.sh` is a zero-curation popularity index over those same repos — useful for discovery, not a separate integration. Other notable sources: Anthropic's curated **`anthropics/skills`** and **`vercel-labs/agent-skills`** repos; per-agent registries like OpenClaw's **ClawHub** and Hermes' **Skills Hub** (both convenience indexes over the same git+format substrate); and "awesome-skills" community lists. Sibling projects worth tracking: **OpenClaw** (`openclaw/openclaw`) is a local-first personal AI assistant — also multi-channel incl. iMessage, also `SKILL.md`-based — i.e. the closest existing thing to Sunny; and **Hermes** uses `SKILL.md` under `~/.hermes/skills/`. So skills are broadly portable, with caveats (tool-name assumptions, `allowed-tools` is experimental, OS/`metadata` gating is agent-specific).
+
+Because any of these resolve to untrusted third-party code, installed skills must be treated as untrusted (D-SK5).
 
 ## Goals / Non-Goals (agent-skills)
 
@@ -548,7 +568,7 @@ Self-authored skills are created **automatically and the user is notified** (e.g
 ### D-SK5 — Two trust tiers: self-authored (trusted) vs installed (untrusted)
 
 - **Self-authored** skills are trusted (Sunny wrote them under its own guardrails) → auto + notify (D-SK4).
-- **Installed** skills (from `skills.sh` / external git) are **untrusted code** → installation is an APPROVAL-gated action (security D-SEC3/D-SEC5), reviewed before enable. They run directly (not sandboxed), so the protection is install-time gating + review, plus execution-time gating (D-SK6).
+- **Installed** skills (from **any agentskills-compatible Git source** via `npx skills add owner/repo` — which covers the skills.sh index, `anthropics/skills`, `vercel-labs/agent-skills`, and arbitrary repos) are **untrusted code** → installation is an APPROVAL-gated action (security D-SEC3/D-SEC5), validated (D-SK7) and reviewed before enable. They run directly (not sandboxed), so the protection is install-time gating + review + execution-time gating (D-SK6). We don't integrate any proprietary registry protocol — "install from any Git source containing a `SKILL.md`" is the single primitive; ship `anthropics/skills` + `vercel-labs/agent-skills` (and your own `devbox`) as seeded known-good defaults.
 
 ### D-SK6 — Skills cannot escalate privilege
 
@@ -728,7 +748,7 @@ sunny/
   + Postgres (separate daemon: messages/FTS/vectors/workflow/trajectories)
 ```
 
-The repo is code; `~/.sunny/` is runtime state. `memory/` and `skills/` are their own git repos for backup/history.
+The repo is code; `~/.sunny/` is runtime state. **`~/.sunny/` is a single git repo** (covering `memory/` and `skills/` together) for backup and history — not nested per-subdirectory repos. It is separate from the code repo by *location* (`~/.sunny/` vs the project dir), not nested inside it, so there are no submodules or nested-repo headaches.
 
 ### D-PS3 — Model wiring
 

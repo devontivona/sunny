@@ -8,7 +8,7 @@
 - [ ] 1.1 Scaffold the Node LTS + TypeScript project (D-PS1): `package.json`, `tsconfig`, the `src/` layout (D-PS2), lint/format, env loading.
 - [ ] 1.2 Stand up Postgres locally and wire Drizzle (schema + migrations harness) (D-PS1, D-DE4).
 - [ ] 1.3 Install/pin core deps: `ai` (v6), `@ai-sdk/anthropic`, `chat`, `@workflow/world-postgres`, `@1password/sdk`, Drizzle, an OTel SDK. Pin `@1password/sdk` (0.x).
-- [ ] 1.4 Create the `~/.sunny/` runtime contract: `memory/` and `skills/` dirs as their own git repos; config file loader (non-secret settings) (D-PS5).
+- [ ] 1.4 Create the `~/.sunny/` runtime contract: `memory/` + `skills/` under a **single git repo at `~/.sunny/`** (not nested per-subdir repos); config file loader (non-secret settings) (D-PS5).
 - [ ] 1.5 Wire the model: `anthropic('claude-opus-4-8')`, adaptive thinking + effort defaults, `ANTHROPIC_API_KEY` from env (D-PS3).
 - [ ] 1.6 1Password setup: create the dedicated read-only `Sunny` vault + Service Account; load `OP_SERVICE_ACCOUNT_TOKEN` from a hardened `EnvironmentFile`; SDK wrapper that resolves `op://` refs in the tool layer only (D-CR1, D-CR2, D-CR4).
 - [ ] 1.7 systemd unit for the `sunny` service (`Restart=always`) + Postgres service; document the deploy (D-PS6).
@@ -79,6 +79,6 @@
 
 ## 9. Backups & cross-cutting
 
-- [ ] 9.1 Backups: scheduled `git` commits of `~/.sunny/memory/` and `~/.sunny/skills/`; periodic `pg_dump` of the Postgres DB (off-host copy).
+- [ ] 9.1 Backups: scheduled `git` commits of the single `~/.sunny/` repo (memory + skills); periodic `pg_dump` of the local Postgres DB (off-host copy).
 - [ ] 9.2 Rotate the 1Password Service Account token on a schedule (credentials D-CR4 × scheduling).
 - [ ] 9.3 End-to-end smoke test of the gated paths (send-email approval, credentialed browser, blocklist refusal) before relying on autonomy.
