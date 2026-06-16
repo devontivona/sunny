@@ -1,13 +1,45 @@
 schema: spec-driven
 
-# Project context (optional)
-# This is shown to AI when creating artifacts.
-# Add your tech stack, conventions, style guides, domain knowledge, etc.
-# Example:
-#   context: |
-#     Tech stack: TypeScript, React, Node.js
-#     We use conventional commits
-#     Domain: e-commerce platform
+context: |
+  Sunny is a self-hosted, single-user personal AI agent that runs on Devon's
+  Linux home server and acts on his behalf (machine access, building/hosting
+  sites, research, credentialed web browsing, email, todos). Primary interface
+  is iMessage; other channels (Telegram, email, CLI, web) added over time.
+  Architecture is inspired by Nous Research's Hermes Agent, re-implemented on a
+  TypeScript/Vercel substrate.
+
+  Stack:
+  - Runtime: Node LTS + TypeScript (not Bun). Postgres via Drizzle + migrations.
+  - LLM: Vercel AI SDK v6 + @ai-sdk/anthropic, model `claude-opus-4-8`
+    (adaptive thinking; effort high/xhigh for agentic turns). Provider-agnostic.
+  - Durability: Vercel Workflow DevKit (@workflow/world-postgres), long-lived
+    worker (not serverless). Two-tier: in-process conversational turns +
+    durable Tier-2 jobs.
+  - Messaging: Vercel Chat SDK (`chat`) + Photon vercel-chat-adapter-imessage
+    (spectrum-ts) on Spectrum Cloud, behind a thin custom Gateway seam.
+  - Secrets: 1Password via @1password/sdk + a read-only Service Account scoped
+    to a dedicated `Sunny` vault. The LLM never sees secret values, only
+    `op://` references; each tool whitelists the refs it may resolve.
+  - Observability: OpenTelemetry, self-hosted (no egress).
+
+  Storage model:
+  - Memory "soul" = plain markdown under ~/.sunny/memory/ (USER.md, SUNNY.md,
+    INDEX.md, topics/*.md) — git-able, hand-editable. Skills under ~/.sunny/skills/.
+  - One Postgres holds everything DB-backed: messages + tsvector FTS, pgvector
+    embeddings (later), Workflow execution/job state, trajectories.
+
+  Key invariants:
+  - Security: assume untrusted content (web/email/skills) may hijack the model;
+    gate high-consequence ACTIONS. Smart approval tiers with money / destructive
+    / act-as-Devon (send email, credentialed web) HARD-GATED; a hard blocklist;
+    credentialed browser runs isolated; only Devon (paired identity) commands Sunny.
+  - Secrets never enter the LLM context, tool args, or logs.
+  - The always-on system prefix (core memory + skill metadata + tool defs) must
+    stay byte-stable so Anthropic prompt caching applies (cost control); inject
+    per-run dynamic context as mid-conversation system messages, never by editing
+    the cached prefix.
+
+  See openspec/changes/bootstrap-sunny/ for the full design and per-capability specs.
 
 # Per-artifact rules (optional)
 # Add custom rules for specific artifacts.
