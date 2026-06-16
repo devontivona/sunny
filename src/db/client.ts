@@ -1,4 +1,4 @@
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import pg from 'pg';
@@ -23,7 +23,8 @@ export function createDb(connectionString: string): DbHandle {
 
 /** Apply pending SQL migrations at startup (home-server self-migrate). */
 export async function runMigrations(db: Db): Promise<void> {
-  const migrationsFolder = fileURLToPath(new URL('../../drizzle', import.meta.url));
+  // Resolve from cwd (project root) so it works under Nitro's bundle too.
+  const migrationsFolder = join(process.cwd(), 'drizzle');
   await migrate(db, { migrationsFolder });
   log.info('migrations applied');
 }

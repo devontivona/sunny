@@ -26,3 +26,7 @@ secrets/
 .DS_Store
 *.log
 *.swp
+
+# Nitro build output
+.output/
+.nitro/

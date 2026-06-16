@@ -8,24 +8,32 @@
     "node": ">=22"
   },
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "start": "tsx src/index.ts",
-    "build": "tsc -p tsconfig.json",
+    "dev": "nitro dev",
+    "build": "nitro build",
+    "start": "node .output/server/index.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "format": "prettier --write \"src/**/*.ts\"",
+    "db:setup-world": "workflow-postgres-setup",
+    "format": "prettier --write \"src/**/*.ts\" \"server/**/*.ts\" \"plugins/**/*.ts\" \"workflows/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\""
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.84",
     "@chat-adapter/state-memory": "^4.30.0",
+    "@workflow/ai": "^4.1.2",
+    "@workflow/world-postgres": "^4.2.0",
     "ai": "^6.0.206",
     "chat": "^4.30.0",
     "chat-adapter-sendblue": "^0.2.0",
     "drizzle-orm": "^0.45.2",
+    "express": "^5.2.1",
+    "nitro": "^3.0.260610-beta",
     "pg": "^8.21.0",
+    "rollup": "^4.62.0",
+    "workflow": "^4.5.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@types/express": "^5.0.6",
     "@types/node": "^22.0.0",
     "@types/pg": "^8.20.0",
     "drizzle-kit": "^0.31.10",
