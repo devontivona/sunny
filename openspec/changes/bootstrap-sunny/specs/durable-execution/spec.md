@@ -22,6 +22,18 @@ Each inbound message SHALL be persisted on arrival and processed idempotently, k
 - **WHEN** the same inbound message is delivered more than once (e.g. a webhook retry)
 - **THEN** Sunny processes it only once
 
+### Requirement: Double-text steering of an in-flight run
+When a new message from the owner arrives on a thread that already has an in-flight run, Sunny SHALL fold the new message into that run to steer it rather than killing the run and discarding its work. The new message SHALL take effect at the next step boundary of the in-flight run. Sunny MAY abort and restart only when the new message invalidates the current task.
+
+#### Scenario: New message steers, not kills
+- **WHEN** the owner sends a message while a run is still working on a prior message in the same thread
+- **THEN** the new message is folded into the in-flight run at its next step
+- **AND** the run's prior work is not discarded
+
+#### Scenario: Task-invalidating message restarts
+- **WHEN** the new message cancels or replaces the current task
+- **THEN** Sunny may abort the in-flight run and start fresh with the new message
+
 ### Requirement: Durable background jobs survive crashes and resume
 Tier 2 jobs SHALL be durable: a job that is interrupted by a crash, reboot, or timeout SHALL resume rather than restart from scratch, and SHALL notify the user through the messaging gateway on completion. Side-effecting operations within a job SHALL be expressed as retryable durable steps.
 

@@ -465,45 +465,53 @@ Sunny's value is in its tools: shell on the host, a web-research fetcher, a cred
 
 ## Decisions (tool-access)
 
-### D-TA1 — Tools are thin; skills are comprehensive
+### D-TA1 — Bash-centric capability; permissioning at the command/skill layer (revised per review)
 
-The **tool surface stays small**; capability lives in **skills** that *compose* tools. A capability is promoted to a dedicated tool only when the harness needs to **gate, audit, or bind a credential to it** (the standard "promote-to-a-dedicated-tool" criterion). So the catalog splits in two:
+*(This supersedes an earlier framing that proposed a dedicated gated tool per permissioned activity — see Review Resolutions R13. Devon's point: in a CLI-centric world bash is the universal tool, and per-activity tools are brittle. Researched prior art — Claude Code's permission rules + hooks, `allowed-tools`, Hermes/OpenClaw/Goose/OpenHands — strongly supports gating at the **command** level.)*
 
-- **Primitive tools** — thin, general capabilities (shell, file read, web fetch/search). Comprehensive procedures are built *on top* of these as skills, not as new tools.
-- **Dedicated gated tools** — promoted specifically because they are high-consequence / credentialed and must be reliably gated, audited, and credential-bound (send-email, a credentialed-browser action, publish/deploy). A skill's high-consequence steps route through these.
-
-Every tool registers with a **risk tier** (auto / approval / forbidden-by-default) and the **explicit `op://` references** it may resolve (default: none). The runtime enforces gating (D-SEC3) and reference resolution (D-CR3). No tool resolves a reference it didn't declare. Skills inherit this: a skill can only do what the tools it calls allow (D-SK6).
-
-### D-TA2 — Initial catalog
+Capability is exposed primarily through a **`bash` tool** (most third-party capabilities are CLIs) plus a few genuinely non-CLI tools (the credentialed browser driver, memory ops). Permissioning therefore attaches to **commands and skills**, not to a proliferation of per-activity tools. The layered model:
 
 ```
-  PRIMITIVE TOOLS           Risk tier     Credentials
+ (a) Command-approval policy  deny-by-default allow/ask/deny rules, matched on a
+                              PARSED command (AST), enumerating every sub-command
+                              across pipes/$()/chains, FAIL-CLOSED on substitution/
+                              complexity (uncertain → ask). Patterns route; they are
+                              NOT a security boundary (Claude Code says so explicitly).
+ (b) Skill-scoped allowlists  an active skill pre-approves only the commands it needs
+                              (`allowed-tools`-style); grants within the deny baseline.
+                              → this is "permissioning in the skills layer."
+ (c) Smart-mode triage        a cheap model (Haiku) triages only the uncertain "ask"
+                              middle (D-SEC3 / R10) — never the sole gate.
+ (d) Hard blocklist           non-overridable, trips first (D-SEC4).
+ (e) Containment boundary     the REAL security layer: sandbox (bubblewrap/Landlock/
+                              seccomp) + egress control. "Contain at the environment
+                              layer first, steer at the model layer second."
+ (f) Per-command credentials  `op run`: the model emits `op://` refs; they resolve into
+                              ONLY that subprocess's env at exec time (masked in output),
+                              never the model context (refines D-CR2/D-CR3).
+```
+
+### D-TA2 — Tools, skills, and where permissioning lives
+
+```
+  TOOLS (thin)              Notes
   ─────────────────────────────────────────────────────────────
-  web search / fetch        auto          none (untrusted output → D-SEC6)
-  shell (read-only)         auto          none
-  shell (write/destructive) approval      none  (blocklist still applies)
-  read files (non-secret)   auto          none
-  memory read/write         auto          none
+  bash                      the universal capability surface; gated per-command (D-TA1)
+  credentialed browser      genuine non-CLI tool (Playwright); isolated profile (D-SEC5)
+  memory read/write         core-memory mutation (serialized, R7)
 
-  DEDICATED GATED TOOLS     (promoted for gating + credential binding)
+  CAPABILITIES AS SKILLS    (compose bash + the tools above)
   ─────────────────────────────────────────────────────────────
-  send email                approval      email creds (send scope) — acts as Devon
-  credentialed browser      approval      whitelisted site login(s); isolated profile (D-SEC5)
-  publish / deploy publicly approval      maybe host/deploy key
-  install a skill           approval      none  (runs direct per D-SEC5)
+  build / run / host sites  → the `devbox` skill (over bash); public deploy is an
+                              ask/blocked command in the policy
+  email read / triage       → a skill over bash + the himalaya CLI (R5); the himalaya
+                              *send* subcommand is hard-gated by the command policy
+  research, todos, etc.     → skills composing bash / web fetch
 ```
 
-```
-  CAPABILITIES AS SKILLS    (compose the tools above; not tools themselves)
-  ─────────────────────────────────────────────────────────────
-  build / run / host sites  → the `devbox` skill (over shell); public deploy
-                              routes through the gated publish/deploy tool
-  email read / triage       → an email skill over shell + the himalaya CLI
-                              (R5); sending routes through the gated send-email tool
-  research, todos, etc.     → skills composing web fetch / shell / http
-```
+Permissioning is uniform: every command — whether typed directly or run by a skill — passes the command-approval policy (a) + blocklist (d), within the skill's declared scope (b), with the uncertain middle triaged by smart-mode (c), contained by the sandbox/egress boundary (e), and credentials injected per-command (f). "Acting as the owner" commands (himalaya send, credentialed browser actions, publish/deploy) are hard-gated regardless of smart-mode.
 
-Tiers map to D-SEC3 gating; "acting as Devon" tools (send email, credentialed browser) are hard-gated regardless of smart-mode. *(This supersedes the earlier catalog that listed `build site (devbox)` and `todos` as tools — those are skills.)*
+**Open tension for Devon (raised in the PR reply):** Devon chose *direct host access* + approval tiers. The research argues the *real* security boundary is the sandbox + egress control (e), not the policy. The pragmatic position taken here: general host commands run direct under the policy (so Sunny can actually manage the server), but **commands derived from/operating on untrusted content run sandboxed with no egress**, and **egress control is treated as load-bearing** (it's the thing that actually stops credential exfiltration). Whether to go further — sandbox *all* bash by default — is a security/utility tradeoff for Devon to weigh (see R13 and the lethal-trifecta risk below).
 
 ### D-TA3 — Credentialed browser specifics
 
@@ -821,6 +829,14 @@ The "smart" risk-assessor uses a **cheap fast model (Haiku-class)**, not Opus, t
 ### R11 — Memory cold-start / onboarding (closes the first-run gap)
 
 On first run, `USER.md`/`SUNNY.md` are seeded by Devon (hand-written starter `USER.md`) and refined through an **onboarding conversation** where Sunny asks and records durable facts. Memory is **global to Devon**; the recent-message *window* is per thread/channel.
+
+### R12 — Double-text steering, not kill (PR comment on durable-execution)
+
+A new owner message arriving while a run is in flight on that thread should **steer** the run, not kill it. Researched support: this is *not* first-class in the Vercel AI SDK, but the clean, supported pattern is a **per-thread steer-buffer drained by `prepareStep`** — `prepareStep` runs before each step and can replace the messages sent to the model, so a newly-arrived message is spliced in at the next step boundary (folding into the current thinking). `abortSignal` abort-then-restart is reserved for messages that *invalidate* the task. (First-class steering exists in Anthropic's Managed Agents / Agent SDK via a server-side message queue + `interrupt`, but adopting those would move the agent loop + session state onto Anthropic's infra — conflicting with the self-hosted, AI-SDK-owns-the-loop design. So we build the steer-buffer ourselves.) This refines R7: per-thread runs are not just *serialized* — an in-flight run **absorbs** the next message rather than queuing a separate run. Specified in `durable-execution`.
+
+### R13 — Permissioning lives at the command/skill layer, not per-activity tools (PR comment on tool-access)
+
+Supersedes the "dedicated gated tool per permissioned activity" framing. Bash is the universal capability surface; permissioning is a layered command model (D-TA1): deny-by-default AST-based command policy + skill-scoped allowlists + smart-mode triage + hard blocklist + **sandbox/egress containment** + per-command `op run` credential injection. Prior art: Claude Code permission rules/hooks + `allowed-tools`, Hermes smart-mode + blocklist, OpenClaw/Goose/OpenHands. Key honest caveats baked into the design: (1) command-string classification is unreliable — pattern rules *route*, the sandbox + egress *contain*; (2) the **lethal trifecta** is the governing risk — Sunny will hold private data + untrusted input (web/email) + an exfiltration path simultaneously, so the uncertain middle must reach human approval, credentialed actions stay hard-gated, and egress control is load-bearing. **Open decision for Devon:** how far to sandbox — untrusted-derived commands only (current stance, honoring "direct host access") vs. sandbox-all-bash-by-default (stronger, at some cost to Sunny's ability to freely manage the host).
 
 
 
