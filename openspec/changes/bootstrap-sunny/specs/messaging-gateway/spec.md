@@ -17,15 +17,41 @@ Sunny SHALL deliver user-facing messages only by an explicit `send_message` acti
 - **THEN** no message is delivered to the user
 
 ### Requirement: Guard against unintended silence
-If a turn ends without any `send_message` call and without a deliberate decision to stay silent, the system SHALL prompt the agent to produce a user-facing message rather than completing the turn silently.
+The system SHALL reinforce the explicit-send model so a turn does not end silently by accident, and SHALL provide a safety net if it does. Reinforcement SHALL include representing Sunny's prior replies in the model's own history as `send_message` tool calls (not plain assistant text), so the agent's track record demonstrates that speaking means calling `send_message`. As a fallback, if a turn ends with no `send_message` call but produced user-facing text, the system SHALL deliver that text rather than ghosting the user, and SHALL record that the fallback fired (it is expected to trend toward zero).
 
-#### Scenario: Forgot-to-send nudge
-- **WHEN** a turn would end with no `send_message` call and no deliberate silence signal
-- **THEN** the agent is nudged to send a user-facing message before the turn completes
+#### Scenario: History reinforces the send action
+- **WHEN** the model prompt is built from prior turns
+- **THEN** Sunny's earlier replies appear as `send_message` tool calls with their results, not as plain assistant text
+
+#### Scenario: Fallback delivery on missed send
+- **WHEN** a turn ends with no `send_message` call but produced user-facing text
+- **THEN** that text is delivered to the user
+- **AND** the occurrence is recorded (telemetered) for monitoring
 
 #### Scenario: Sends are not duplicated on resume
 - **WHEN** a durable run resumes after interruption
 - **THEN** a `send_message` already delivered before the interruption is not delivered again
+
+### Requirement: Turn-grained transcript with retained working context
+Sunny SHALL persist its conversation transcript as one stored record per turn, using the AI SDK `UIMessage` as the unit of record (one row = one `UIMessage` = one turn). Each stored record SHALL preserve the turn's structured content — text/scratchpad parts and tool calls with their results — sufficient to reconstruct the model prompt without fabricating tool calls, and SHALL also retain a flattened text projection for keyword recall. Sunny SHALL retain the assistant turn's private working-context (scratchpad) text across turns so a follow-up message can draw on reasoning the agent chose not to deliver. The model prompt SHALL be derived from stored `UIMessage` records (converted to model messages at request time); native provider reasoning blocks are NOT required to be stored.
+
+#### Scenario: One record per turn
+- **WHEN** a turn completes (an inbound user message, or Sunny's reply turn)
+- **THEN** it is persisted as a single `UIMessage` record carrying that turn's parts
+
+#### Scenario: Prompt reconstructed from stored turns
+- **WHEN** Sunny assembles context for a response
+- **THEN** the prompt is built by converting stored `UIMessage` records to model messages
+- **AND** no `send_message` tool calls are synthesized at prompt-build time
+
+#### Scenario: Working context survives into a follow-up
+- **WHEN** Sunny gives a terse reply but retains additional working-context text for that turn
+- **AND** the user then asks a follow-up about something not stated in the reply
+- **THEN** the retained working context is available in the model prompt for that follow-up
+
+#### Scenario: Native reasoning is not stored
+- **WHEN** a turn is persisted
+- **THEN** provider reasoning blocks are not required to be stored (scratchpad text is retained instead)
 
 ### Requirement: Normalized gateway interface
 Sunny's agent core SHALL communicate with all channels through a single normalized gateway interface and SHALL NOT depend directly on any channel SDK or transport library. Inbound messages SHALL be delivered to the agent as a channel-agnostic event containing at least channel, thread identifier, sender identifier, text, attachments, and timestamp. Outbound sends SHALL be expressed against the same interface.

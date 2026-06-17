@@ -23,7 +23,7 @@
 - [x] 2.3 Trivial conversation store (in-memory or local SQLite) for recent-window context. **Promote to Postgres in Phase 2** — the skeleton does not need Postgres (messaging-gateway R: self-owned store, D-MG2).
 - [x] 2.4 Sender authorization: allowlist Devon's identity at the gateway (messaging-gateway R: sender authorization, D-MG6).
 - [x] 2.5 In-process agent loop (`ToolLoopAgent`, Opus) that reads the recent window and talks to the user **only via a `send_message` tool** (raw model text private); adaptive thinking on. **→ Milestone B: text Sunny → get a real Opus reply. (This is the goal — from here you iterate on intelligence live.)** (D-MG8)
-- [x] 2.5a Output model (D-MG8): `send_message(text)` (multi-call per turn, doesn't end the turn, idempotent on resume); **scratchpad/notes** via the memory surface for cross-step working memory; **silence = not calling send**; **system-prompt elicitation** + a **forgot-to-send guard** (messaging-gateway R: explicit send-message, unintended-silence guard).
+- [x] 2.5a Output model (D-MG8): `send_message(text)` (multi-call per turn, doesn't end the turn, idempotent on resume); **scratchpad/notes** via the memory surface for cross-step working memory; **silence = not calling send**; **system-prompt elicitation** + a **forgot-to-send guard** (messaging-gateway R: explicit send-message, unintended-silence guard). *(As-built: the forced guard was replaced by a telemetered fallback; history-as-tool-calls reinforces elicitation — see Phase 3.5 / D-MG9 for the turn-grained successor.)*
 - [x] 2.6 Per-channel capability flags + graceful degradation; no token streaming (complete messages); typing indicator on turn start / per send (D-MG3, D-MG8, D-DE3).
 
 ## 3. Phase 2 — Memory
@@ -51,43 +51,60 @@
 - [x] 4.6 Scheduled output delivery + run history; missed-fire policy (one-shots catch up once; recurring no backfill) (scheduling R: output delivery; D-SC5).
 - [x] 4.7 Wire the nightly memory-consolidation job as the first recurring schedule (agent-memory D3 × scheduling).
 
-## 5. Phase 4 — Security, tools & credentials
+## 5. Phase 3.5 — Turn-grained transcript & working-context retention (current priority)
 
-- [ ] 5.0 1Password setup (moved from Phase 0): dedicated read-only `Sunny` vault + Service Account; `OP_SERVICE_ACCOUNT_TOKEN` from a hardened `EnvironmentFile`; `@1password/sdk` wrapper resolving `op://` refs in the tool layer only (D-CR1, D-CR2, D-CR4).
-- [ ] 5.1 Approval tiers: smart risk-assessor on a **cheap fast model (Haiku-class)** + hard-gated categories (money / destructive / act-as-Devon); approvals **durable-suspended** (WDK hook) with an **id-correlated** reply, re-prompt on ambiguity, default-deny on timeout (security R: approval tiers, durable/correlated approvals; D-SEC3; R9, R10).
-- [ ] 5.1a Owner tagging end-to-end: gateway tags `isOwner`; non-owner group messages are answerable but cannot trigger consequence or approve (security R: identity; messaging-gateway R: owner tagging; R1).
-- [ ] 5.2 Hard blocklist (rm -rf /, fork bombs, reading the op token file, weakening own guards) (security R: hard blocklist; D-SEC4).
-- [ ] 5.3 Command-permissioning (bash-centric, R13): deny-by-default allow/ask/deny policy matched on a **parsed command AST** (enumerate sub-commands across pipes/`$()`/chains; fail-closed); **skill-scoped command allowlists**; smart-mode triages the uncertain middle; per-command `op run` credential injection (`op://` → that subprocess's env only) (tool-access R: command permissioning, skill-scoped perms, per-command injection; D-TA1).
-- [ ] 5.3b Taint-tracking + step-up auth (R14): mark whether a run's context contains untrusted content; **clean** commands run under the normal policy with full host access; **tainted** commands require **step-up "2FA"** (provenance-flagged confirmation + a real second factor — TOTP/passkey/out-of-band tap); **unattended** tainted commands block + defer to Devon (or targeted sandbox); **restrict egress** as a backstop regardless (tool-access R: taint-tracking + step-up; R14).
-- [ ] 5.4 Thin tools (bash, file read, web fetch) + capabilities as skills: **`devbox` skill** for build/run/host sites (public deploy = ask/blocked command); **email skill** over himalaya for `sunny@waywardlane.com` (CC/forward to act; himalaya *send* hard-gated; bodies untrusted → injection-contained, ideally a no-credential subagent); research/todos as skills (R3, R5, R13).
-- [ ] 5.5 Credentialed browser tool in an isolated profile with a **persistent logged-in profile** (cookie store treated as a credential surface — on the hard blocklist, never logged/read by other tools); fill logins from whitelisted refs at fill-time; credentialed actions approval-gated (security D-SEC4/5, tool-access R: browser routing, D-TA3; R6).
-- [ ] 5.6 Prompt-injection containment: untrusted content treated as data, delimited, not followed (security R: untrusted-content-is-data; D-SEC6).
-- [ ] 5.7 Crypto DM-pairing for identity (upgrade the Phase-1 allowlist) (security R: command identity; D-SEC2).
+> Inserted mid-build (before Phase 4) per decision **D-MG9**. Reworks the conversation
+> store to persist **one AI SDK `UIMessage` per row = one turn**, retains Sunny's
+> plain-text working context across turns so terse iMessage replies don't lose
+> follow-up context, and **supersedes the Phase-1 synthetic history reconstruction**
+> (the fabricated `send_message` tool-pairs from 2.5a / item 2). The cache work (3.5/3.9)
+> and the interim history-as-tool-calls fix are already in; this is the durable version.
 
-## 6. Phase 5 — Skills
+- [ ] 5.1 Schema: rework the `messages` store to **one row per `UIMessage` (turn)** — keep the queryable envelope (`channel`, `thread_id`, `message_id`, `role`, `is_owner`, `timestamp`, `processed_at`), add a `jsonb` payload (the `UIMessage`), and keep a flattened `text` projection for the `tsvector`/GIN recall (new Drizzle migration; never edit applied ones) (D-MG9, D-DE4).
+- [ ] 5.2 Capture: switch the turn from `agent.generate()` to `agent.stream()` and assemble the assistant `UIMessage` via `readUIMessageStream(result.toUIMessageStream())`; persist payload + text projection. **Re-verify** prompt-cache logging (`cachedIn`/`cacheWriteIn`) and `prepareStep` double-text steering still hold on `stream()` (D-MG9; guards 3.9, 4.1b).
+- [ ] 5.3 Inbound: construct user `UIMessage`s at ingest (`{ id, role:'user', parts:[{type:'text',…}], metadata }`); persist via the new shape; preserve inbound dedup + restart-recovery on the envelope (D-MG9, D-DE1).
+- [ ] 5.4 Replay: rewrite `toModelMessages` to parse stored `UIMessage` payloads → `await convertToModelMessages()`; **retire the synthetic `send_message` tool-pair reconstruction** (supersedes 2.5a); keep the trailing-trim-to-user-message rule (D-MG9).
+- [ ] 5.5 Working-context contract: update the system prompt so plain text = **private working notes** (retained for follow-ups) and `send_message` = the only delivered channel. Verify with a real-model probe that Sunny writes useful scratch AND still sends (no `fallback_text`), and that a follow-up draws on retained context (D-MG9, D-MG8).
+- [ ] 5.6 Recall + window: point keyword recall at the `text` projection; bound the recent-window to N turns of payload for the prompt while retaining full history for recall (D-MG9, agent-memory keyword recall).
+- [ ] 5.7 Resolve open sub-decisions inline and record the choice: full-vs-filtered tool fidelity (lean **full**), FTS source (lean **delivered-only**), `metadata` to persist (`createdAt`/model/usage). Confirm we do **not** adopt Chat SDK `bot.transcripts` (D-MG9).
 
-- [ ] 6.1 `SKILL.md` loader (agentskills.io format) from `~/.sunny/skills/`; progressive disclosure (metadata index on the cached prefix, body on trigger) (agent-skills R: format, loading; D-SK1/2).
-- [ ] 6.2 Self-authoring `skill_manage` tool (create/edit/delete) auto+notify; validate before activation (agent-skills R: self-authoring, validation; D-SK4/7).
-- [ ] 6.3 Installed-skill path via `npx skills add owner/repo` (Vercel's installer — same tool used for `devbox`): approval-gated, reviewed, treated as untrusted; skills run under tool-access gating, `allowed-tools` only restricts (agent-skills R: installed untrusted, no escalation; D-SK5/6; R4).
-- [ ] 6.4 (Deferred-ready) `pgvector` retrieval over skill descriptions when the metadata budget is exceeded (agent-skills D3).
+## 6. Phase 4 — Security, tools & credentials
 
-## 7. Phase 6 — Observability
+- [ ] 6.0 1Password setup (moved from Phase 0): dedicated read-only `Sunny` vault + Service Account; `OP_SERVICE_ACCOUNT_TOKEN` from a hardened `EnvironmentFile`; `@1password/sdk` wrapper resolving `op://` refs in the tool layer only (D-CR1, D-CR2, D-CR4).
+- [ ] 6.1 Approval tiers: smart risk-assessor on a **cheap fast model (Haiku-class)** + hard-gated categories (money / destructive / act-as-Devon); approvals **durable-suspended** (WDK hook) with an **id-correlated** reply, re-prompt on ambiguity, default-deny on timeout (security R: approval tiers, durable/correlated approvals; D-SEC3; R9, R10).
+- [ ] 6.1a Owner tagging end-to-end: gateway tags `isOwner`; non-owner group messages are answerable but cannot trigger consequence or approve (security R: identity; messaging-gateway R: owner tagging; R1).
+- [ ] 6.2 Hard blocklist (rm -rf /, fork bombs, reading the op token file, weakening own guards) (security R: hard blocklist; D-SEC4).
+- [ ] 6.3 Command-permissioning (bash-centric, R13): deny-by-default allow/ask/deny policy matched on a **parsed command AST** (enumerate sub-commands across pipes/`$()`/chains; fail-closed); **skill-scoped command allowlists**; smart-mode triages the uncertain middle; per-command `op run` credential injection (`op://` → that subprocess's env only) (tool-access R: command permissioning, skill-scoped perms, per-command injection; D-TA1).
+- [ ] 6.3b Taint-tracking + step-up auth (R14): mark whether a run's context contains untrusted content; **clean** commands run under the normal policy with full host access; **tainted** commands require **step-up "2FA"** (provenance-flagged confirmation + a real second factor — TOTP/passkey/out-of-band tap); **unattended** tainted commands block + defer to Devon (or targeted sandbox); **restrict egress** as a backstop regardless (tool-access R: taint-tracking + step-up; R14).
+- [ ] 6.4 Thin tools (bash, file read, web fetch) + capabilities as skills: **`devbox` skill** for build/run/host sites (public deploy = ask/blocked command); **email skill** over himalaya for `sunny@waywardlane.com` (CC/forward to act; himalaya *send* hard-gated; bodies untrusted → injection-contained, ideally a no-credential subagent); research/todos as skills (R3, R5, R13).
+- [ ] 6.5 Credentialed browser tool in an isolated profile with a **persistent logged-in profile** (cookie store treated as a credential surface — on the hard blocklist, never logged/read by other tools); fill logins from whitelisted refs at fill-time; credentialed actions approval-gated (security D-SEC4/5, tool-access R: browser routing, D-TA3; R6).
+- [ ] 6.6 Prompt-injection containment: untrusted content treated as data, delimited, not followed (security R: untrusted-content-is-data; D-SEC6).
+- [ ] 6.7 Crypto DM-pairing for identity (upgrade the Phase-1 allowlist) (security R: command identity; D-SEC2).
 
-- [ ] 7.1 OpenTelemetry spans (AI SDK telemetry + WDK + gateway/tool) to a self-hosted collector; no egress (observability R: OTel; D-OB1).
-- [ ] 7.2 Per-run trajectories persisted to Postgres (observability R: trajectories; D-OB2).
-- [ ] 7.3 Cost/token budget meter with enforcement: per-run cap + autonomous rate limit (wires scheduling D-SC6) → stop + notify; **plus a global daily/monthly spend ceiling + kill switch and an agent-loop step cap** covering all activity (observability R: budget metering, global circuit-breaker; D-OB3; R8).
-- [ ] 7.4 Redacted audit log of tool + secret access (wires security D-SEC7); redaction across all sinks (observability R: audit log, redaction; D-OB4/5).
-- [ ] 7.5 Insights summary deliverable over the gateway (observability R: insights; D-OB6).
+## 7. Phase 5 — Skills
 
-## 8. Phase 7 — Subagents
+- [ ] 7.1 `SKILL.md` loader (agentskills.io format) from `~/.sunny/skills/`; progressive disclosure (metadata index on the cached prefix, body on trigger) (agent-skills R: format, loading; D-SK1/2).
+- [ ] 7.2 Self-authoring `skill_manage` tool (create/edit/delete) auto+notify; validate before activation (agent-skills R: self-authoring, validation; D-SK4/7).
+- [ ] 7.3 Installed-skill path via `npx skills add owner/repo` (Vercel's installer — same tool used for `devbox`): approval-gated, reviewed, treated as untrusted; skills run under tool-access gating, `allowed-tools` only restricts (agent-skills R: installed untrusted, no escalation; D-SK5/6; R4).
+- [ ] 7.4 (Deferred-ready) `pgvector` retrieval over skill descriptions when the metadata budget is exceeded (agent-skills D3).
 
-- [ ] 8.1 `delegate_task`: isolated-context child, restricted (subset) toolset, result-only return (subagents R: delegation; D-SUB1/3).
-- [ ] 8.2 Bounds: concurrency cap (default 3), depth cap (default 2), no sub-delegation unless orchestrator (subagents R: bounded; D-SUB2).
-- [ ] 8.3 Least-privilege enforcement + durable delegation (Tier-2) + child spans/trajectories in observability (subagents R: least-privilege, durable/observed; D-SUB3/4/6).
-- [ ] 8.4 Pattern: delegate untrusted-content processing to a no-credential, no-high-consequence-tool subagent (subagents D-SUB5).
+## 8. Phase 6 — Observability
 
-## 9. Backups & cross-cutting
+- [ ] 8.1 OpenTelemetry spans (AI SDK telemetry + WDK + gateway/tool) to a self-hosted collector; no egress (observability R: OTel; D-OB1).
+- [ ] 8.2 Per-run trajectories persisted to Postgres (observability R: trajectories; D-OB2).
+- [ ] 8.3 Cost/token budget meter with enforcement: per-run cap + autonomous rate limit (wires scheduling D-SC6) → stop + notify; **plus a global daily/monthly spend ceiling + kill switch and an agent-loop step cap** covering all activity (observability R: budget metering, global circuit-breaker; D-OB3; R8).
+- [ ] 8.4 Redacted audit log of tool + secret access (wires security D-SEC7); redaction across all sinks (observability R: audit log, redaction; D-OB4/5).
+- [ ] 8.5 Insights summary deliverable over the gateway (observability R: insights; D-OB6).
 
-- [ ] 9.1 Backups: scheduled `git` commits of the single `~/.sunny/` repo (memory + skills); periodic `pg_dump` of the local Postgres DB (off-host copy).
-- [ ] 9.2 Rotate the 1Password Service Account token on a schedule (credentials D-CR4 × scheduling).
-- [ ] 9.3 End-to-end smoke test of the gated paths (send-email approval, credentialed browser, blocklist refusal) before relying on autonomy.
+## 9. Phase 7 — Subagents
+
+- [ ] 9.1 `delegate_task`: isolated-context child, restricted (subset) toolset, result-only return (subagents R: delegation; D-SUB1/3).
+- [ ] 9.2 Bounds: concurrency cap (default 3), depth cap (default 2), no sub-delegation unless orchestrator (subagents R: bounded; D-SUB2).
+- [ ] 9.3 Least-privilege enforcement + durable delegation (Tier-2) + child spans/trajectories in observability (subagents R: least-privilege, durable/observed; D-SUB3/4/6).
+- [ ] 9.4 Pattern: delegate untrusted-content processing to a no-credential, no-high-consequence-tool subagent (subagents D-SUB5).
+
+## 10. Backups & cross-cutting
+
+- [ ] 10.1 Backups: scheduled `git` commits of the single `~/.sunny/` repo (memory + skills); periodic `pg_dump` of the local Postgres DB (off-host copy).
+- [ ] 10.2 Rotate the 1Password Service Account token on a schedule (credentials D-CR4 × scheduling).
+- [ ] 10.3 End-to-end smoke test of the gated paths (send-email approval, credentialed browser, blocklist refusal) before relying on autonomy.

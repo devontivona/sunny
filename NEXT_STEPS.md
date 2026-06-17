@@ -71,10 +71,12 @@ API-valid (no 400) and a follow-up that probed elided reasoning elicited a
 `send_message` call (not plain text). Send-only reconstruction (non-send tools
 aren't stored) — intentional, it sharpens the signal.
 
-**Open follow-up (separate topic, user raised):** retaining cross-turn *context* —
-the reasoning Sunny elides from its terse iMessage replies is useful for follow-ups.
-NOT solved by replaying raw thinking (that re-muddies this fix); the likely shape is
-a distilled per-turn context note (memory-adjacent). To design next.
+**Follow-up — now specced as Phase 3.5 / D-MG9 (current priority):** retaining
+cross-turn *context* (the reasoning Sunny elides from terse iMessage replies). Decided
+design: persist **one AI SDK `UIMessage` per row = one turn** (envelope + `jsonb`
+payload + `text` projection), retain Sunny's plain-text scratchpad as a `UIMessage`
+text part, skip native Anthropic reasoning. Supersedes this item's synthetic
+reconstruction. See `design.md` D-MG9 and `tasks.md` §5 (Phase 3.5).
 
 Original notes (kept for context):
 
@@ -198,7 +200,7 @@ was actually built. Run `/opsx:sync` / `/opsx:archive` only after these:
 **Whole later phases (not "cleanup", just not started):** Phase 4 (security,
 1Password/credentials, bash + command permissioning, taint-tracking), Phase 5
 (skills), Phase 6 (observability: OTel, trajectories, budget meter, audit log),
-Phase 7 (subagents), and 9.1 backups (scheduled `git` commits of `~/.sunny` +
+Phase 7 (subagents), and 10.1 backups (scheduled `git` commits of `~/.sunny` +
 `pg_dump`).
 
 ---

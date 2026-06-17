@@ -183,7 +183,30 @@ Specifics:
 - **`send_message` is the natural hook** for typing indicators (fire on turn start / per send), message chunking, and gateway capability-flagging (D-MG3).
 - **`send_message` is owner-directed:** in a group, it targets the thread; it carries no special privilege (it's gated like any tool, though it's low-consequence).
 
-**Failure mode + guard (the one real risk):** the agent reasons/works and ends the turn **without ever calling `send_message`**, leaving the owner in silence — Anthropic notes the tool is "rarely called" without explicit instruction. Mitigations: (1) **system-prompt elicitation** ("when you have content the user must read, call `send_message`; use it only for user-facing content, not reasoning/narration"); (2) a **harness guard** — if a turn ends with no `send_message` and no *deliberate* silence signal, inject a nudge ("summarize for the user now") before completing. This supersedes the implicit "run to completion → auto-send the final assistant text" in durable-execution D-DE3.
+**Failure mode + guard (the one real risk):** the agent reasons/works and ends the turn **without ever calling `send_message`**, leaving the owner in silence — Anthropic notes the tool is "rarely called" without explicit instruction. Mitigations: (1) **system-prompt elicitation** ("when you have content the user must read, call `send_message`; use it only for user-facing content, not reasoning/narration"); (2) a **telemetered fallback** — if a turn ends with no `send_message` but produced scratch text, deliver that text so the owner isn't ghosted, and log it loudly (it should trend to zero); (3) **history-as-tool-calls** — Sunny's prior replies are represented in the model's history as `send_message` tool calls (see D-MG9), so its own track record reinforces "speaking == `send_message`". This supersedes the implicit "run to completion → auto-send the final assistant text" in durable-execution D-DE3. *(As-built note: the earlier "inject a nudge / forced re-run" guard was removed in favor of the telemetered fallback + the D-MG9 history representation.)*
+
+### D-MG9 — Turn-grained transcript: one `UIMessage` per row, with retained working context
+
+The conversation store (D-MG2) persists the **AI SDK v6 `UIMessage`** as its unit of record: **one row = one `UIMessage` = one turn** (a sender's complete contribution). This both (a) lets Sunny retain the *working context* it elides from terse iMessage replies, so follow-ups can draw on what it figured out but didn't say, and (b) supersedes the Phase-1 synthetic history reconstruction.
+
+**Why `UIMessage` (not `ModelMessage`).** Per Vercel's persistence guidance, `UIMessage` is the lossless *source of truth*; `ModelMessage[]` is a per-request projection derived via `await convertToModelMessages()` (the inverse is lossy and has **no** SDK helper). Concretely:
+- **"1 row = 1 message" maps cleanly only to `UIMessage`.** A turn collapses to one `UIMessage` (text/scratch + tool calls-with-results + `step-start` boundaries as `parts[]`). In `ModelMessage` a single turn *fragments* into interdependent messages (`assistant` + `role:'tool'` + `assistant` …), so "1 row = 1 message" is unachievable without shattering turns.
+- **Future-proofs a possible web chat UI.** `useChat` consumes `UIMessage[]` directly (load → render); storing `ModelMessage` would strand us on the lossy/unsupported reverse conversion.
+- Tool calls and their results live on a single `ToolUIPart` (state machine), and metadata (`id`, `createdAt`, model, usage) is first-class.
+
+**Storage shape — envelope + payload + projection.** Keep the queryable, transport-agnostic envelope (`channel`, `thread_id`, `message_id`, `role`, `is_owner`, `timestamp`, `processed_at`) for dedup/recovery/window; add a `jsonb` payload holding the `UIMessage` for verbatim replay; keep a flattened `text` column for the `tsvector`/GIN recall (D5/keyword recall). Envelope = queries, payload = replay, text = search.
+
+**Working-context retention.** The assistant turn's plain-text scratchpad (a `text` part on the `UIMessage`) is persisted and replayed, giving cross-turn context without auto-piping it to the user (D-MG8 still holds: `send_message` is the only channel). The model is prompted to write its working context as plain text (private) and to speak via `send_message` — the two-channel contract. **Native Anthropic reasoning is deliberately NOT stored** (keep `thinking.display:'omitted'`): scratch-only keeps the data model simple and avoids reasoning-block *signature* replay.
+
+**Producing `UIMessage`s headless.** No `useChat` exists, so assemble the assistant `UIMessage` via the supported stream path — `agent.stream()` → `readUIMessageStream(result.toUIMessageStream())` — rather than hand-rolling `ModelMessage → UIMessage`. Inbound user `UIMessage`s are constructed trivially (`{ id, role:'user', parts:[{type:'text',…}], metadata }`). `convertToModelMessages()` reconstructs the prompt each turn; the trailing-trim-to-user-message rule still applies.
+
+**Relationship to Chat SDK.** Validated against the Chat SDK: its state adapters are framework bookkeeping (subscriptions/locks/dedup/queues), and conversation history is opt-in and *never auto-owned* (`bot.transcripts`). Keeping our own Postgres transcript is exactly the intended posture; we do **not** adopt `bot.transcripts` (redundant, per-user granularity).
+
+**Open sub-decisions (resolve in implementation):**
+- **Full vs filtered fidelity** — store all tool parts (incl. `memory_write`/`schedule_*`/`start_job`) vs sends + scratch only. Lean **full** (truthful, lossless); the prompt carries the scratch-vs-send framing.
+- **`generate` → `stream` switch** — required to assemble `UIMessage`s; it interacts with the prompt-cache logging and `prepareStep` steering (both supported on `stream()`) — re-verify.
+- **Recall (FTS) source** — delivered sends only (precise) vs sends + scratch (richer, noisier). Lean **delivered-only**.
+- **`metadata`** to persist (`createdAt`, model id, token usage).
 
 ### Rejected alternatives (messaging-gateway)
 
