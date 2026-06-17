@@ -2,7 +2,8 @@
 
 Sunny is a self-hosted personal AI agent (iMessage-first). **Deploy/run details live
 in [README.md](README.md) → "Running & deploying"** — this file is just conventions and
-gotchas for editing the repo.
+gotchas for editing the repo. **Prioritized next steps + openspec cleanup: see
+[NEXT_STEPS.md](NEXT_STEPS.md).**
 
 ## Commands
 
