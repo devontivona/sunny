@@ -22,6 +22,7 @@ This change **bootstraps Sunny's foundation** — enough to be a live, durable, 
 - `messaging-gateway`: How Sunny sends and receives messages — a normalized gateway the agent core speaks, pluggable channel drivers (iMessage via Chat SDK + Sendblue first), capability flags, sender authorization, a self-owned turn-grained conversation store, and an explicit `send_message` output model.
 - `durable-execution`: How Sunny survives restarts — idempotent in-process turns plus durable Workflow DevKit jobs (`DurableAgent`), on one Postgres that also holds messages, FTS, and vectors.
 - `scheduling`: How Sunny schedules itself — persisted one-shot/interval/cron schedules dispatched as durable jobs, with an anti-recursion guard, gateway delivery, and bounded dispatch.
+- `project-skeleton`: The scaffold every capability rests on — self-hosted Node/TS runtime with startup migrations, repo-vs-`~/.sunny/` runtime-state separation, provider-agnostic model wiring, a cacheable byte-stable system prefix, environment-only secrets, and always-on supervised deployment.
 
 The remaining capabilities are specified in their own changes: **`security-tools-credentials`** (security-permissions + credentials + tool-access), **`skills`** (agent-skills), **`observability`**, and **`subagents`**.
 
