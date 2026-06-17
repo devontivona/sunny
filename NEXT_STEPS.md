@@ -163,12 +163,9 @@ was actually built. Run `/opsx:sync` / `/opsx:archive` only after these:
   survival); 4.0 is satisfied by devbox, not a hand-rolled systemd unit. The
   `nitro build` → `.output` production hardening is deferred. Update D-PS1/D-PS6
   to say this.
-- **D-MG8 (output model)** as built: Sunny speaks via `send_message`; raw text is a
-  private scratchpad; if a turn produces no send, a **telemetered fallback
-  delivers the scratch text** (not the originally-specified "inject a nudge"
-  forced re-run, which was removed). Note the pending history-as-tool-calls
-  reinforcement (item 2 above). Reconcile the 2.5a task wording ("forgot-to-send
-  guard … nudge") with the implemented fallback.
+- ✅ **D-MG8 (output model)** — done (D-MG9 commit `ac60e68`): refreshed to the
+  as-built telemetered fallback + history-as-tool-calls reinforcement; 2.5a task
+  wording carries a one-line as-built note.
 - **D-SC6 (cost/rate caps):** only a per-tick rate guard (`MAX_PER_TICK`) exists;
   full per-run cost/token caps + scheduler rate limit are **deferred to Phase 6**
   (observability budget meter). State that enforcement lives in Phase 6.
@@ -181,15 +178,16 @@ was actually built. Run `/opsx:sync` / `/opsx:archive` only after these:
 - **4.2/4.3 durability** is workflow-level, not `DurableAgent` step-level (item 3).
 
 **specs/**
-- `messaging-gateway` "Guard against unintended silence" scenario: reword to the
-  implemented fallback-delivery behavior.
+- ✅ `messaging-gateway` "Guard against unintended silence" — done (D-MG9 commit):
+  rewritten to fallback-delivery + history-reinforcement; also added the
+  "Turn-grained transcript with retained working context" requirement.
 - `agent-memory` keyword-recall: clarify summarization is **in-context** (the
   main model summarizes `recall_history` matches; no dedicated summarizer call).
 - `scheduling` cost/rate-limit requirement: note enforcement is Phase 6.
 
 **tasks.md**
-- 3.5 / 3.9 remain unchecked (caching = item 1, deferred until done).
-- 4.0 checked with the devbox note already added.
+- 4.0 checked with the devbox note already added (3.5/3.9 now checked — caching done).
+- Phase 3.5 (§5) is the active in-progress section.
 
 **Minor / dev-only**
 - `server/routes/debug/job.post.ts` (gated by `SUNNY_DEBUG`, off in prod) is not
@@ -202,13 +200,3 @@ was actually built. Run `/opsx:sync` / `/opsx:archive` only after these:
 (skills), Phase 6 (observability: OTel, trajectories, budget meter, audit log),
 Phase 7 (subagents), and 10.1 backups (scheduled `git` commits of `~/.sunny` +
 `pg_dump`).
-
----
-
-## Explicitly deferred (do later)
-
-- Cross-turn prompt caching (1-hr TTL, pre-warming, re-warm cron) — low payoff
-  for a single sporadic user; see item 1.
-- `pgvector` semantic recall (3.6 / D5) — interface ready, pgvector image
-  installed; keyword/tsvector only for now.
-- Steering `abortSignal` restart + rapid-fire debounce (see 4.1b note).
