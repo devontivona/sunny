@@ -6,43 +6,81 @@ The architecture is inspired by Nous Research's **Hermes Agent**, re-implemented
 
 ## Status
 
-**Phase 0–1 implemented** — the walking skeleton to a live iMessage loop (Milestone B:
-"text Sunny → get a real Opus reply"). Memory, durability, scheduling, security, skills,
-observability, and subagents are later phases. See `openspec/changes/bootstrap-sunny/tasks.md`.
+**Phases 0–3 implemented** — a live iMessage loop (Opus), files-first memory, durable
+Tier-2 jobs + self-scheduling, and idempotent / double-text-steered turns. Remaining:
+Phase 4 (security, tools, credentials), Phase 5 (skills), Phase 6 (observability),
+Phase 7 (subagents). See `openspec/changes/bootstrap-sunny/tasks.md`.
 
-## Running (Phase 0–1 skeleton)
+## Running & deploying
 
-Sunny runs foreground in dev with env-var secrets (Postgres / 1Password / systemd are
-later phases). The agent core speaks only the normalized `Gateway` seam; the iMessage
-transport (Chat SDK + the `chat-adapter-sendblue` adapter) sits behind it.
+Sunny is a long-lived service — a Nitro-built Node server plus a Postgres database. Nitro
+is the build layer that compiles Workflow DevKit's `"use workflow"` / `"use step"`
+directives; the agent core speaks only the normalized `Gateway` seam, with the iMessage
+transport (Chat SDK + `chat-adapter-sendblue`) behind it.
+
+### Components
+
+- **Server** — Nitro app: routes in `server/` (Sendblue webhook + `/health`),
+  `plugins/startup.ts` starts the WDK Postgres world then the runtime, durable workflows
+  in `workflows/`, agent/gateway/memory/scheduler in `src/`.
+- **Postgres** — a dedicated **`sunny-postgres`** Docker container (pgvector image) on
+  `localhost:5544`, db `sunny`. One instance holds the message archive + tsvector FTS,
+  schedules, and the WDK world (`workflow` + `graphile_worker` schemas) — consolidated per
+  D-DE4. App migrations auto-apply at startup; WDK world tables are created once with
+  `npx workflow-postgres-setup`.
+- **Supervisor (home server)** — **`devbox`** runs the server as a systemd *user* service
+  (`devbox@sunny-gateway`, `Restart=always`, linger enabled → starts at boot, survives
+  reboot) and publishes it over HTTPS via a Cloudflare tunnel at
+  `https://sunny-gateway.waywardlane.com`.
+- **Secrets** — env-only (`.env` locally / the service environment in prod):
+  `ANTHROPIC_API_KEY`, `SENDBLUE_API_KEY`, `SENDBLUE_API_SECRET`, `SENDBLUE_FROM_NUMBER`,
+  `SENDBLUE_WEBHOOK_SECRET`, `DATABASE_URL`, `WORKFLOW_TARGET_WORLD`,
+  `WORKFLOW_POSTGRES_URL`. Non-secret settings live in `~/.sunny/config.json`; the memory
+  soul lives under `~/.sunny/memory/` (its own git repo).
+
+### First-time setup
 
 ```bash
+# 1. Dedicated Postgres (isolated from anything else on the box)
+docker run -d --name sunny-postgres --restart unless-stopped \
+  -e POSTGRES_USER=sunny -e POSTGRES_PASSWORD=<pw> -e POSTGRES_DB=sunny \
+  -p 5544:5432 -v sunny-pgdata:/var/lib/postgresql/data pgvector/pgvector:pg16
+
+# 2. Deps + env
 npm install
-cp .env.example .env          # fill in ANTHROPIC_API_KEY (+ Sendblue creds for live iMessage)
-npm run dev                   # tsx watch; or: npm start
+cp .env.example .env   # fill keys; DATABASE_URL=postgres://sunny:<pw>@localhost:5544/sunny
+                       # WORKFLOW_TARGET_WORLD=@workflow/world-postgres; WORKFLOW_POSTGRES_URL=$DATABASE_URL
+
+# 3. WDK world tables (idempotent); app migrations apply automatically on first boot
+WORKFLOW_POSTGRES_URL="$DATABASE_URL" npx workflow-postgres-setup
+
+# 4. Owner identity — add your iMessage phone/email to ~/.sunny/config.json → owner.identities
 ```
 
-### Live setup (what you must provision)
+### Run it
 
-1. **Anthropic key** — set `ANTHROPIC_API_KEY` in `.env` (Claude Opus 4.8, D-PS3).
-2. **Sendblue account** — from the Sendblue dashboard, set `SENDBLUE_API_KEY`,
-   `SENDBLUE_API_SECRET`, and your Sendblue number `SENDBLUE_FROM_NUMBER` in `.env`. Set
-   `SENDBLUE_WEBHOOK_SECRET` to verify inbound deliveries (recommended).
-3. **Owner identity** — add your iMessage phone/email to `~/.sunny/config.json` →
-   `owner.identities` (the gateway authorizes inbound senders; D-MG6 / task 2.4).
-4. **Public webhook** — Sunny listens on `:8787/webhooks/sendblue`. In dev, expose it with
-   the `devbox` skill and set that public URL as the **Receive** (inbound) webhook in the
-   Sendblue dashboard (task 1.3). In prod the home server's own reachable endpoint replaces
-   it (D-PS6). Health check: `:8787/health`.
+- **Local dev:** `npm run dev` (Nitro dev server; honors `$PORT`).
+- **Home server (current):** supervised by devbox —
+  ```bash
+  devbox add sunny-gateway --dir <repo> --cmd '<node-bin-on-PATH> npm run dev' --port 8787
+  devbox logs sunny-gateway -f   # tail   ·   devbox restart sunny-gateway   ·   devbox status sunny-gateway
+  ```
+  devbox gives reboot survival + crash auto-restart (systemd `Restart=always` + linger).
+- **Sendblue:** set the project's **Receive** (inbound) webhook to
+  `https://sunny-gateway.waywardlane.com/webhooks/sendblue` and the signing secret to
+  `SENDBLUE_WEBHOOK_SECRET`. Health check: `/health`.
 
-`~/.sunny/config.json` (non-secret settings, D-PS5) is seeded with defaults on first run.
+### Production hardening (deferred — task 4.0)
 
-### Milestones
+The service currently runs `nitro dev` (a file-watcher — reboot-safe under devbox, but it
+rebuilds/restarts on source edits, so don't edit live on the box mid-operation). When
+development settles, switch the devbox command to a built artifact for a lighter,
+deterministic process:
 
-- **Milestone A (transport echo)** — `SUNNY_ECHO=1 npm start`: text Sunny, it echoes back.
-  Proves the transport round-trip with no LLM.
-- **Milestone B (live agent)** — `npm start` (default): text Sunny, get a real Opus reply.
-  Sunny speaks only via the `send_message` tool; its reasoning is private (D-MG8).
+```bash
+npm run build   # nitro build → .output
+# devbox cmd → sh -c 'nitro build && node .output/server/index.mjs'   (or build once, then: node .output/server/index.mjs)
+```
 
 ## Design
 

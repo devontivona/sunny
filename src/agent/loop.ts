@@ -55,6 +55,17 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
     // mid-turn writes take effect immediately.
     const instructions = buildSystemPrompt(config, loadCore(paths));
     const messages = toModelMessages(await store.recentWindow(event.threadId), event.isGroup);
+    // The prompt must end with a user message (Anthropic rejects ending on an
+    // assistant message). The window is insertion-ordered, so it can end with
+    // one of Sunny's own replies (e.g. a follow-up turn after a steered message
+    // whose reply was persisted later). Trim trailing assistant messages.
+    while (messages.length > 0 && messages[messages.length - 1]?.role === 'assistant') {
+      messages.pop();
+    }
+    if (messages.length === 0) {
+      log.info('no user message to respond to; skipping turn', { threadId: event.threadId });
+      return;
+    }
     const counter: SendCounter = { count: 0 };
     const tools = {
       send_message: createSendMessageTool(gateway, event.threadId, counter),
