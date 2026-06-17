@@ -36,6 +36,13 @@
       "when": 1781654802808,
       "tag": "0004_backfill_processed",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1781733889277,
+      "tag": "0005_payload_jsonb",
+      "breakpoints": true
     }
   ]
 }

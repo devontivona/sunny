@@ -1,10 +1,25 @@
-import { boolean, index, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import {
+  boolean,
+  index,
+  jsonb,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex,
+  uuid,
+} from 'drizzle-orm/pg-core';
 
 /**
  * The message archive (durable-execution D-DE4, agent-memory keyword recall).
  * Sunny's self-owned conversation store (D-MG2) — every inbound and outbound
  * message. A generated `text_search` tsvector column + GIN index are added in a
  * follow-up SQL migration (drizzle can't express generated tsvector columns).
+ *
+ * Turn-grained transcript (D-MG9): a row carries a queryable envelope (channel,
+ * thread_id, message_id, role, …), the rich AI SDK `UIMessage` as a `jsonb`
+ * `payload` for verbatim replay, and the flattened `text` projection that backs
+ * `text_search`/recall. The payload is nullable for legacy rows written before
+ * D-MG9 (the loader falls back to `text` for those).
  */
 export const messages = pgTable(
   'messages',
@@ -17,7 +32,10 @@ export const messages = pgTable(
     role: text('role').notNull(), // 'user' | 'assistant'
     senderId: text('sender_id').notNull(),
     senderName: text('sender_name'),
+    /** Flattened text projection for FTS/recall (the delivered/inbound text). */
     text: text('text').notNull(),
+    /** Rich AI SDK `UIMessage` for this turn (verbatim replay); null on legacy rows (D-MG9). */
+    payload: jsonb('payload'),
     isOwner: boolean('is_owner').notNull().default(false),
     timestamp: timestamp('timestamp', { withTimezone: true }).notNull(),
     /** Set when the turn for this inbound message completed (durable-execution D-DE1). */
