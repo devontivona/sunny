@@ -58,7 +58,25 @@ more valuable as the prefix grows (bigger memory, Phase 5 skills metadata).
 
 ---
 
-## 2. Fix the `send_message` elicitation slip
+## 2. Fix the `send_message` elicitation slip — ✅ DONE (2026-06-17)
+
+**Implemented:** `toModelMessages` in `src/agent/loop.ts` now reconstructs each of
+Sunny's past replies as a `send_message` tool-call + `delivered` tool-result pair
+(synthetic `toolCallId = send-${messageId}`) instead of a plain assistant text
+turn, so the model's own history shows that speaking == calling `send_message`.
+The trailing-trim was widened to drop trailing non-user messages (assistant + tool)
+so the prompt still ends on a user message. The telemetered fallback is kept as the
+safety net. Verified with a real-model probe: the reconstructed tool history is
+API-valid (no 400) and a follow-up that probed elided reasoning elicited a
+`send_message` call (not plain text). Send-only reconstruction (non-send tools
+aren't stored) — intentional, it sharpens the signal.
+
+**Open follow-up (separate topic, user raised):** retaining cross-turn *context* —
+the reasoning Sunny elides from its terse iMessage replies is useful for follow-ups.
+NOT solved by replaying raw thinking (that re-muddies this fix); the likely shape is
+a distilled per-turn context note (memory-adjacent). To design next.
+
+Original notes (kept for context):
 
 **Symptom:** the model sometimes writes its reply as ordinary (private) text
 instead of calling `send_message`. The telemetered safety net in

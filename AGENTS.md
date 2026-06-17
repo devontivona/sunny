@@ -39,9 +39,12 @@ npm run build         # nitro build → .output
   Workflows live in `workflows/`; launch with `start()` from `workflow/api`; never call
   `start()` inside workflow context (wrap in a `"use step"`).
 - **Anthropic prompts must end with a user message** (no assistant prefill). The recent
-  window is insertion-ordered, so trim trailing assistant messages before generating.
+  window is insertion-ordered, so trim trailing non-user messages (assistant + tool) before
+  generating.
 - **`send_message` is the only user channel**; the model's plain text is private scratch.
-  A telemetered fallback delivers scratch if a turn sends nothing — watch logs for
+  Sunny's past replies are reconstructed in history as `send_message` tool-call/result pairs
+  (not plain assistant text) so its own track record reinforces "speaking == send_message".
+  A telemetered fallback still delivers scratch if a turn sends nothing — watch logs for
   `delivered: 'fallback_text'` (means the elicitation slipped).
 - **Postgres** is the dedicated `sunny-postgres` container on `:5544` — *not* the Supabase
   instance on the box. One DB holds messages/FTS/schedules/WDK state (D-DE4).

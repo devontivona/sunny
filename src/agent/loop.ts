@@ -70,8 +70,10 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
     // The prompt must end with a user message (Anthropic rejects ending on an
     // assistant message). The window is insertion-ordered, so it can end with
     // one of Sunny's own replies (e.g. a follow-up turn after a steered message
-    // whose reply was persisted later). Trim trailing assistant messages.
-    while (messages.length > 0 && messages[messages.length - 1]?.role === 'assistant') {
+    // whose reply was persisted later). Sunny's replies are now reconstructed as
+    // send_message tool-call + tool-result pairs (see toModelMessages), so trim
+    // any trailing assistant/tool messages (whole pairs) back to the last user.
+    while (messages.length > 0 && messages[messages.length - 1]?.role !== 'user') {
       messages.pop();
     }
     if (messages.length === 0) {
@@ -201,17 +203,48 @@ function logTurnSummary(
 }
 
 /**
- * Build the model prompt from the stored recent window. Inbound → user,
- * outbound → assistant. In groups, prefix the speaker so the model can follow
- * who said what (it answers everyone but only acts for the owner — R1).
+ * Build the model prompt from the stored recent window. Inbound → user; each of
+ * Sunny's own replies → a `send_message` tool-call + `delivered` tool-result pair.
+ *
+ * Reconstructing outbound messages the way they actually happened (a tool call,
+ * not plain assistant text) makes the model's own history demonstrate that the
+ * only way to speak is to call `send_message` (D-MG8) — closing the elicitation
+ * slip where it would otherwise mimic a plain-text self-history. The synthetic
+ * `toolCallId` only needs to be unique within this prompt and pair the call with
+ * its result; we don't persist the original. (Non-send tools like memory_write
+ * aren't in the store, so this is a send-only reconstruction — which sharpens the
+ * signal rather than weakening it.)
+ *
+ * In groups, prefix the speaker on inbound messages so the model can follow who
+ * said what (it answers everyone but only acts for the owner — R1).
  */
 function toModelMessages(window: StoredMessage[], isGroup: boolean): ModelMessage[] {
-  return window.map((m): ModelMessage => {
+  const out: ModelMessage[] = [];
+  for (const m of window) {
     if (m.role === 'assistant') {
-      return { role: 'assistant', content: m.text };
+      const toolCallId = `send-${m.messageId}`;
+      out.push({
+        role: 'assistant',
+        content: [
+          { type: 'tool-call', toolCallId, toolName: 'send_message', input: { text: m.text } },
+        ],
+      });
+      out.push({
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId,
+            toolName: 'send_message',
+            output: { type: 'text', value: 'delivered' },
+          },
+        ],
+      });
+      continue;
     }
     const content =
       isGroup && m.senderName ? `${m.senderName}${m.isOwner ? ' (owner)' : ''}: ${m.text}` : m.text;
-    return { role: 'user', content };
-  });
+    out.push({ role: 'user', content });
+  }
+  return out;
 }
