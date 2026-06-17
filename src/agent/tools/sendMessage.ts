@@ -27,7 +27,9 @@ export function createSendMessageTool(gateway: Gateway, threadId: string, counte
       text: z.string().min(1).describe('The exact text to deliver to the user.'),
     }),
     execute: async ({ text }) => {
-      await gateway.send(threadId, { text });
+      // Deliver only — the conversational loop persists the whole turn as one
+      // UIMessage record afterward (D-MG9), so we don't persist per bubble here.
+      await gateway.send(threadId, { text }, { persist: false });
       counter.count += 1;
       return 'delivered';
     },

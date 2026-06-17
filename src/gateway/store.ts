@@ -18,8 +18,42 @@ export interface StoredMessage {
   senderId: string;
   senderName?: string;
   text: string;
+  /** Rich AI SDK `UIMessage` for this turn (D-MG9); null on legacy rows. */
+  payload: unknown;
   timestamp: Date;
   isOwner: boolean;
+}
+
+/** Inbound user message as a `UIMessage` (D-MG9) — one text part, raw text. */
+function userPayload(event: ChannelEvent): unknown {
+  return {
+    id: event.messageId,
+    role: 'user',
+    parts: [{ type: 'text', text: event.text }],
+    metadata: { createdAt: event.timestamp.toISOString() },
+  };
+}
+
+/**
+ * A standalone outbound send (proactive / Tier-2) as a `UIMessage` (D-MG9).
+ * Represented as a `send_message` tool call so it reads the same as a
+ * conversational send in history (reinforces "speaking == send_message").
+ */
+function assistantSendPayload(id: string, text: string): unknown {
+  return {
+    id,
+    role: 'assistant',
+    parts: [
+      {
+        type: 'tool-send_message',
+        toolCallId: `send-${id}`,
+        state: 'output-available',
+        input: { text },
+        output: 'delivered',
+      },
+    ],
+    metadata: { createdAt: new Date().toISOString() },
+  };
 }
 
 export class ConversationStore {
@@ -44,6 +78,7 @@ export class ConversationStore {
         senderId: event.senderId,
         senderName: event.senderName ?? null,
         text: event.text,
+        payload: userPayload(event),
         isOwner: event.isOwner,
         timestamp: event.timestamp,
       })
@@ -84,21 +119,52 @@ export class ConversationStore {
     }));
   }
 
-  /** Persist an outbound (assistant) message Sunny sent via `send_message`. */
+  /**
+   * Persist a standalone outbound (assistant) message — proactive sends and
+   * Tier-2 job/scheduled deliveries. Conversational turns use `appendTurn`
+   * instead (one row per turn; D-MG9).
+   */
   async appendOutbound(
     threadId: string,
     messageId: string,
     text: string,
     channel = 'imessage',
   ): Promise<void> {
+    const id = messageId || randomUUID();
     await this.db.insert(messages).values({
       channel,
       threadId,
-      messageId: messageId || randomUUID(),
+      messageId: id,
       role: 'assistant',
       senderId: 'sunny',
       senderName: 'Sunny',
       text,
+      payload: assistantSendPayload(id, text),
+      isOwner: false,
+      timestamp: new Date(),
+    });
+  }
+
+  /**
+   * Persist one conversational assistant turn as a single row (D-MG9): the rich
+   * `UIMessage` `payload` (scratch + all tool parts incl. every `send_message`)
+   * for verbatim replay, plus the flattened `text` projection for recall.
+   */
+  async appendTurn(
+    threadId: string,
+    payload: unknown,
+    text: string,
+    channel = 'imessage',
+  ): Promise<void> {
+    await this.db.insert(messages).values({
+      channel,
+      threadId,
+      messageId: randomUUID(),
+      role: 'assistant',
+      senderId: 'sunny',
+      senderName: 'Sunny',
+      text,
+      payload,
       isOwner: false,
       timestamp: new Date(),
     });
@@ -141,6 +207,7 @@ function toStored(row: typeof messages.$inferSelect): StoredMessage {
     senderId: row.senderId,
     senderName: row.senderName ?? undefined,
     text: row.text,
+    payload: row.payload ?? null,
     timestamp: row.timestamp,
     isOwner: row.isOwner,
   };

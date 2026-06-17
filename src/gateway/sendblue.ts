@@ -116,7 +116,11 @@ export class SendblueGateway implements Gateway {
     return this.chat.webhooks.sendblue(request);
   }
 
-  async send(threadId: string, message: OutboundMessage): Promise<void> {
+  async send(
+    threadId: string,
+    message: OutboundMessage,
+    opts?: { persist?: boolean },
+  ): Promise<void> {
     const thread = this.activeThreads.get(threadId);
     let sentId: string;
     if (thread) {
@@ -129,7 +133,11 @@ export class SendblueGateway implements Gateway {
       const sent = await this.adapter.postMessage(threadId, message.text);
       sentId = (sent as { id?: string })?.id ?? randomUUID();
     }
-    await this.store.appendOutbound(threadId, sentId, message.text);
+    // The conversational loop persists its own per-turn record (D-MG9), so it
+    // opts out here; proactive/Tier-2 sends persist a standalone outbound row.
+    if (opts?.persist ?? true) {
+      await this.store.appendOutbound(threadId, sentId, message.text);
+    }
     log.info('sent message', { threadId, messageId: sentId, proactive: !thread });
     if (logContent()) log.info('outbound content', { threadId, text: message.text });
   }

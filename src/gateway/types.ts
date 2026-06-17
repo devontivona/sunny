@@ -63,8 +63,13 @@ export interface Gateway {
   /** Register the handler invoked for each authorized inbound message. */
   onInbound(handler: InboundHandler): void;
 
-  /** Deliver a message to a thread. Persists to the conversation store too. */
-  send(threadId: string, message: OutboundMessage): Promise<void>;
+  /**
+   * Deliver a message to a thread. By default it also persists the message to the
+   * conversation store (used by proactive/Tier-2 sends). The conversational loop
+   * passes `{ persist: false }` because it rolls all of a turn's sends + scratch
+   * into a single `UIMessage` turn record itself (D-MG9).
+   */
+  send(threadId: string, message: OutboundMessage, opts?: { persist?: boolean }): Promise<void>;
 
   /** Show a typing indicator on a thread (no-op if unsupported). */
   startTyping(threadId: string): Promise<void>;

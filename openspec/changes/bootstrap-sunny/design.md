@@ -202,11 +202,13 @@ The conversation store (D-MG2) persists the **AI SDK v6 `UIMessage`** as its uni
 
 **Relationship to Chat SDK.** Validated against the Chat SDK: its state adapters are framework bookkeeping (subscriptions/locks/dedup/queues), and conversation history is opt-in and *never auto-owned* (`bot.transcripts`). Keeping our own Postgres transcript is exactly the intended posture; we do **not** adopt `bot.transcripts` (redundant, per-user granularity).
 
-**Open sub-decisions (resolve in implementation):**
-- **Full vs filtered fidelity** — store all tool parts (incl. `memory_write`/`schedule_*`/`start_job`) vs sends + scratch only. Lean **full** (truthful, lossless); the prompt carries the scratch-vs-send framing.
-- **`generate` → `stream` switch** — required to assemble `UIMessage`s; it interacts with the prompt-cache logging and `prepareStep` steering (both supported on `stream()`) — re-verify.
-- **Recall (FTS) source** — delivered sends only (precise) vs sends + scratch (richer, noisier). Lean **delivered-only**.
-- **`metadata`** to persist (`createdAt`, model id, token usage).
+**Resolved sub-decisions:**
+- **Store = full fidelity.** The persisted `payload` is the whole assistant `UIMessage` incl. *all* tool parts (`memory_write`/`schedule_*`/`start_job`/`send_message`) — lossless, exactly what `readUIMessageStream` yields, good for audit / a future UI.
+- **Replay = full to start.** The whole stored `UIMessage` (bounded by the recent-window N) is converted to model messages each turn; this also *retires the synthetic `send_message` reconstruction*. If the window proves noisy/expensive (e.g. re-feeding old `recall_history` outputs), filter heavy tool i/o from the replay (keep scratch + sends) — a later optimization, not now.
+- **FTS / `text` projection = inbound text + delivered sends + assistant scratch.** Scratch is indexed so the working-context Sunny didn't say is *recallable beyond the window*, not just available within it (the within-window copy lives in `payload`).
+- **`metadata`** = `{ createdAt, model, usage:{in,out,cached,cacheWrite}, delivered, steps }` on assistant turns; `{ createdAt }` on inbound — a minimal precursor to Phase 6 trajectories/budget.
+- **`generate` → `stream`** is required to assemble `UIMessage`s; it touches prompt-cache logging and `prepareStep` steering (both supported on `stream()`) — re-verified with a probe.
+- **Chat SDK `bot.transcripts`:** not adopted (redundant, per-user granularity).
 
 ### Rejected alternatives (messaging-gateway)
 

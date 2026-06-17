@@ -1,4 +1,13 @@
-import { ToolLoopAgent, stepCountIs, type ModelMessage, type SystemModelMessage } from 'ai';
+import {
+  ToolLoopAgent,
+  convertToModelMessages,
+  readUIMessageStream,
+  stepCountIs,
+  type LanguageModelUsage,
+  type ModelMessage,
+  type SystemModelMessage,
+  type UIMessage,
+} from 'ai';
 import type { SunnyConfig } from '../config/index.js';
 import type { ChannelEvent, Gateway } from '../gateway/types.js';
 import type { ConversationStore, StoredMessage } from '../gateway/store.js';
@@ -66,13 +75,11 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
       content: buildSystemPrompt(config, loadCore(paths)),
       providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
     };
-    const messages = toModelMessages(await store.recentWindow(event.threadId), event.isGroup);
+    const messages = await toModelMessages(await store.recentWindow(event.threadId), event.isGroup);
     // The prompt must end with a user message (Anthropic rejects ending on an
-    // assistant message). The window is insertion-ordered, so it can end with
-    // one of Sunny's own replies (e.g. a follow-up turn after a steered message
-    // whose reply was persisted later). Sunny's replies are now reconstructed as
-    // send_message tool-call + tool-result pairs (see toModelMessages), so trim
-    // any trailing assistant/tool messages (whole pairs) back to the last user.
+    // assistant message). Stored turns are converted from their UIMessage payload
+    // (D-MG9), so trim any trailing non-user messages (assistant + tool) back to
+    // the last user message.
     while (messages.length > 0 && messages[messages.length - 1]?.role !== 'user') {
       messages.pop();
     }
@@ -115,30 +122,81 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
     });
 
     try {
-      const result = await agent.generate({ prompt: messages });
+      const result = await agent.stream({ prompt: messages });
+
+      // Consume the UI-message stream: this drives the tool loop to completion
+      // and assembles the final assistant UIMessage (scratch text parts + every
+      // tool part, incl. each send_message). That assembled message IS the
+      // persisted turn record (D-MG9).
+      let assistant: UIMessage | undefined;
+      for await (const m of readUIMessageStream({ stream: result.toUIMessageStream() })) {
+        assistant = m;
+      }
+      const [totalUsage, steps, finishReason] = await Promise.all([
+        result.totalUsage,
+        result.steps,
+        result.finishReason,
+      ]);
+
+      const parts = assistant?.parts ?? [];
+      const scratch = parts
+        .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
+        .map((p) => p.text)
+        .join('\n')
+        .trim();
+      const sent = parts
+        .filter((p) => p.type === 'tool-send_message')
+        .map((p) => (p as { input?: { text?: string } }).input?.text)
+        .filter((t): t is string => !!t);
 
       let delivered: 'send_message' | 'fallback_text' | 'silence';
       if (counter.count > 0) {
         // Intended path: Sunny spoke via send_message (one or more bubbles).
         delivered = 'send_message';
-      } else if (result.text.trim()) {
+      } else if (scratch) {
         // Safety net, NOT the design: the model put its reply in private scratch
-        // instead of calling send_message. Deliver it so the user isn't ghosted,
-        // but flag loudly — this should trend to zero as the elicitation holds.
+        // instead of calling send_message. Deliver it so the user isn't ghosted
+        // (persist:false — the turn record below captures it), but flag loudly —
+        // this should trend to zero as the elicitation holds.
         log.warn('no send_message; delivering scratch text as fallback (fix elicitation)', {
           threadId: event.threadId,
         });
-        await gateway.send(event.threadId, { text: result.text.trim() });
+        await gateway.send(event.threadId, { text: scratch }, { persist: false });
         delivered = 'fallback_text';
       } else {
         delivered = 'silence';
       }
 
+      // One row per turn (D-MG9): persist the assembled UIMessage payload (rich,
+      // for replay) + a flattened text projection (scratch + delivered sends, for
+      // recall), with usage/delivery metadata. Skip a wholly empty turn.
+      if (assistant && parts.length > 0) {
+        const projection = [scratch, ...sent].filter(Boolean).join('\n');
+        const enriched: UIMessage = {
+          ...assistant,
+          metadata: {
+            ...(assistant.metadata as Record<string, unknown> | undefined),
+            createdAt: new Date().toISOString(),
+            model: config.modelId,
+            usage: {
+              in: totalUsage.inputTokens ?? null,
+              out: totalUsage.outputTokens ?? null,
+              cached: totalUsage.inputTokenDetails?.cacheReadTokens ?? null,
+              cacheWrite: totalUsage.inputTokenDetails?.cacheWriteTokens ?? null,
+            },
+            delivered,
+            steps: steps.length,
+          },
+        };
+        await store.appendTurn(event.threadId, enriched, projection);
+      }
+
       logTurnSummary(
         event,
-        result as unknown as TurnResult,
+        { totalUsage, steps, finishReason },
         counter.count,
         delivered,
+        scratch.length,
         Date.now() - startedAt,
       );
     } catch (err) {
@@ -153,98 +211,85 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
   };
 }
 
-/** Minimal shape of the bits of the generate result we report on. */
-interface TurnResult {
-  steps?: Array<{ toolCalls?: Array<{ toolName: string }> }>;
-  finishReason?: string;
-  text?: string;
-  totalUsage?: {
-    inputTokens?: number;
-    outputTokens?: number;
-    cachedInputTokens?: number;
-    // Aggregated across steps (cleaner than per-call providerMetadata, which only
-    // reflects the final step). cacheReadTokens === cachedInputTokens.
-    inputTokenDetails?: { cacheReadTokens?: number; cacheWriteTokens?: number };
-  };
-}
-
 /** Per-turn observability: tools used, delivery path, tokens, latency. */
 function logTurnSummary(
   event: ChannelEvent,
-  result: TurnResult,
+  data: {
+    totalUsage: LanguageModelUsage;
+    steps: readonly unknown[];
+    finishReason: string;
+  },
   sendCount: number,
   delivered: string,
+  scratchLen: number,
   ms: number,
 ): void {
-  // Aggregate across steps — result.toolCalls only reflects the final step.
+  // Aggregate across steps — a single step's toolCalls only reflects that step.
   const toolCounts: Record<string, number> = {};
-  for (const step of result.steps ?? []) {
-    for (const call of step.toolCalls ?? []) {
-      toolCounts[call.toolName] = (toolCounts[call.toolName] ?? 0) + 1;
+  for (const step of data.steps) {
+    const calls = (step as { toolCalls?: Array<{ toolName?: string }> }).toolCalls ?? [];
+    for (const call of calls) {
+      if (call?.toolName) toolCounts[call.toolName] = (toolCounts[call.toolName] ?? 0) + 1;
     }
   }
-  const usage = result.totalUsage;
+  const usage = data.totalUsage;
   log.info('turn', {
     threadId: event.threadId,
     isGroup: event.isGroup,
     isOwner: event.isOwner,
-    steps: result.steps?.length ?? 1,
-    finish: result.finishReason,
+    steps: data.steps.length,
+    finish: data.finishReason,
     tools: toolCounts,
     sendCount,
-    textLen: result.text?.length ?? 0,
+    scratchLen,
     delivered,
-    tokensIn: usage?.inputTokens ?? null,
-    tokensOut: usage?.outputTokens ?? null,
-    cachedIn: usage?.cachedInputTokens ?? null,
-    cacheWriteIn: usage?.inputTokenDetails?.cacheWriteTokens ?? null,
+    tokensIn: usage.inputTokens ?? null,
+    tokensOut: usage.outputTokens ?? null,
+    cachedIn: usage.inputTokenDetails?.cacheReadTokens ?? null,
+    cacheWriteIn: usage.inputTokenDetails?.cacheWriteTokens ?? null,
     ms,
   });
 }
 
 /**
- * Build the model prompt from the stored recent window. Inbound → user; each of
- * Sunny's own replies → a `send_message` tool-call + `delivered` tool-result pair.
+ * Build the model prompt from the stored recent window (D-MG9). Each row carries a
+ * `UIMessage` payload — the real turn: scratch text parts + tool calls (incl. every
+ * `send_message`, with results). Converting the window with `convertToModelMessages`
+ * reflects what actually happened (no synthesized tool calls), so the model's own
+ * history demonstrates that speaking == calling `send_message` (D-MG8), and the
+ * retained scratch gives follow-ups the context Sunny didn't say.
  *
- * Reconstructing outbound messages the way they actually happened (a tool call,
- * not plain assistant text) makes the model's own history demonstrate that the
- * only way to speak is to call `send_message` (D-MG8) — closing the elicitation
- * slip where it would otherwise mimic a plain-text self-history. The synthetic
- * `toolCallId` only needs to be unique within this prompt and pair the call with
- * its result; we don't persist the original. (Non-send tools like memory_write
- * aren't in the store, so this is a send-only reconstruction — which sharpens the
- * signal rather than weakening it.)
- *
- * In groups, prefix the speaker on inbound messages so the model can follow who
- * said what (it answers everyone but only acts for the owner — R1).
+ * Legacy rows written before D-MG9 have no payload and get a minimal reconstruction
+ * (they age out of the window quickly). In groups, the speaker is prefixed onto
+ * inbound user messages so the model can follow who said what (R1).
  */
-function toModelMessages(window: StoredMessage[], isGroup: boolean): ModelMessage[] {
-  const out: ModelMessage[] = [];
-  for (const m of window) {
-    if (m.role === 'assistant') {
-      const toolCallId = `send-${m.messageId}`;
-      out.push({
-        role: 'assistant',
-        content: [
-          { type: 'tool-call', toolCallId, toolName: 'send_message', input: { text: m.text } },
-        ],
-      });
-      out.push({
-        role: 'tool',
-        content: [
-          {
-            type: 'tool-result',
-            toolCallId,
-            toolName: 'send_message',
-            output: { type: 'text', value: 'delivered' },
-          },
-        ],
-      });
-      continue;
-    }
-    const content =
-      isGroup && m.senderName ? `${m.senderName}${m.isOwner ? ' (owner)' : ''}: ${m.text}` : m.text;
-    out.push({ role: 'user', content });
+async function toModelMessages(window: StoredMessage[], isGroup: boolean): Promise<ModelMessage[]> {
+  const ui = window.map((row) => rowToUIMessage(row, isGroup));
+  return convertToModelMessages(ui, { ignoreIncompleteToolCalls: true });
+}
+
+function rowToUIMessage(row: StoredMessage, isGroup: boolean): Omit<UIMessage, 'id'> {
+  if (row.payload && typeof row.payload === 'object') {
+    const msg = row.payload as UIMessage;
+    if (isGroup && msg.role === 'user' && row.senderName) return prefixUserMessage(msg, row);
+    return msg;
   }
-  return out;
+  // Legacy row (pre-D-MG9): minimal reconstruction.
+  if (row.role === 'user') {
+    const text =
+      isGroup && row.senderName
+        ? `${row.senderName}${row.isOwner ? ' (owner)' : ''}: ${row.text}`
+        : row.text;
+    return { role: 'user', parts: [{ type: 'text', text }] };
+  }
+  return { role: 'assistant', parts: [{ type: 'text', text: row.text }] };
+}
+
+/** Prefix the speaker onto a group user message's text part(s) (R1). */
+function prefixUserMessage(msg: UIMessage, row: StoredMessage): UIMessage {
+  const prefix = `${row.senderName}${row.isOwner ? ' (owner)' : ''}: `;
+  return {
+    ...msg,
+    parts: msg.parts.map((p) => (p.type === 'text' ? { ...p, text: prefix + p.text } : p)),
+  };
 }
