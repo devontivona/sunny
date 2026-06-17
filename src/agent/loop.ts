@@ -1,4 +1,4 @@
-import { ToolLoopAgent, stepCountIs, type ModelMessage } from 'ai';
+import { ToolLoopAgent, stepCountIs, type ModelMessage, type SystemModelMessage } from 'ai';
 import type { SunnyConfig } from '../config/index.js';
 import type { ChannelEvent, Gateway } from '../gateway/types.js';
 import type { ConversationStore, StoredMessage } from '../gateway/store.js';
@@ -53,7 +53,19 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
 
     // Always-on core is re-read per run (agent-memory D3), so hand-edits and
     // mid-turn writes take effect immediately.
-    const instructions = buildSystemPrompt(config, loadCore(paths));
+    //
+    // Cache the stable prefix (tools + system + memory core) with a 5-min
+    // ephemeral breakpoint (D-PS4 / R2). Steps 2..N of a multi-step turn — and
+    // any message within the TTL — then read it at ~0.1x instead of re-paying
+    // full input price; the recent-window messages stay the uncached volatile
+    // suffix. We deliberately skip cross-turn machinery (1-hr TTL / pre-warming):
+    // low payoff for a single sporadic user, and memory writes change the prefix
+    // between turns anyway. Verify via cachedIn / cacheWriteIn in the turn log.
+    const instructions: SystemModelMessage = {
+      role: 'system',
+      content: buildSystemPrompt(config, loadCore(paths)),
+      providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
+    };
     const messages = toModelMessages(await store.recentWindow(event.threadId), event.isGroup);
     // The prompt must end with a user message (Anthropic rejects ending on an
     // assistant message). The window is insertion-ordered, so it can end with
@@ -144,7 +156,14 @@ interface TurnResult {
   steps?: Array<{ toolCalls?: Array<{ toolName: string }> }>;
   finishReason?: string;
   text?: string;
-  totalUsage?: { inputTokens?: number; outputTokens?: number; cachedInputTokens?: number };
+  totalUsage?: {
+    inputTokens?: number;
+    outputTokens?: number;
+    cachedInputTokens?: number;
+    // Aggregated across steps (cleaner than per-call providerMetadata, which only
+    // reflects the final step). cacheReadTokens === cachedInputTokens.
+    inputTokenDetails?: { cacheReadTokens?: number; cacheWriteTokens?: number };
+  };
 }
 
 /** Per-turn observability: tools used, delivery path, tokens, latency. */
@@ -176,6 +195,7 @@ function logTurnSummary(
     tokensIn: usage?.inputTokens ?? null,
     tokensOut: usage?.outputTokens ?? null,
     cachedIn: usage?.cachedInputTokens ?? null,
+    cacheWriteIn: usage?.inputTokenDetails?.cacheWriteTokens ?? null,
     ms,
   });
 }

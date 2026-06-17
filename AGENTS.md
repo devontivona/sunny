@@ -51,7 +51,10 @@ npm run build         # nitro build → .output
 ## Observability
 
 `devbox logs sunny-gateway -f`. Each turn logs `agent:loop: turn { steps, tools, sendCount,
-delivered, tokensIn/Out, ms }`. Set `SUNNY_LOG_CONTENT=1` to log message text (dev only).
+delivered, tokensIn/Out, cachedIn, cacheWriteIn, ms }`. Set `SUNNY_LOG_CONTENT=1` to log message
+text (dev only). Prompt caching is on (stable prefix marked `cacheControl: ephemeral`): a
+multi-step turn shows `cachedIn > 0` (prefix re-read at ~0.1×); single-step turns show
+`cacheWriteIn > 0` (the write).
 
 ## Commits
 

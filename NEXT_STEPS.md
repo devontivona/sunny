@@ -8,7 +8,18 @@ do; everything else is deferred to a later build.
 
 ---
 
-## 1. Implement cache controls (tasks 3.5 / 3.9)
+## 1. Implement cache controls (tasks 3.5 / 3.9) — ✅ DONE (2026-06-17)
+
+**Implemented:** `src/agent/loop.ts` now passes `instructions` to `ToolLoopAgent`
+as a `SystemModelMessage` with `providerOptions.anthropic.cacheControl =
+{ type: 'ephemeral' }`, caching the stable prefix (tools + system + memory core)
+at the 5-min TTL; the recent window stays the uncached suffix. The turn log gained
+`cacheWriteIn` (from `totalUsage.inputTokenDetails.cacheWriteTokens`) alongside the
+existing `cachedIn`. Verified with a real-model probe: step 1 wrote ~14.8K cache
+tokens, step 2 read them back (`cachedInputTokens`). No cross-turn machinery, as
+planned. tasks.md 3.5/3.9 checked.
+
+Original notes (kept for context):
 
 **Goal:** cache the stable system prefix so multi-step turns stop re-paying full
 input price on every step. Verify with `cachedIn > 0` (already logged per-turn in

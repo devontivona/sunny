@@ -33,11 +33,11 @@
 - [x] 3.2 Memory write tool (`add`/`replace`/`remove`, no `read`); error-on-overflow forces consolidation (agent-memory R: forced consolidation, D2).
 - [x] 3.3 On-demand topic docs via `INDEX.md` router; date-tagged facts for temporal reasoning (agent-memory R: topic docs, date-tagged facts; D1, D4).
 - [x] 3.4 Keyword recall: Postgres `tsvector`/GIN FTS over messages + LLM summarization; rolling recent-window + recall for older (agent-memory R: keyword recall; D-OB? n/a).
-- [ ] 3.5 Memory-vs-skill boundary in agent instructions; verify caching with `cache_read_input_tokens > 0` (D-PS4).
+- [x] 3.5 Memory-vs-skill boundary in agent instructions; verify caching with `cache_read_input_tokens > 0` (D-PS4). [Boundary in `prompt.ts` ("Memory vs. skill"); caching verified — multi-step turn re-reads the prefix at ~0.1× (`cachedIn`/`cacheWriteIn` in the turn log).]
 - [x] 3.6 (Deferred-ready) define the recall interface so `pgvector` semantic search slots in later without agent-loop changes (agent-memory R: semantic upgrade path, D5).
 - [x] 3.7 Cold-start/onboarding: hand-seed a starter `USER.md`; onboarding conversation that records durable facts; memory global to Devon, message window per thread (R11).
 - [x] 3.8 Serialize all memory-file mutations through a single writer / advisory lock; reads snapshot-at-run-start (R7).
-- [ ] 3.9 Enable prompt caching only on multi-step turns / bursts (cache write ≈1.25×); verify `cache_read_input_tokens > 0`; do not assume the always-on core is free (R2, D-PS4).
+- [x] 3.9 Enable prompt caching; verify `cache_read_input_tokens > 0`; do not assume the always-on core is free (R2, D-PS4). [As built: the stable prefix (tools + system + memory core) is marked `cacheControl: ephemeral` (5-min TTL) on every turn via `ToolLoopAgent.instructions` as a `SystemModelMessage` — NOT conditionally "only on multi-step turns", since step count isn't knowable in advance and the multi-step/burst reads dominate the small single-step write premium. Cross-turn machinery (1-hr TTL / pre-warming) deliberately skipped (R2). Verified via probe: step 1 writes (`cacheCreationInputTokens`), step 2 reads (`cachedInputTokens`).]
 
 ## 4. Phase 3 — Durable execution & scheduling
 
