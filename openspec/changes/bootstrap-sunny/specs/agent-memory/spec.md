@@ -50,11 +50,11 @@ Facts in topic documents that can change over time SHALL carry explicit date-ran
 - **THEN** Sunny answers using the date-range tags on the relevant facts
 
 ### Requirement: Keyword recall over message history
-Sunny SHALL persist all sent and received messages in a Postgres database with full-text (tsvector/GIN) indexing, and SHALL recall older history by keyword search followed by LLM summarization of the matching results. Message history SHALL NOT be auto-loaded into context in full.
+Sunny SHALL persist all sent and received messages in a Postgres database with full-text (tsvector/GIN) indexing, and SHALL recall older history by keyword search. The matching results are returned to the agent, which summarizes them in its own context — there is no separate summarizer model or call. Message history SHALL NOT be auto-loaded into context in full.
 
 #### Scenario: Recall older history by keyword
 - **WHEN** Sunny needs information from beyond the recent rolling message window
-- **THEN** it runs a full-text keyword search over message history and summarizes the matching results
+- **THEN** it runs a full-text keyword search over message history and the agent summarizes the matching results in context
 - **AND** does not load the entire history into context
 
 #### Scenario: Recent window plus recall

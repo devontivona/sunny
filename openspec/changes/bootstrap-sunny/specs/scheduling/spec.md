@@ -59,13 +59,9 @@ A scheduled run SHALL deliver its result to a configured messaging target throug
 - **WHEN** a scheduled run finishes
 - **THEN** its outcome is recorded and can be inspected later
 
-### Requirement: Cost and rate limits on autonomous runs
-Scheduled runs SHALL be subject to a configurable per-run cost/token cap, and the scheduler SHALL be subject to a rate limit. When a run exceeds its cap, it SHALL stop and notify the user rather than continue spending.
+### Requirement: Bounded autonomous dispatch
+The scheduler SHALL bound how many due schedules it dispatches per tick, so a backlog (e.g. accumulated during downtime) cannot fire all at once. Per-run cost/token budget caps with stop-and-notify are out of scope for scheduling and are provided by the observability budget meter (a separate change).
 
-#### Scenario: Run exceeds its cost cap
-- **WHEN** a scheduled run reaches its configured cost/token cap
-- **THEN** the run stops and the user is notified
-
-#### Scenario: Scheduler rate limit
-- **WHEN** scheduled runs would fire more frequently than the configured rate limit allows
-- **THEN** the scheduler throttles execution rather than running them all immediately
+#### Scenario: Backlog does not stampede
+- **WHEN** more schedules are due in a single tick than the configured per-tick limit
+- **THEN** the scheduler dispatches up to the limit and defers the rest to subsequent ticks

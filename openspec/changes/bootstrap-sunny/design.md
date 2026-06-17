@@ -206,7 +206,7 @@ The conversation store (D-MG2) persists the **AI SDK v6 `UIMessage`** as its uni
 - **Store = full fidelity.** The persisted `payload` is the whole assistant `UIMessage` incl. *all* tool parts (`memory_write`/`schedule_*`/`start_job`/`send_message`) — lossless, exactly what `readUIMessageStream` yields, good for audit / a future UI.
 - **Replay = full to start.** The whole stored `UIMessage` (bounded by the recent-window N) is converted to model messages each turn; this also *retires the synthetic `send_message` reconstruction*. If the window proves noisy/expensive (e.g. re-feeding old `recall_history` outputs), filter heavy tool i/o from the replay (keep scratch + sends) — a later optimization, not now.
 - **FTS / `text` projection = inbound text + delivered sends + assistant scratch.** Scratch is indexed so the working-context Sunny didn't say is *recallable beyond the window*, not just available within it (the within-window copy lives in `payload`).
-- **`metadata`** = `{ createdAt, model, usage:{in,out,cached,cacheWrite}, delivered, steps }` on assistant turns; `{ createdAt }` on inbound — a minimal precursor to Phase 6 trajectories/budget.
+- **`metadata`** = `{ createdAt, model, usage:{in,out,cached,cacheWrite}, delivered, steps }` on assistant turns; `{ createdAt }` on inbound — a minimal precursor to the observability change (trajectories/budget).
 - **`generate` → `stream`** is required to assemble `UIMessage`s; it touches prompt-cache logging and `prepareStep` steering (both supported on `stream()`) — re-verified with a probe.
 - **Chat SDK `bot.transcripts`:** not adopted (redundant, per-user granularity).
 
@@ -281,6 +281,8 @@ Tier 1 needs no workflow engine — durability comes from persisting the inbound
 
 Tier 2 runs on WDK with `@workflow/world-postgres` (Postgres state + graphile-worker queue + LISTEN/NOTIFY; no Redis). A long-lived worker process polls the DB — appropriate for an always-on server. The determinism rule is respected by isolating all side effects/nondeterminism inside `'use step'` units.
 
+*As-built:* both Tier-2 jobs run a `DurableAgent` (`@workflow/ai`) at the workflow level, so each LLM call and tool call is its own durable step — a crash resumes mid-agent from the last completed step rather than re-running the whole agent. Scheduled-job memory tools are step-wrapped so a replay never re-applies a non-idempotent `memory_write`. (`@workflow/ai` is experimental.)
+
 ### D-DE3 — Single-write persistence, no streaming
 
 The agent runs to completion (`agent.generate()` for Tier 1, `DurableAgent` run-to-done for Tier 2). User-facing output is **not** the final assistant text — it is whatever the agent emitted via `send_message` calls during the run (D-MG8); the raw model text is private. No resumable-stream layer is wired up. Each `send_message` delivery and the inbound/outbound message records are persisted to the conversation store (idempotently, so a resumed run doesn't re-deliver a message it already sent — keyed by send id). This keeps the workflow/turn the single source of truth while making the agent's *speaking* an explicit, auditable action rather than a side effect of the final text.
@@ -351,7 +353,9 @@ A scheduled run delivers its result to a configured messaging target (default: a
 
 ### D-SC6 — Cost/rate cap on autonomous runs
 
-Because scheduled runs execute unattended on Opus, each run is subject to a configurable cost/token cap and the scheduler to a rate limit. Exceeding the cap stops the run and notifies Devon rather than silently spending. (Enforcement detail lives in `observability`/budget metering.)
+Because scheduled runs execute unattended on Opus, each run is subject to a configurable cost/token cap and the scheduler to a rate limit. Exceeding the cap stops the run and notifies Devon rather than silently spending.
+
+*As-built:* only the scheduler-side throttle is implemented here (a per-tick dispatch bound so a backlog can't stampede). The per-run cost/token budget cap + stop-and-notify is deferred to the **observability** change (budget meter), where it belongs; the scheduling spec now only carries the bounded-dispatch requirement.
 
 ### Rejected alternatives (scheduling)
 
@@ -827,6 +831,8 @@ Non-secret settings live in a config file under `~/.sunny/` (approval mode, cost
 ### D-PS6 — Deployment on the Linux home server
 
 A single long-lived `sunny` systemd service hosts: the HTTP webhook listener for Sendblue inbound, the WDK Postgres-world worker, and the scheduler tick — plus a Postgres service. `Restart=always` (durability depends on restart survival, per `durable-execution` D-DE1). Not serverless (WDK's Postgres world wants a long-lived process — appropriate here).
+
+*As-built:* the service is a **Nitro** app (the `workflow/nitro` module compiles the `"use workflow"`/`"use step"` directives); routes in `server/`, workflows in `workflows/`. **devbox** supervises it as a systemd *user* service (`Restart=always` + linger → boot survival) and exposes it over HTTPS via a Cloudflare tunnel — this satisfies the always-on requirement, so no hand-rolled systemd unit was needed. Dev runs `nitro dev` (file watcher; ignores the `.swc`/build caches to avoid a rebuild loop); the `nitro build` → `node .output` production hardening is deferred until dev settles. See `README.md` → "Running & deploying".
 
 ## Risks / Trade-offs (project-skeleton)
 
