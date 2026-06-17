@@ -30,3 +30,6 @@ secrets/
 # Nitro build output
 .output/
 .nitro/
+
+# SWC compiler cache (workflow/nitro)
+.swc/

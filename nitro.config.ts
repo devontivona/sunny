@@ -9,4 +9,10 @@ export default defineNitroConfig({
   serverDir: './server',
   modules: ['workflow/nitro'],
   plugins: ['plugins/startup.ts'],
+  // The workflow/SWC compilation rewrites the `.swc/` cache (incl. `.swc/.gitignore`)
+  // on every build. The dev watcher would otherwise see that as a source change and
+  // rebuild → which rewrites `.swc/` → an infinite rebuild loop. Ignore build caches.
+  watchOptions: {
+    ignored: [/[\\/]\.swc[\\/]/, /[\\/]\.output[\\/]/, /[\\/]\.nitro[\\/]/],
+  },
 });
