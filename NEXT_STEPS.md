@@ -111,7 +111,24 @@ demonstrate the pattern.
 
 ---
 
-## 3. Migrate Tier-2 job durability to `DurableAgent`
+## 3. Migrate Tier-2 job durability to `DurableAgent` — ✅ DONE (2026-06-17)
+
+**Implemented:** both `workflows/scheduledJob.ts` (`runScheduledJob`) and
+`workflows/job.ts` (`runJob`) now run a `DurableAgent` (`@workflow/ai/agent`) at the
+`"use workflow"` level instead of a single `"use step"` `generateText`/`ToolLoopAgent`
+— so each LLM call (and tool call) is a durable step with mid-run resume. Model via
+`@workflow/ai/anthropic`'s lazy factory (`anthropic('claude-opus-4-8')`, uses our
+direct API key); thinking config carried via `providerOptions`; final text pulled
+from `result.messages`. `runScheduledJob` keeps **memory-tools-only** (anti-recursion
+D-SC4) and its tool `execute` is **step-wrapped** so a replay never re-applies a
+non-idempotent `memory_write` (the specs were extracted to a Node-free
+`memorySpecs.ts` so the workflow sandbox can import them). `runJob` has no tools yet
+(single durable generation); Phase 4 tools slot in as step-wrapped executes.
+Verified: typecheck + the workflow compiler builds it ("2 workflows, 17 steps") +
+clean runtime startup. Live durable-run + crash-resume not exercised here (needs a
+real trigger). tasks.md 4.2/4.3 carry the granularity note.
+
+Original notes (kept for context):
 
 **Current state:** `workflows/job.ts` (`runJob`) and `workflows/scheduledJob.ts`
 (`runScheduledJob`) run the work as a single `generateText` / `ToolLoopAgent`
@@ -175,7 +192,8 @@ was actually built. Run `/opsx:sync` / `/opsx:archive` only after these:
   a **debounce** to batch rapid single-step texts are **not** implemented —
   note as deferred. Also note the trailing-assistant-trim requirement (prompt must
   end on a user message).
-- **4.2/4.3 durability** is workflow-level, not `DurableAgent` step-level (item 3).
+- ✅ **4.2/4.3 durability** — now `DurableAgent` step-level (item 3 done); update the
+  D-DE2 wording to reflect mid-run resume rather than whole-step re-run.
 
 **specs/**
 - ✅ `messaging-gateway` "Guard against unintended silence" — done (D-MG9 commit):
