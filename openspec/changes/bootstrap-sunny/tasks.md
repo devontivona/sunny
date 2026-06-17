@@ -42,8 +42,8 @@
 ## 4. Phase 3 — Durable execution & scheduling
 
 - [ ] 4.0 Go always-on: systemd unit for the `sunny` service (`Restart=always`) + Postgres service; long-lived WDK worker; document the deploy (moved from Phase 0; D-PS6).
-- [ ] 4.1 Idempotent conversational turns keyed by message id; re-process un-answered messages on restart; inbound dedup; **serialize turns per thread** (durable-execution R: idempotent turns, D-DE1; R7).
-- [ ] 4.1b Double-text steering: per-thread **steer-buffer** drained by AI SDK `prepareStep` so a new owner message folds into the in-flight run at the next step (not a new run, not a kill); `abortSignal` restart only when the message invalidates the task (durable-execution R: double-text steering; R12).
+- [x] 4.1 Idempotent conversational turns keyed by message id; re-process un-answered messages on restart; inbound dedup; **serialize turns per thread** (durable-execution R: idempotent turns, D-DE1; R7).
+- [x] 4.1b Double-text steering: per-thread **steer-buffer** drained by AI SDK `prepareStep` so a new owner message folds into the in-flight run at the next step (not a new run, not a kill); `abortSignal` restart only when the message invalidates the task (durable-execution R: double-text steering; R12).
 - [x] 4.2 WDK on `@workflow/world-postgres`; `start_job` tool that promotes long/async work to a durable Tier-2 job; side effects in `'use step'` (durable-execution R: durable jobs; D-DE1/2).
 - [x] 4.3 Single-write persistence on completion; completion notification via gateway (durable-execution R: single-write, completion notification; D-DE3).
 - [x] 4.4 Scheduler: persisted schedules in Postgres (relative/absolute one-shot, interval, cron) from natural language; dispatch as Tier-2 jobs; WDK `sleep()` for one-shots (scheduling R: schedule types, durable schedules; D-SC1/2).

@@ -199,7 +199,13 @@ export class SendblueGateway implements Gateway {
       isOwner: auth.isOwner,
     };
 
-    await this.store.appendInbound(event);
+    // Persist on arrival with dedup (D-DE1): a webhook retry of the same message
+    // is a no-op and is not re-processed.
+    const inserted = await this.store.appendInbound(event);
+    if (!inserted) {
+      log.info('duplicate inbound; skipping', { messageId: event.messageId });
+      return;
+    }
     if (logContent()) {
       log.info('inbound content', {
         from: senderId,

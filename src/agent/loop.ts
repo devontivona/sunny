@@ -6,6 +6,7 @@ import type { Db } from '../db/client.js';
 import { loadCore, memoryPaths } from '../memory/index.js';
 import { logger } from '../logger.js';
 import { ensureConsolidationSchedule } from '../scheduler/index.js';
+import type { SteerHandle } from './dispatcher.js';
 import { getModel, anthropicProviderOptions } from './model.js';
 import { buildSystemPrompt } from './prompt.js';
 import { createMemoryTools } from './tools/memory.js';
@@ -38,7 +39,7 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
   const paths = memoryPaths(config.runtimeDir);
   const memoryTools = createMemoryTools(config, store);
 
-  return async function runTurn(event: ChannelEvent): Promise<void> {
+  return async function runTurn(event: ChannelEvent, steer: SteerHandle): Promise<void> {
     const startedAt = Date.now();
     await gateway.startTyping(event.threadId);
 
@@ -71,6 +72,21 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
       tools,
       stopWhen: stepCountIs(20),
       providerOptions: anthropicProviderOptions(config),
+      // Double-text steering (4.1b): fold any message that arrived mid-run into
+      // the next step instead of starting a competing run.
+      prepareStep: ({ messages: stepMessages }) => {
+        const incoming = steer.drain();
+        if (incoming.length === 0) return {};
+        log.info('folding steer message(s) into run', {
+          threadId: event.threadId,
+          count: incoming.length,
+        });
+        const extra: ModelMessage[] = incoming.map((e) => ({
+          role: 'user',
+          content: event.isGroup && e.senderName ? `${e.senderName}: ${e.text}` : e.text,
+        }));
+        return { messages: [...stepMessages, ...extra] };
+      },
     });
 
     try {

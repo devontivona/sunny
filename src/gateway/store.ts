@@ -1,4 +1,4 @@
-import { desc, eq, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, isNull, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import type { Db } from '../db/client.js';
 import { messages } from '../db/schema.js';
@@ -28,19 +28,60 @@ export class ConversationStore {
     private readonly windowSize: number,
   ) {}
 
-  /** Persist an inbound (user) message. */
-  async appendInbound(event: ChannelEvent): Promise<void> {
-    await this.db.insert(messages).values({
-      channel: event.channel,
-      threadId: event.threadId,
-      messageId: event.messageId,
-      role: 'user',
-      senderId: event.senderId,
-      senderName: event.senderName ?? null,
-      text: event.text,
-      isOwner: event.isOwner,
-      timestamp: event.timestamp,
-    });
+  /**
+   * Persist an inbound (user) message. Returns `true` if newly inserted, `false`
+   * if it was a duplicate (same channel + message id) — i.e. a webhook retry
+   * (durable-execution D-DE1: inbound dedup).
+   */
+  async appendInbound(event: ChannelEvent): Promise<boolean> {
+    const inserted = await this.db
+      .insert(messages)
+      .values({
+        channel: event.channel,
+        threadId: event.threadId,
+        messageId: event.messageId,
+        role: 'user',
+        senderId: event.senderId,
+        senderName: event.senderName ?? null,
+        text: event.text,
+        isOwner: event.isOwner,
+        timestamp: event.timestamp,
+      })
+      .onConflictDoNothing({ target: [messages.channel, messages.messageId] })
+      .returning({ id: messages.id });
+    return inserted.length > 0;
+  }
+
+  /** Mark an inbound message's turn as completed (durable-execution D-DE1). */
+  async markProcessed(channel: string, messageId: string): Promise<void> {
+    await this.db
+      .update(messages)
+      .set({ processedAt: new Date() })
+      .where(and(eq(messages.channel, channel), eq(messages.messageId, messageId)));
+  }
+
+  /**
+   * Inbound messages received but never marked processed (e.g. the process died
+   * mid-turn). Re-run on startup so a reboot-before-reply still gets answered.
+   */
+  async findUnprocessedInbound(): Promise<ChannelEvent[]> {
+    const rows = await this.db
+      .select()
+      .from(messages)
+      .where(and(eq(messages.role, 'user'), isNull(messages.processedAt)))
+      .orderBy(asc(messages.createdAt));
+    return rows.map((r) => ({
+      channel: r.channel,
+      threadId: r.threadId,
+      messageId: r.messageId,
+      senderId: r.senderId,
+      senderName: r.senderName ?? undefined,
+      text: r.text,
+      attachments: [],
+      timestamp: r.timestamp,
+      isGroup: r.threadId.split(':')[2] === 'g',
+      isOwner: r.isOwner,
+    }));
   }
 
   /** Persist an outbound (assistant) message Sunny sent via `send_message`. */

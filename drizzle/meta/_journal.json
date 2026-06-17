@@ -22,6 +22,20 @@
       "when": 1781641089738,
       "tag": "0002_schedules",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1781654446403,
+      "tag": "0003_idempotency",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1781654802808,
+      "tag": "0004_backfill_processed",
+      "breakpoints": true
     }
   ]
 }

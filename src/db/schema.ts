@@ -1,4 +1,4 @@
-import { boolean, index, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { boolean, index, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 
 /**
  * The message archive (durable-execution D-DE4, agent-memory keyword recall).
@@ -20,11 +20,15 @@ export const messages = pgTable(
     text: text('text').notNull(),
     isOwner: boolean('is_owner').notNull().default(false),
     timestamp: timestamp('timestamp', { withTimezone: true }).notNull(),
+    /** Set when the turn for this inbound message completed (durable-execution D-DE1). */
+    processedAt: timestamp('processed_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     // Recent-window reads: by thread, newest first.
     index('messages_thread_idx').on(t.threadId, t.timestamp),
+    // Idempotency / dedup: a (channel, message id) is processed at most once.
+    uniqueIndex('messages_channel_msgid_uniq').on(t.channel, t.messageId),
   ],
 );
 
