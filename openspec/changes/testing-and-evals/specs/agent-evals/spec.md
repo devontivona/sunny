@@ -64,6 +64,19 @@ Each eval run SHALL produce a persisted scorecard (per-case and per-dimension pa
 - **THEN** a scorecard with per-dimension pass rates, model, and cost is persisted
 - **AND** it can be compared against a prior run to surface regressions
 
+### Requirement: Agent-behavior changes ship with eval evidence
+A change that alters agent behavior — the prompt, the agent loop, a tool, the model, or memory wiring — SHALL add or extend eval cases covering the affected dimension(s), and the author SHALL run the evals and include the resulting scorecard (or its delta vs. the prior run) in the change's pull request. Because evals are off the merge gate, this discipline SHALL be enforced by convention and review, recorded via the pull-request template and the AGENTS.md definition of done.
+
+#### Scenario: Behavior change includes eval evidence
+- **WHEN** a change alters agent behavior
+- **THEN** it adds or extends an eval case for the affected dimension
+- **AND** the pull request includes the eval scorecard or its delta
+
+#### Scenario: Non-behavior change is exempt
+- **WHEN** a change does not alter agent behavior
+- **THEN** no eval case or scorecard is required
+- **AND** the pull request states that there is no agent-behavior change
+
 ### Requirement: Evals are cost-controlled and off the per-commit path
 Evals SHALL be invoked on demand (locally and via a manual CI trigger), never as part of the per-commit CI gate, and SHALL be bounded by a cost cap. An eval run that would exceed its budget SHALL stop and report rather than continue spending. Project guidance SHALL direct running the evals after any change to agent behavior (prompt, loop, tools, model, or memory wiring).
 

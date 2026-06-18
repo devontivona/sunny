@@ -55,6 +55,18 @@ The durable Tier-2 execution path SHALL have integration coverage that verifies 
 - **WHEN** a durable workflow step is executed and then replayed
 - **THEN** its observable effect occurs exactly once
 
+### Requirement: Changes ship with matching tests
+Every change that adds or alters runtime behavior SHALL include, in the same change, unit and/or integration tests covering the new or changed behavior, following the project's change-type → test-artifact mapping. A bug-fix change SHALL include a regression test that fails without the fix and passes with it. A documentation- or config-only change with no behavior change is exempt and SHALL state so. This discipline SHALL be documented as a definition of done in AGENTS.md and a pull-request template.
+
+#### Scenario: Behavior change carries tests
+- **WHEN** a change adds or alters runtime behavior
+- **THEN** it includes unit and/or integration tests exercising that behavior
+- **AND** those tests run in the merge gate
+
+#### Scenario: Bug fix carries a regression test
+- **WHEN** a change fixes a bug
+- **THEN** it adds a test that fails without the fix and passes with it
+
 ### Requirement: CI gate on every change
 The unit and integration lanes plus type-checking SHALL run automatically in CI on every change and SHALL block merge on failure. Evals SHALL NOT run in this default gate.
 

@@ -2,7 +2,8 @@
 
 - [ ] 1.1 Add Vitest + coverage as dev deps; `vitest.config.ts` with projects: unit (`**/*.unit.test.ts`), integration (`**/*.integration.test.ts`, DB setup), and evals (`evals/**`, excluded from default run)
 - [ ] 1.2 Add npm scripts: `test` (unit), `test:integration`, `test:all`, `test:watch`, `coverage`, `eval`
-- [ ] 1.3 Document in AGENTS.md: the testing conventions (lanes, naming, seams, fake timers); **before pushing**, run the full deterministic suite (`npm run typecheck && npm run test && npm run test:integration` — no Docker needed, integration uses in-process PGlite); **after changing agent behavior** (prompt/loop/tools/model/memory), run `npm run eval` and check the scorecard for regressions
+- [ ] 1.3 Document in AGENTS.md: the testing conventions (lanes, naming, seams, fake timers); the **definition of done** + change-type→test-artifact table (design D12); **before pushing**, run the full deterministic suite (`npm run typecheck && npm run test && npm run test:integration` — no Docker needed, integration uses in-process PGlite); **after changing agent behavior** (prompt/loop/tools/model/memory), add/extend an eval case, run `npm run eval`, and put the scorecard delta in the PR
+- [ ] 1.4 Add `.github/pull_request_template.md` with the definition-of-done checklist (deterministic suite green; matching tests for changed behavior; regression test for bug fixes; eval case + scorecard delta for behavior changes, or "N/A: no behavior change")
 
 ## 2. Seams & fixtures
 
@@ -41,6 +42,7 @@
 - [ ] 6.2 `.github/workflows/ci.yml` (merge gate) on `pull_request` + `push` to `main`: `npm ci` → typecheck → unit → integration; no service container, no Docker, no `ANTHROPIC_API_KEY` (mock model + PGlite → fork-safe, zero API cost)
 - [ ] 6.3 `.github/workflows/evals.yml` off the gate: `workflow_dispatch` only, `ANTHROPIC_API_KEY` secret + cost cap + `concurrency` guard, uploads the scorecard artifact
 - [ ] 6.4 Configure `main` branch protection to require the `ci.yml` check
+- [ ] 6.5 Surface an informational coverage report on PRs (visible to reviewers; not a merge-gating threshold)
 
 ## 7. Eval harness (vitest-evals + autoevals)
 

@@ -73,6 +73,29 @@ The project is GitHub-hosted, so CI is two Actions workflows:
 
 **Process guidance (AGENTS.md), not just config:** (1) **before pushing**, run the full deterministic suite locally — `npm run typecheck && npm run test && npm run test:integration` (no Docker needed); (2) **after changing agent behavior** — prompt, loop, tools, model, or memory wiring — run `npm run eval` and check the scorecard for regressions before pushing. Evals are never required by the gate, but the agent is told to exercise them when behavior changes.
 
+### D12: Per-PR test/eval discipline — a definition of done for coding agents
+The harness and initial coverage are worthless if new work doesn't carry its own tests. Because the gate can only run tests that exist — and evals are off the gate entirely (cost/flakiness) — ongoing coverage is enforced by an explicit **definition of done** that every coding agent (and human) follows, made machine-visible via AGENTS.md and a PR template. The instructions are concrete, not "write good tests": a change-type → required-artifact mapping.
+
+**Change-type → what the same PR must include:**
+
+| Change | Required in the same PR |
+|---|---|
+| New/changed pure logic (loop helpers, auth, scheduler math, memory, prompt, config) | Unit test(s) covering the new/changed branches |
+| New/changed DB query, schema, or migration | Integration test against PGlite (incl. recall/FTS if touched) |
+| New/changed **agent behavior** (prompt, loop, tool, model, memory wiring) | Add/extend an eval case for the affected dimension **and** run `npm run eval`, pasting the scorecard delta in the PR |
+| New gateway/transport seam or normalization | Unit test (normalization) + integration test if it touches the store |
+| Bug fix | A regression test that fails before the fix and passes after |
+| Docs/config-only, no behavior change | None — state "no behavior change" in the PR |
+
+**Definition of done (drafted verbatim for AGENTS.md + `.github/pull_request_template.md`):**
+- [ ] Deterministic suite green locally: `npm run typecheck && npm run test && npm run test:integration`
+- [ ] New/changed behavior has matching unit/integration tests (see table above)
+- [ ] Bug fixes include a regression test (fails before, passes after)
+- [ ] If **agent behavior** changed: eval case added/updated, `npm run eval` run, and the scorecard delta pasted below — or "N/A: no behavior change"
+- [ ] No silent coverage drop for the code this PR touches
+
+This is the seam that turns "tests exist and get run" into "every behavior-changing PR grows the tests and eval evidence." It's enforced by convention + review (the PR template records the eval scorecard since CI can't), not by a hard coverage percentage — judgment over a number. An **informational** coverage report may be surfaced on PRs to make deltas visible to reviewers, but it does not gate merge.
+
 ## Risks / Trade-offs
 
 - **WDK is experimental and doesn't run on PGlite** (graphile_worker needs multi-connection / LISTEN-NOTIFY) → Scope the durable test to **step-function idempotency** — a replayed `memory_write` step applies its effect exactly once — against PGlite + the memory fs, *without* standing up the graphile_worker world. Treat a full crash/restart-resume run as a boundary; if ever wanted it uses the `TEST_DATABASE_URL` real-PG hatch and stays out of the default gate.

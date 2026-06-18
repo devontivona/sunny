@@ -10,6 +10,7 @@ Sunny acts autonomously on Devon's behalf — spending real money on Opus, sendi
 - **Write the initial eval dataset** across three dimensions matching Sunny's invariants: `send_message` elicitation, memory recall, and tool selection. (Security gating is deferred — the current focus is owner DMs; it returns alongside the Phase-4 `security-tools-credentials` work.)
 - Produce **file-based scorecards** (per-dimension pass rates, model, cost) with a run-over-run regression diff; defer a self-hosted dashboard (Langfuse) until the dataset grows.
 - Wire **CI lanes**: typecheck + unit + integration run on every change (free, fast, deterministic); **evals run on demand / scheduled** as a separate Vitest project (cost + flakiness kept out of the default gate), budget-capped.
+- Establish a **per-PR definition of done** for coding agents — a change-type → required-test-artifact mapping plus a pull-request template and AGENTS.md checklist — so every behavior-changing PR grows the tests (and, for agent-behavior changes, the eval cases + scorecard evidence), not just the initial backfill.
 
 ## Capabilities
 
