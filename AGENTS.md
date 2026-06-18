@@ -8,10 +8,17 @@ gotchas for editing the repo. Active/planned work lives in OpenSpec changes unde
 ## Commands
 
 ```bash
-npm run typecheck     # tsc --noEmit (covers src/ + workflows/)
+npm run typecheck     # tsc --noEmit (covers src/ + workflows/, incl. src/dashboard/)
 npm run format        # prettier write (src/, server/, plugins/, workflows/)
-npm run dev           # nitro dev (local)
-npm run build         # nitro build → .output
+npm run dev:unified   # THE dev/serve command: Vite hosts Nitro + WDK (SPA HMR + server
+                      #   hot-reload + WDK) on one port. This is what the `sunny` devbox runs.
+npm run dashboard:typecheck  # tsc for the React app (app/tsconfig.json)
+npm run design:lint   # validate DESIGN.md (repo check; exit 1 on error)
+npm run design:export # regenerate the committed app/theme.css from DESIGN.md
+
+# Legacy / fallback (standalone Nitro, no Vite/HMR) — not how the box runs anymore:
+npm run dev           # nitro dev          ·   npm run build  # nitro build → .output
+npm run dashboard:build  # vite build → app/dist (only the standalone-Nitro serve path)
 ```
 
 `server/` and `plugins/` are validated by the Nitro build, not by `tsc`.
@@ -24,15 +31,25 @@ npm run build         # nitro build → .output
 - `src/memory/` — files-first memory soul (`~/.sunny/memory/`).
 - `src/scheduler/` — schedules table + ~60s ticker.
 - `src/db/` — Drizzle schema + client; migrations in `drizzle/`.
-- `src/runtime.ts` — memoized startup (DB, migrations, memory, gateway, scheduler).
-- `server/` (Nitro routes), `plugins/startup.ts` (starts WDK world + runtime),
-  `workflows/` (durable `"use workflow"` jobs).
+- `src/runtime.ts` — memoized startup (DB, migrations, memory, gateway, scheduler). The memo
+  is pinned on `globalThis` so Vite's server-module re-eval on a back-end edit doesn't re-run
+  startup. `SUNNY_DISABLE_SCHEDULER=1` skips the ticker (for a second instance during cutover).
+- `server/` (Nitro routes: `/dashboard/api`, `/webhooks/sendblue`, `/health`),
+  `plugins/startup.ts` (starts WDK world + runtime), `workflows/` (durable `"use workflow"` jobs).
+- `vite.config.unified.ts` — the unified entry: `[nitro(), react(), tailwindcss(), workflow()]`.
+  `nitro.config.ts` omits the `workflow/nitro` module under `NITRO_VITE=1` (the `workflow()`
+  Vite plugin supplies it). Root `index.html` → `app/main.tsx` is the SPA entry (served at `/`).
+- `app/` — the dashboard React/Vite SPA (its own `tsconfig.json`; `theme.css` generated from
+  `DESIGN.md`, committed). `src/dashboard/` — read-only data layer + auth store + session
+  signing. `server/routes/dashboard/api/[...].ts` — auth + JSON API; reuses `getRuntime()`
+  (db + `gateway.send()`), so the owner approval prompt is an in-process send.
 
 ## Gotchas (hard-won)
 
-- **devbox runs `nitro dev`** (a file watcher) as the live service. **Editing files
-  restarts the running service.** That runs migrations + restart-recovery on every edit —
-  be deliberate when touching migrations or recovery-affecting code on the box.
+- **devbox runs `dev:unified`** (Vite hosting Nitro) as the live `sunny` service. Front-end
+  edits HMR; back-end (`server/`, `src/`) edits hot-reload the server (re-eval), and run
+  migrations on the re-eval — be deliberate touching migrations/recovery code on the box.
+  `app/` is excluded from Nitro's watcher; Vite handles its HMR.
 - **Never edit an already-applied Drizzle migration** — the migrator silently skips it
   (keys by journal order, not file hash). Add a *new* migration instead.
 - **WDK needs the Nitro build.** `"use workflow"` / `"use step"` are no-ops without it.

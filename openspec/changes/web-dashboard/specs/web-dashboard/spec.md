@@ -8,16 +8,21 @@ Sunny SHALL serve a web dashboard that displays its internal state for observati
 - **THEN** it displays Sunny's state read-only
 - **AND** there is no control to send a message, edit memory, or trigger a schedule or job
 
-### Requirement: Deployed as a separate service
-The dashboard SHALL run as its own process (a separate command), independent of the gateway / durable-execution service, supervised by devbox and exposed at `sunny.waywardlane.com` (distinct from the gateway's host). It SHALL read Sunny's state (memory files + Postgres) with its own read-only access and SHALL NOT share the gateway's in-process runtime.
+### Requirement: One server with hot reload for front end and back end
+The dashboard's React SPA and its read-only JSON API SHALL be served by a single process — Vite hosting Nitro (and the WDK transform) — exposed on one host. The SPA SHALL be served at the root path and the API under `/dashboard/api`. In development this process SHALL provide hot reload for BOTH halves over the single public URL: front-end edits update via HMR, and back-end (server route) edits hot-reload without restarting the process; neither requires serving a pre-built front-end bundle.
 
-#### Scenario: Runs independently of the gateway
-- **WHEN** the dashboard service is started, restarted, or fails
-- **THEN** it runs as its own devbox-supervised process and does not affect the gateway/agent service
+#### Scenario: Both halves hot-reload over one URL
+- **WHEN** the owner edits a front-end component, and separately a back-end route, while the dev server runs
+- **THEN** the front-end change is delivered by HMR over the public URL
+- **AND** the back-end change is reflected without a full process restart
 
-#### Scenario: Served at its own host
+#### Scenario: A front-end edit does not re-run the durable-agent startup
+- **WHEN** a back-end module is hot-reloaded
+- **THEN** the durable runtime (gateway, scheduler, workflow world) is not re-initialized by that reload
+
+#### Scenario: Served from one host
 - **WHEN** the owner opens the dashboard
-- **THEN** it is served from `sunny.waywardlane.com` via devbox
+- **THEN** the SPA and its `/dashboard/api/*` JSON routes are served by the same process on the same host
 
 ### Requirement: Terminal-UI visual language
 The dashboard SHALL present a terminal-inspired interface: a dark background, a monospace/coder font, and the Katakana name for Sunny (サニー) as the masthead at the top of every page. Links SHALL be rendered as human-readable hyperlinks rather than raw URLs. The color scheme SHALL follow a popular VS Code dark theme (Tokyo Night). The home page SHALL present its menu as a vertical list; child pages SHALL present the menu as a horizontal, side-scrolling bar at the top.
@@ -87,7 +92,7 @@ The dashboard SHALL present per-turn activity metrics derived from stored turn m
 - **AND** a health panel shows whether the service, database, scheduler, and gateway are healthy
 
 ### Requirement: iMessage-approval device authentication
-Access to the dashboard SHALL be default-deny. A request from a device without a valid session SHALL create a pending access request and cause the **owner** to be sent an approval prompt over the messaging gateway containing a one-time approval secret. The dashboard service SHALL NOT itself hold messaging credentials; it SHALL request the owner notification from the gateway through a narrow internal interface (the gateway remains the sole sender). Only the owner SHALL be able to approve. On approval, the requesting device SHALL receive a signed, httpOnly session token; sessions SHALL be expirable and revocable. Pending requests SHALL default-deny on timeout. The dashboard SHALL NOT serve private data to an unapproved device.
+Access to the dashboard SHALL be default-deny. A request from a device without a valid session SHALL create a pending access request and cause the **owner** to be sent an approval prompt over the messaging gateway containing a one-time approval secret. The owner notification SHALL be sent only via the gateway's existing send capability using a fixed, owner-only template (it SHALL NOT be usable to send arbitrary text or to arbitrary recipients). Only the owner SHALL be able to approve. On approval, the requesting device SHALL receive a signed, httpOnly session token; sessions SHALL be expirable and revocable. Pending requests SHALL default-deny on timeout. The dashboard SHALL NOT serve private data to an unapproved device, and SHALL be disabled (serve no private data) when no session secret is configured.
 
 #### Scenario: Unknown device requests access
 - **WHEN** a device without a valid session opens the dashboard

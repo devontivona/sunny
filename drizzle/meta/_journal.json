@@ -43,6 +43,13 @@
       "when": 1781733889277,
       "tag": "0005_payload_jsonb",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1781747532266,
+      "tag": "0006_dashboard_auth",
+      "breakpoints": true
     }
   ]
 }

@@ -3,6 +3,8 @@
 .claude/skills/ai-sdk
 .claude/skills/chat-sdk
 .claude/skills/workflow
+.claude/skills/agentation
+.claude/skills/agentation-self-driving
 
 # Node / build
 node_modules/

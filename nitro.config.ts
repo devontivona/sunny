@@ -4,15 +4,33 @@ import { defineNitroConfig } from 'nitro/config';
 // directives (via the workflow/nitro module). Routes live under server/,
 // durable workflows under workflows/. The Postgres world is started by the
 // startup plugin on server init.
+// In Vite mode (the unified `vite.config.unified.ts` entry, NITRO_VITE=1), the
+// `workflow()` Vite plugin already registers the WDK Nitro module itself, so we
+// must NOT also list it here or it double-applies. Standalone Nitro (the current
+// gateway, `nitro dev`/`nitro build`) needs it listed.
+const viteMode = process.env.NITRO_VITE === '1';
+
 export default defineNitroConfig({
   compatibilityDate: '2026-06-16',
   serverDir: './server',
-  modules: ['workflow/nitro'],
+  modules: viteMode ? [] : ['workflow/nitro'],
   plugins: ['plugins/startup.ts'],
   // The workflow/SWC compilation rewrites the `.swc/` cache (incl. `.swc/.gitignore`)
   // on every build. The dev watcher would otherwise see that as a source change and
   // rebuild → which rewrites `.swc/` → an infinite rebuild loop. Ignore build caches.
+  //
+  // Also ignore the dashboard's Vite SPA tree `app/` (web-dashboard D-WD1): the
+  // gateway serves `app/dist` from disk at runtime but imports nothing from it, so
+  // a `vite` dev server / `dashboard:build` / `design:export` writing there must
+  // NOT churn the gateway's workflow/nitro build (the Vite-vs-WDK entanglement we
+  // keep decoupled). `src/dashboard/` is real gateway code now (the folded-in API)
+  // and is intentionally watched.
   watchOptions: {
-    ignored: [/[\\/]\.swc[\\/]/, /[\\/]\.output[\\/]/, /[\\/]\.nitro[\\/]/],
+    ignored: [
+      /[\\/]\.swc[\\/]/,
+      /[\\/]\.output[\\/]/,
+      /[\\/]\.nitro[\\/]/,
+      /[\\/]app[\\/]/,
+    ],
   },
 });

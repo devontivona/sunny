@@ -82,6 +82,51 @@ npm run build   # nitro build → .output
 # devbox cmd → sh -c 'nitro build && node .output/server/index.mjs'   (or build once, then: node .output/server/index.mjs)
 ```
 
+## Web dashboard (read-only)
+
+A **read-only** terminal-styled web dashboard (`web-dashboard` change) gives a window
+into Sunny's innards — memory (SUNNY.md / USER.md / topics), conversation (delivered
+text **and** retained scratch) + keyword search, schedules & run history, and
+activity/health. It is **observe-only** (no chat, no controls).
+
+Architecture: **one unified server**. Sunny runs as **Vite hosting Nitro + WDK**
+(`vite.config.unified.ts` → `[nitro(), react(), tailwindcss(), workflow()]`): Vite serves the
+React SPA (in `app/`, at the root path) with HMR, and Nitro — hosted inside the same Vite
+server — serves the read-only JSON API (`/dashboard/api/*`), the Sendblue webhook, `/health`,
+and the durable agent, with WDK's `"use workflow"`/`"use step"` transform applied by the
+`workflow()` Vite plugin. So the agent, the webhook, and the dashboard are a single process
+with **hot reload for both front end and back end** over one public URL.
+
+- **Design system:** authored once in [`DESIGN.md`](DESIGN.md) (Google `@google/design.md`
+  format, Tokyo Night + monospace). The Tailwind v4 theme is generated from it:
+  `npm run design:lint` (repo check) and `npm run design:export` → committed `app/theme.css`.
+- **Front end:** React + Vite + Tailwind v4 + a few Base UI primitives, source under `app/`;
+  the root `index.html` → `app/main.tsx` is the SPA entry.
+- **Back end:** Nitro routes under `server/routes/` (`/dashboard/api`, `/webhooks/sendblue`,
+  `/health`) + `src/dashboard/` (data access + auth store). Reads memory files + Postgres via
+  the shared runtime; the only writes are its own auth tables.
+- **Auth (iMessage-approval device pairing):** default-deny. An unknown device creates a
+  pending request and the **owner is DM'd** a one-time approve link; tapping it lets the
+  paired browser mint a signed, httpOnly, revocable session. Set `DASHBOARD_SESSION_SECRET`
+  to enable it (the owner prompt is an in-process `send()` with a fixed, owner-only template).
+  If it's **unset the dashboard is disabled** (default-deny) unless `DASHBOARD_DEV_OPEN=1`
+  (local dev only — never on a tunnel-exposed host).
+
+### Run & deploy
+
+- **Local dev:** `npm run dev:unified` (`NITRO_VITE=1 vite --config vite.config.unified.ts`) —
+  one server with SPA HMR + server-route hot-reload + WDK. Honors `$PORT`.
+- **Home server:** the single **`sunny`** devbox service runs `dev:unified`, exposed at
+  `https://sunny.waywardlane.com`; the Sendblue **Receive** webhook points to
+  `https://sunny.waywardlane.com/webhooks/sendblue`. Set `DASHBOARD_SESSION_SECRET` (+
+  `DASHBOARD_PUBLIC_URL`) in its env. The HMR websocket runs over the tunnel via
+  `server.hmr = { protocol: 'wss', clientPort: 443 }` + `allowedHosts` (in the Vite config).
+  ```bash
+  devbox logs sunny -f   # tail   ·   devbox restart sunny   ·   devbox status sunny
+  ```
+  To run a second instance against the shared Postgres (e.g. a staged cutover), isolate its
+  Nitro `buildDir` and set `SUNNY_DISABLE_SCHEDULER=1` so only one fires schedules.
+
 ## Design
 
 The full architecture is captured as an [OpenSpec](https://github.com/Fission-AI/OpenSpec) change:
