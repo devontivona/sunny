@@ -1,0 +1,61 @@
+name: Evals
+
+# Off the merge gate (design D9/D11): behavioral evals drive the REAL model and
+# cost money, so they are manual-only (`workflow_dispatch`, no `schedule`/`push`).
+# Cost stays opt-in. A cost cap + concurrency guard bound spend; the JSON
+# scorecard is uploaded as an artifact.
+on:
+  workflow_dispatch:
+    inputs:
+      dimension:
+        description: 'Eval dimension to run (elicitation | memory | tool-selection | all)'
+        required: false
+        default: 'all'
+      model:
+        description: 'Model under test (default: the production Opus from config)'
+        required: false
+        default: ''
+      n:
+        description: 'Runs per case (pass-rate N)'
+        required: false
+        default: '5'
+      costCapUsd:
+        description: 'Hard cost cap in USD — the run stops and reports if exceeded'
+        required: false
+        default: '5'
+
+# Never run two paid eval jobs at once.
+concurrency:
+  group: evals
+  cancel-in-progress: false
+
+jobs:
+  eval:
+    name: behavioral evals
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Run evals
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          EVAL_DIMENSION: ${{ inputs.dimension }}
+          EVAL_MODEL: ${{ inputs.model }}
+          EVAL_N: ${{ inputs.n }}
+          EVAL_COST_CAP_USD: ${{ inputs.costCapUsd }}
+        run: npm run eval
+
+      - name: Upload scorecard
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-scorecard
+          path: evals/scorecards/
+          if-no-files-found: warn

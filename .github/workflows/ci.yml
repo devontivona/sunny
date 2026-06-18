@@ -1,0 +1,65 @@
+name: CI
+
+# The merge gate (design D9/D11): typecheck + unit + integration on every change.
+# Deterministic, free, secret-free. No service container and no Docker —
+# integration uses in-process PGlite (D4) and the mock model, so this runs safely
+# on fork PRs at zero API cost. Evals are NOT here (they are paid + non-deterministic).
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# One in-flight run per ref; newer pushes cancel older ones.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: typecheck + unit + integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      # `coverage` runs the unit + integration projects with coverage in one pass,
+      # so a failure in either lane fails the gate. Coverage itself is informational
+      # (surfaced below); it does NOT gate merge (D12 — judgment over a number).
+      - name: Unit + integration (with coverage)
+        run: npm run coverage
+
+      - name: Coverage summary (informational)
+        if: always()
+        run: |
+          node -e '
+            const fs = require("fs");
+            const p = "coverage/coverage-summary.json";
+            if (!fs.existsSync(p)) { console.log("no coverage summary"); process.exit(0); }
+            const t = JSON.parse(fs.readFileSync(p, "utf8")).total;
+            const pct = (k) => t[k] ? `${t[k].pct}%` : "n/a";
+            const md = [
+              "## Coverage (informational — not a merge gate)",
+              "",
+              "| Lines | Statements | Functions | Branches |",
+              "|---|---|---|---|",
+              `| ${pct("lines")} | ${pct("statements")} | ${pct("functions")} | ${pct("branches")} |`,
+            ].join("\n");
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY || "/dev/stdout", md + "\n");
+          '
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage/
+          if-no-files-found: ignore

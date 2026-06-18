@@ -6,6 +6,7 @@ import type { SunnyConfig } from '../config/index.js';
 import { logger } from '../logger.js';
 import { Authorizer } from './auth.js';
 import type { ConversationStore } from './store.js';
+import { isGroupThreadId } from './threadId.js';
 import type {
   ChannelCapabilities,
   ChannelEvent,
@@ -178,7 +179,7 @@ export class SendblueGateway implements Gateway {
     // `sendblue:<from>:g:<groupId>` and DMs as `sendblue:<from>:<contact>`. The
     // adapter doesn't implement Chat SDK's optional isDM(), so thread.isDM is
     // unreliable here.
-    const isGroup = thread.id.split(':')[2] === 'g';
+    const isGroup = isGroupThreadId(thread.id);
     const senderId = message.author.userId;
     const auth = this.authorizer.authorize(senderId, isGroup);
     if (!auth.authorized) {

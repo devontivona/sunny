@@ -24,6 +24,9 @@ secrets/
 # Runtime state (lives under ~/.sunny, never in the repo)
 .sunny/
 
+# Test/coverage output
+coverage/
+
 # OS / editor
 .DS_Store
 *.log
@@ -35,3 +38,6 @@ secrets/
 
 # SWC compiler cache (workflow/nitro)
 .swc/
+
+# Eval run scorecards (artifacts; evals/baseline.json is committed)
+evals/scorecards/

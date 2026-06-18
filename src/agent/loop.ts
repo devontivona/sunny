@@ -1,8 +1,8 @@
 import {
   ToolLoopAgent,
-  convertToModelMessages,
   readUIMessageStream,
   stepCountIs,
+  type LanguageModel,
   type LanguageModelUsage,
   type ModelMessage,
   type SystemModelMessage,
@@ -10,7 +10,7 @@ import {
 } from 'ai';
 import type { SunnyConfig } from '../config/index.js';
 import type { ChannelEvent, Gateway } from '../gateway/types.js';
-import type { ConversationStore, StoredMessage } from '../gateway/store.js';
+import type { ConversationStore } from '../gateway/store.js';
 import type { Db } from '../db/client.js';
 import { loadCore, memoryPaths } from '../memory/index.js';
 import { logger } from '../logger.js';
@@ -18,10 +18,17 @@ import { ensureConsolidationSchedule } from '../scheduler/index.js';
 import type { SteerHandle } from './dispatcher.js';
 import { getModel, anthropicProviderOptions } from './model.js';
 import { buildSystemPrompt } from './prompt.js';
+import {
+  classifyDelivery,
+  extractScratch,
+  extractSends,
+  toModelMessages,
+  trimTrailingNonUser,
+} from './turn.js';
 import { createMemoryTools } from './tools/memory.js';
 import { createScheduleTools } from './tools/schedule.js';
 import { createSendMessageTool, type SendCounter } from './tools/sendMessage.js';
-import { createStartJobTool } from './tools/startJob.js';
+import { createStartJobTool, type StartJob } from './tools/startJob.js';
 
 const log = logger('agent:loop');
 
@@ -30,6 +37,16 @@ export interface AgentRunnerDeps {
   store: ConversationStore;
   gateway: Gateway;
   db: Db;
+  /**
+   * Test/eval seam (D13): override the language model. Production omits it and
+   * the runner uses `getModel(config)` (the real Anthropic model).
+   */
+  model?: LanguageModel;
+  /**
+   * Test/eval seam (D13): override the durable-job starter threaded into
+   * `start_job`. Production omits it and the tool uses the real WDK `start`.
+   */
+  start?: StartJob;
 }
 
 /**
@@ -45,6 +62,7 @@ export interface AgentRunnerDeps {
  */
 export function createAgentRunner(deps: AgentRunnerDeps) {
   const { config, store, gateway, db } = deps;
+  const model = deps.model ?? getModel(config);
   const paths = memoryPaths(config.runtimeDir);
   const memoryTools = createMemoryTools(config, store);
 
@@ -75,14 +93,13 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
       content: buildSystemPrompt(config, loadCore(paths)),
       providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
     };
-    const messages = await toModelMessages(await store.recentWindow(event.threadId), event.isGroup);
     // The prompt must end with a user message (Anthropic rejects ending on an
     // assistant message). Stored turns are converted from their UIMessage payload
     // (D-MG9), so trim any trailing non-user messages (assistant + tool) back to
     // the last user message.
-    while (messages.length > 0 && messages[messages.length - 1]?.role !== 'user') {
-      messages.pop();
-    }
+    const messages = trimTrailingNonUser(
+      await toModelMessages(await store.recentWindow(event.threadId), event.isGroup),
+    );
     if (messages.length === 0) {
       log.info('no user message to respond to; skipping turn', { threadId: event.threadId });
       return;
@@ -90,7 +107,7 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
     const counter: SendCounter = { count: 0 };
     const tools = {
       send_message: createSendMessageTool(gateway, event.threadId, counter),
-      start_job: createStartJobTool(event.threadId, config.owner.name),
+      start_job: createStartJobTool(event.threadId, config.owner.name, deps.start),
       // Self-scheduling only on owner DMs (anti-recursion: scheduled runs never
       // get these tools; D-SC4). Non-owner/group turns can't schedule.
       ...(event.isOwner && !event.isGroup
@@ -99,7 +116,7 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
       ...memoryTools,
     };
     const agent = new ToolLoopAgent({
-      model: getModel(config),
+      model,
       instructions,
       tools,
       stopWhen: stepCountIs(20),
@@ -139,32 +156,20 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
       ]);
 
       const parts = assistant?.parts ?? [];
-      const scratch = parts
-        .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
-        .map((p) => p.text)
-        .join('\n')
-        .trim();
-      const sent = parts
-        .filter((p) => p.type === 'tool-send_message')
-        .map((p) => (p as { input?: { text?: string } }).input?.text)
-        .filter((t): t is string => !!t);
+      const scratch = extractScratch(parts);
+      const sent = extractSends(parts);
 
-      let delivered: 'send_message' | 'fallback_text' | 'silence';
-      if (counter.count > 0) {
-        // Intended path: Sunny spoke via send_message (one or more bubbles).
-        delivered = 'send_message';
-      } else if (scratch) {
-        // Safety net, NOT the design: the model put its reply in private scratch
-        // instead of calling send_message. Deliver it so the user isn't ghosted
-        // (persist:false — the turn record below captures it), but flag loudly —
-        // this should trend to zero as the elicitation holds.
-        log.warn('no send_message; delivering scratch text as fallback (fix elicitation)', {
+      const delivered = classifyDelivery(counter.count, scratch);
+      if (delivered === 'fallback_text') {
+        // The model wrote plain text but never called send_message. Raw model
+        // text is PRIVATE (D-MG8) and is NOT delivered — auto-sending it would
+        // leak working notes and contradict the prompt's promise. The user hears
+        // nothing this turn; we log loudly so the elicitation miss stays visible
+        // and measurable (watch this rate — it is the regression signal).
+        log.warn('elicitation miss: model wrote text but never called send_message', {
           threadId: event.threadId,
+          scratchLen: scratch.length,
         });
-        await gateway.send(event.threadId, { text: scratch }, { persist: false });
-        delivered = 'fallback_text';
-      } else {
-        delivered = 'silence';
       }
 
       // One row per turn (D-MG9): persist the assembled UIMessage payload (rich,
@@ -249,47 +254,4 @@ function logTurnSummary(
     cacheWriteIn: usage.inputTokenDetails?.cacheWriteTokens ?? null,
     ms,
   });
-}
-
-/**
- * Build the model prompt from the stored recent window (D-MG9). Each row carries a
- * `UIMessage` payload — the real turn: scratch text parts + tool calls (incl. every
- * `send_message`, with results). Converting the window with `convertToModelMessages`
- * reflects what actually happened (no synthesized tool calls), so the model's own
- * history demonstrates that speaking == calling `send_message` (D-MG8), and the
- * retained scratch gives follow-ups the context Sunny didn't say.
- *
- * Legacy rows written before D-MG9 have no payload and get a minimal reconstruction
- * (they age out of the window quickly). In groups, the speaker is prefixed onto
- * inbound user messages so the model can follow who said what (R1).
- */
-async function toModelMessages(window: StoredMessage[], isGroup: boolean): Promise<ModelMessage[]> {
-  const ui = window.map((row) => rowToUIMessage(row, isGroup));
-  return convertToModelMessages(ui, { ignoreIncompleteToolCalls: true });
-}
-
-function rowToUIMessage(row: StoredMessage, isGroup: boolean): Omit<UIMessage, 'id'> {
-  if (row.payload && typeof row.payload === 'object') {
-    const msg = row.payload as UIMessage;
-    if (isGroup && msg.role === 'user' && row.senderName) return prefixUserMessage(msg, row);
-    return msg;
-  }
-  // Legacy row (pre-D-MG9): minimal reconstruction.
-  if (row.role === 'user') {
-    const text =
-      isGroup && row.senderName
-        ? `${row.senderName}${row.isOwner ? ' (owner)' : ''}: ${row.text}`
-        : row.text;
-    return { role: 'user', parts: [{ type: 'text', text }] };
-  }
-  return { role: 'assistant', parts: [{ type: 'text', text: row.text }] };
-}
-
-/** Prefix the speaker onto a group user message's text part(s) (R1). */
-function prefixUserMessage(msg: UIMessage, row: StoredMessage): UIMessage {
-  const prefix = `${row.senderName}${row.isOwner ? ' (owner)' : ''}: `;
-  return {
-    ...msg,
-    parts: msg.parts.map((p) => (p.type === 'text' ? { ...p, text: prefix + p.text } : p)),
-  };
 }
