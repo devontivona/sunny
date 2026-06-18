@@ -108,15 +108,12 @@ export function StatusDot({ ok }: { ok: boolean }) {
   );
 }
 
-/** Human-readable relative-ish timestamp. */
+/** Compact timestamp, e.g. "Jun 18, 12:55 PM" (no verbose "at", mobile-friendly). */
 export function formatTime(iso: string | null): string {
   if (!iso) return '—';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  const date = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  return `${date}, ${time}`;
 }

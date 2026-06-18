@@ -133,10 +133,12 @@ function ConversationIndex() {
         <ul>
           {threads.data.threads.map((t) => (
             <li key={t.threadId} className="flex items-baseline justify-between gap-md">
-              <LinkButton onClick={() => navigate(`conversation/${encodeURIComponent(t.threadId)}`)}>
-                {t.label}
-              </LinkButton>
-              <span className="shrink-0 text-fg-dim">
+              <span className="min-w-0 truncate">
+                <LinkButton onClick={() => navigate(`conversation/${encodeURIComponent(t.threadId)}`)}>
+                  {t.label}
+                </LinkButton>
+              </span>
+              <span className="shrink-0 whitespace-nowrap text-fg-dim">
                 {t.count} · {formatTime(t.lastAt)}
               </span>
             </li>

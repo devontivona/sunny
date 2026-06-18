@@ -245,11 +245,12 @@ export default defineEventHandler(async (event) => {
       .limit(25);
     const ownerThread = recentOwner.find((m) => m.threadId.split(':')[2] !== 'g')?.threadId;
     if (!ownerThread) throw new Error('no owner DM thread known yet (owner must message Sunny first)');
+    // Conversational, in Sunny's voice — still a fixed, owner-only template
+    // (only the device hint + approve link are interpolated; never arbitrary text).
     const text =
-      `🔓 Dashboard access requested\n` +
-      `Device: ${hint || 'unknown'}\n` +
-      `Request: ${requestId.slice(0, 8)}\n\n` +
-      `Approve ONLY if this was you:\n${approveUrl}`;
+      `Hey — a new device (${hint || 'unknown'}) just asked to open your dashboard. ` +
+      `If that's you, tap to let it in (the link expires soon):\n${approveUrl}\n\n` +
+      `If it wasn't you, just ignore this and it'll lapse.`;
     await gateway.send(ownerThread, { text }, { persist: false });
     log.info('sent dashboard approval prompt to owner', { requestId, ownerThread });
   }

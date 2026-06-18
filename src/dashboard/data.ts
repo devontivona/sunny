@@ -224,7 +224,7 @@ export class DashboardData {
     // The gateway shares this process now (folded into Nitro, D-WD1) — if these
     // routes are serving, the gateway runtime is up. Surface inbound backlog as
     // the meaningful liveness signal via `unprocessedInbound` below.
-    const gateway = { ok: true, detail: 'in-process (shared runtime)' };
+    const gateway = { ok: true, detail: 'in-process' };
 
     const uptime = Math.round((now - this.startedAt) / 1000);
     return {
@@ -271,11 +271,19 @@ function isGroupThread(threadId: string): boolean {
 function threadLabel(threadId: string, senderName: string | null): string {
   if (isGroupThread(threadId)) {
     const gid = threadId.split(':')[3] ?? '';
-    return `group ${gid.slice(0, 8)}`;
+    return `Group ${gid.slice(0, 8)}`;
   }
   if (senderName) return senderName;
-  const parts = threadId.split(':');
-  return parts[parts.length - 1] ?? threadId;
+  // Sendblue encodes the contact as base64 of the phone number — decode it to a
+  // short, human-readable number rather than showing the raw base64 blob.
+  const tail = threadId.split(':').pop() ?? threadId;
+  try {
+    const decoded = Buffer.from(tail, 'base64').toString('utf8');
+    if (/^\+?[0-9]{7,15}$/.test(decoded)) return decoded;
+  } catch {
+    /* not base64 — fall through */
+  }
+  return tail;
 }
 
 interface UiPart {

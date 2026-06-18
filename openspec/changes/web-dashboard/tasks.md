@@ -5,7 +5,7 @@
 
 ## 1. Design system (DESIGN.md) — before any UI
 
-- [x] 1.1 Author `DESIGN.md` at the repo root in the `@google/design.md` format: YAML token front-matter (Tokyo Night colors, monospace typography, spacing, radii) + the prose sections the format expects (Overview, Colors, Typography, …) (D-WD2/7).
+- [x] 1.1 Author `DESIGN.md` at the repo root in the `@google/design.md` format: YAML token front-matter (GitHub Dark colors, monospace typography, spacing, radii) + the prose sections the format expects (Overview, Colors, Typography, …) (D-WD2/7).
 - [x] 1.2 Add `@google/design.md` (pinned — it's alpha) and wire the linter as a repo check: `npx @google/design.md lint DESIGN.md` (exit 1 on error) via an npm script (and CI later) (D-WD7).
 - [x] 1.3 Export the Tailwind v4 theme and commit it: `npx @google/design.md export --format css-tailwind DESIGN.md > app/theme.css` (committed so a CLI/schema change can't silently break the build) (D-WD7).
 

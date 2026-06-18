@@ -25,21 +25,21 @@ The dashboard's React SPA and its read-only JSON API SHALL be served by a single
 - **THEN** the SPA and its `/dashboard/api/*` JSON routes are served by the same process on the same host
 
 ### Requirement: Terminal-UI visual language
-The dashboard SHALL present a terminal-inspired interface: a dark background, a monospace/coder font, and the Katakana name for Sunny (サニー) as the masthead at the top of every page. Links SHALL be rendered as human-readable hyperlinks rather than raw URLs. The color scheme SHALL follow a popular VS Code dark theme (Tokyo Night). The home page SHALL present its menu as a vertical list; child pages SHALL present the menu as a horizontal, side-scrolling bar at the top.
+The dashboard SHALL present a terminal-inspired interface: a dark background, a monospace/coder font, and the Katakana name for Sunny (サニー) as the masthead at the top of every page. Links SHALL be rendered as human-readable hyperlinks rather than raw URLs. The color scheme SHALL follow a popular VS Code dark theme (GitHub Dark). The home page SHALL present the menu as a vertical enumerated list; child pages SHALL NOT show a menu bar — the masthead SHALL link back to the home index as the single navigation surface.
 
 #### Scenario: Masthead and theme
 - **WHEN** any dashboard page loads
-- **THEN** it shows the サニー masthead, a dark Tokyo-Night palette, and a monospace font
+- **THEN** it shows the サニー masthead, a dark GitHub-Dark palette, and a monospace font
 
 #### Scenario: Hyperlinks, not raw URLs
 - **WHEN** the dashboard links to another page or resource
 - **THEN** it renders a human-readable hyperlink, not a bare URL string
 
-#### Scenario: Menu placement differs by page type
+#### Scenario: Home is the menu; child pages navigate via the masthead
 - **WHEN** the home page is shown
-- **THEN** the menu is a vertical enumerated list
+- **THEN** the menu is a vertical enumerated list of the views
 - **WHEN** a child page is shown
-- **THEN** the menu is a horizontal, side-scrolling bar at the top
+- **THEN** there is no menu bar, and the サニー masthead links back to the home index
 
 ### Requirement: Design system from a single linted source
 The dashboard's visual theme (colors, typography, spacing, radii) SHALL be defined in a single `DESIGN.md` design-system file, and the applied theme SHALL be generated from it rather than hand-maintained. The `DESIGN.md` SHALL pass its linter as a repo check.

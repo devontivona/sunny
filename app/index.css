@@ -76,6 +76,14 @@ button {
   border-radius: var(--radius-full);
 }
 
+/* Opt-out: scrolls but shows no scrollbar (e.g. the nav, horizontally-scrolling tables). */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
 a {
   color: var(--color-tertiary);
   text-decoration: none;

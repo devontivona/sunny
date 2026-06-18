@@ -40,7 +40,6 @@ function RouteView() {
 }
 
 export function App() {
-  const route = useRoute();
   const [auth, setAuth] = useState<Auth>({ status: 'loading' });
 
   const refresh = useCallback(async () => {
@@ -89,9 +88,8 @@ export function App() {
     return <AuthGate initial={auth.state} onAuthenticated={() => void refresh()} />;
   }
 
-  const head = route.segments[0] ?? '';
   return (
-    <Layout home={head === ''} active={head}>
+    <Layout>
       <RouteView />
     </Layout>
   );

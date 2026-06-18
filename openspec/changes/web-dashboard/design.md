@@ -17,11 +17,11 @@ Sunny runs as a **single process** built by **Vite with the Nitro Vite plugin** 
 
 ### D-WD2 — Visual language (terminal UI)
 - **Masthead:** the Katakana name for Sunny — **サニー** — at the top of every page.
-- **Palette:** a popular VS Code dark theme — **Tokyo Night** (e.g. bg `#1a1b26`, fg `#c0caf5`, accents blue `#7aa2f7` / cyan `#7dcfff` / green `#9ece6a` / magenta `#bb9af7` / red `#f7768e`). Exact tokens are an implementation detail captured in one CSS file.
+- **Palette:** a popular VS Code dark theme — **GitHub Dark** (e.g. bg `#0d1117`, fg `#e6edf3`, accents blue `#58a6ff` / purple `#bc8cff` / green `#3fb950` / amber `#d29922` / red `#f85149`). Exact tokens are an implementation detail captured in one CSS file.
 - **Type:** a monospace/coder font stack (e.g. `ui-monospace, "JetBrains Mono", "Fira Code", monospace`).
 - **Links:** always render **hyperlinks, never raw URLs** — link text is human-readable; the href is hidden behind it.
-- **Navigation:** the **home page** lists the menu **vertically** (an enumerated index, terminal-directory feel); **child pages** show the menu as a **horizontal, side-scrolling** bar pinned at the top.
-- **Source of truth:** the palette, type, spacing, and radii are defined once in a `DESIGN.md` (Tokyo Night tokens) and the Tailwind v4 `@theme` is **generated** from it — see D-WD7. One shared React layout consumes the generated theme; pages are routed views inside it.
+- **Navigation:** the **home page IS the menu** — a vertical, enumerated index (terminal-directory feel). **Child pages have no menu bar**; the サニー masthead (present on every page) links back to the home index, which is the single navigation surface. (An earlier revision pinned a horizontal child menu; it was cut as redundant.)
+- **Source of truth:** the palette, type, spacing, and radii are defined once in a `DESIGN.md` (GitHub Dark tokens) and the Tailwind v4 `@theme` is **generated** from it — see D-WD7. One shared React layout consumes the generated theme; pages are routed views inside it.
 
 ### D-WD3 — Pages and their data sources
 | Page | Source |
@@ -55,7 +55,7 @@ Only the owner can approve (the approve secret reaches only the owner's DM). Thi
 No chat box, no "send message," no schedule/job triggers, no memory edits. The dashboard only *reflects* Sunny's state. (If control is ever wanted, it's a separate change with its own gating.)
 
 ### D-WD7 — Design system as a Google DESIGN.md (tokens → Tailwind)
-The visual identity is authored once in a **`DESIGN.md`** at the repo root using Google's **`@google/design.md`** format (YAML token front-matter — Tokyo Night colors, monospace typography, spacing, radii — plus the prose sections the format expects: Overview, Colors, Typography, …). The Tailwind v4 theme is **generated** from it, not hand-written:
+The visual identity is authored once in a **`DESIGN.md`** at the repo root using Google's **`@google/design.md`** format (YAML token front-matter — GitHub Dark colors, monospace typography, spacing, radii — plus the prose sections the format expects: Overview, Colors, Typography, …). The Tailwind v4 theme is **generated** from it, not hand-written:
 
 ```
 npx @google/design.md export --format css-tailwind DESIGN.md > app/theme.css   # v4 @theme block

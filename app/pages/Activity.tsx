@@ -31,8 +31,8 @@ function ActivityTab() {
   if (state.data.turns.length === 0)
     return <p className="text-fg-dim">No recorded turns yet.</p>;
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full">
+    <div className="no-scrollbar overflow-x-auto">
+      <table className="w-full whitespace-nowrap">
         <thead className="text-fg-dim">
           <tr>
             <th className="pr-md text-left font-normal">When</th>
