@@ -15,10 +15,6 @@ npm run dev:unified   # THE dev/serve command: Vite hosts Nitro + WDK (SPA HMR +
 npm run dashboard:typecheck  # tsc for the React app (app/tsconfig.json)
 npm run design:lint   # validate DESIGN.md (repo check; exit 1 on error)
 npm run design:export # regenerate the committed app/theme.css from DESIGN.md
-
-# Legacy / fallback (standalone Nitro, no Vite/HMR) — not how the box runs anymore:
-npm run dev           # nitro dev          ·   npm run build  # nitro build → .output
-npm run dashboard:build  # vite build → app/dist (only the standalone-Nitro serve path)
 ```
 
 `server/` and `plugins/` are validated by the Nitro build, not by `tsc`.
