@@ -14,6 +14,7 @@ build/
 .env
 .env.*
 *.env
+!.env.example
 secrets/
 *op-service-account*
 *.token
@@ -25,3 +26,10 @@ secrets/
 .DS_Store
 *.log
 *.swp
+
+# Nitro build output
+.output/
+.nitro/
+
+# SWC compiler cache (workflow/nitro)
+.swc/
