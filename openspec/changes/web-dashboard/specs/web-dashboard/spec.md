@@ -25,6 +25,17 @@ The dashboard SHALL present a terminal-inspired interface: a dark background, a 
 - **WHEN** a child page is shown
 - **THEN** the menu is a horizontal, side-scrolling bar at the top
 
+### Requirement: Design system from a single linted source
+The dashboard's visual theme (colors, typography, spacing, radii) SHALL be defined in a single `DESIGN.md` design-system file, and the applied theme SHALL be generated from it rather than hand-maintained. The `DESIGN.md` SHALL pass its linter as a repo check.
+
+#### Scenario: Theme is generated, not hand-written
+- **WHEN** the dashboard's visual theme is changed
+- **THEN** the change is made in `DESIGN.md` and the applied theme is regenerated from it
+
+#### Scenario: Design system stays valid
+- **WHEN** the repo checks run
+- **THEN** the `DESIGN.md` linter passes with no errors
+
 ### Requirement: Memory views
 The dashboard SHALL render the memory soul: the always-on core (`SUNNY.md` and `USER.md`) and a browser over `INDEX.md` and the topic documents. Memory content SHALL be rendered (markdown) and sanitized.
 
