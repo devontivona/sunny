@@ -58,8 +58,3 @@ delivered, tokensIn/Out, cachedIn, cacheWriteIn, ms }`. Set `SUNNY_LOG_CONTENT=1
 text (dev only). Prompt caching is on (stable prefix marked `cacheControl: ephemeral`): a
 multi-step turn shows `cachedIn > 0` (prefix re-read at ~0.1×); single-step turns show
 `cacheWriteIn > 0` (the write).
-
-## Commits
-
-End commit messages with:
-`Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`
