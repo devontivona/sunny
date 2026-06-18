@@ -113,6 +113,11 @@ This is preferred over `vi.mock('./model.js')` / `vi.mock('workflow/api')`: modu
 - **Judge: Sonnet** — independent from the Opus under test and materially cheaper, while a stronger judge than Haiku for the fuzzy tone/quality calls.
 - **N (runs per case): configurable, small default** (≈5) with lenient initial thresholds (D8), tightened as behavior stabilizes — a tuning knob, not an architectural choice.
 
+### D15: Fixtures — typed builders, not faker; fast-check for the normalizers
+Test data comes from a small shared `tests/factories.ts` of typed object-mother builders (`makeChannelEvent`, `makeConfig`, `makeStoredTurn`, …) with deterministic defaults and per-test overrides — **not** from faker. Random data fights this suite: the assertions check *specific* values (phone-normalization equivalence, FTS tokens/stemming, exact tool calls), so explicit builders are clearer, type-safe, and reproducible, and a shape change updates one module. Memory/conversation setup seeds through the real `applyMemoryWrite` / store APIs (not hand-written files) so format drift is caught. Rare bulk filler uses a deterministic counter (`msg-${i}`), never randomness. (Seeded faker would restore determinism but only to produce values we'd otherwise just write — net negative dependency.)
+
+Randomness is reserved for **property-based tests** via **fast-check**, scoped to the pure normalizers with wide input spaces — `normalize`, `parseDuration`, `sanitizeTopic` (e.g. invariant: `sanitizeTopic` output never contains `/` or `..`). fast-check **shrinks** a failure to a minimal counterexample, so it's a reproducible bug, not flaky noise — the opposite of unseeded faker.
+
 ## Risks / Trade-offs
 
 - **WDK is experimental and doesn't run on PGlite** (graphile_worker needs multi-connection / LISTEN-NOTIFY) → Scope the durable test to **step-function idempotency** — a replayed `memory_write` step applies its effect exactly once — against PGlite + the memory fs, *without* standing up the graphile_worker world. Treat a full crash/restart-resume run as a boundary; if ever wanted it uses the `TEST_DATABASE_URL` real-PG hatch and stays out of the default gate.

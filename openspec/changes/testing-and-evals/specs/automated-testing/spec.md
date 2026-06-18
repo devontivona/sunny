@@ -49,6 +49,13 @@ Integration tests SHALL run against an in-process Postgres whose schema is creat
 - **WHEN** an integration test seeds messages and queries conversation recall
 - **THEN** the tsvector/FTS recall path returns the expected matches against the real database
 
+### Requirement: Deterministic test fixtures
+Test data SHALL be produced by typed builder factories with deterministic defaults and explicit per-test overrides, not by randomized data generation. Memory and conversation setup SHALL be seeded through the production write APIs rather than hand-authored files, so a format change is caught. Property-based testing MAY be used for pure functions, provided a failure is reproducible (shrunk to a minimal counterexample).
+
+#### Scenario: Fixtures are deterministic
+- **WHEN** a test builds its inputs via the shared factories
+- **THEN** the same inputs and assertions hold on every run with no randomized data
+
 ### Requirement: Deterministic time control
 Time-dependent behavior (schedule/cron evaluation, date-tagged memory facts, the scheduler ticker) SHALL be testable with controlled time so tests advance time deterministically rather than waiting in real time, without requiring production code to change.
 

@@ -1,6 +1,6 @@
 ## 1. Test runner & lanes
 
-- [ ] 1.1 Add Vitest + coverage as dev deps; `vitest.config.ts` with projects: unit (`**/*.unit.test.ts`), integration (`**/*.integration.test.ts`, DB setup), and evals (`evals/**`, excluded from default run)
+- [ ] 1.1 Add Vitest + coverage + `fast-check` as dev deps; `vitest.config.ts` with projects: unit (`**/*.unit.test.ts`), integration (`**/*.integration.test.ts`, DB setup), and evals (`evals/**`, excluded from default run)
 - [ ] 1.2 Add npm scripts: `test` (unit), `test:integration`, `test:all`, `test:watch`, `coverage`, `eval`
 - [ ] 1.3 Document in AGENTS.md: the testing conventions (lanes, naming, seams, fake timers); the **definition of done** + change-type→test-artifact table (design D12); **before pushing**, run the full deterministic suite (`npm run typecheck && npm run test && npm run test:integration` — no Docker needed, integration uses in-process PGlite); **after changing agent behavior** (prompt/loop/tools/model/memory), add/extend an eval case, run `npm run eval`, and put the scorecard delta in the PR
 - [ ] 1.4 Add `.github/pull_request_template.md` with the definition-of-done checklist (deterministic suite green; matching tests for changed behavior; regression test for bug fixes; eval case + scorecard delta for behavior changes, or "N/A: no behavior change")
@@ -13,6 +13,7 @@
 - [ ] 2.4 Recording fake durable-`start` (records `start_job` invocations without launching a WDK job) for tests + evals (D13)
 - [ ] 2.5 Runtime test-composition helper wiring the fakes (mock/real model + fake gateway + in-process PGlite + fake durable-start) into the real runtime
 - [ ] 2.6 Establish the Vitest fake-timers pattern (`vi.useFakeTimers()` / `vi.setSystemTime()`) for time-dependent tests
+- [ ] 2.7 `tests/factories.ts` — typed object-mother builders (`makeChannelEvent`, `makeConfig`, `makeStoredTurn`, memory/conversation seeds via the real `applyMemoryWrite`/store APIs) with deterministic defaults + overrides; no faker (D15)
 
 ## 3. Testability refactor (behavior-preserving, D13)
 
@@ -30,6 +31,7 @@
 - [ ] 4.6 `ConfigSchema` defaults/validation + `runtimeDir()` `SUNNY_HOME` override (`config/index.ts`)
 - [ ] 4.7 `TurnDispatcher` (`agent/dispatcher.ts`): dedup, `SEEN_CAP` eviction, steer-in-flight vs new run, mark-done ordering — with a fake `runTurn` + stub store
 - [ ] 4.8 Gateway inbound normalization: the shared `isGroup` threadId derivation (3.3) over DM vs group vs malformed thread ids
+- [ ] 4.9 Property-based tests (fast-check) for the pure normalizers — `normalize`, `parseDuration`, `sanitizeTopic` (e.g. invariant: `sanitizeTopic` output never contains `/` or `..`)
 
 ## 5. Integration lane coverage
 
