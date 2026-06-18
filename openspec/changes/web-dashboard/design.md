@@ -39,7 +39,7 @@ Each page fetches JSON from its `dashboard/api/*` route; the API returns raw mar
 The dashboard exposes private data over a public tunnel, so access is **default-deny** and pairing happens through the channel Sunny already owns:
 
 1. A request from an **unrecognized device** (no valid session cookie) creates a pending **access request** (random id + secret; captured device hint: user-agent, coarse IP/time) and shows a "waiting for approval" page that sets a pending cookie and polls/refreshes.
-2. The owner is **DM'd** with the request details and a **one-time approve link** containing the request secret (the link is only ever sent to the owner's DM, so tapping it authenticates as the owner). Optionally the owner can reply with an approve code. **Cross-process note:** the dashboard runs separately from the gateway, so it does not call the gateway's `send()` directly — it sends the approval DM via the Sendblue REST API (the same proactive-send-by-thread-id path the gateway uses), or by writing the pending request to the shared store for the gateway to deliver. (Implementation picks one; the Sendblue-direct path keeps the dashboard self-contained.)
+2. The owner is **DM'd** with the request (device hint) and a **one-time approve link** containing the request secret (the link only ever reaches the owner's DM, so tapping it authenticates as the owner). **Cross-process note:** the dashboard does **not** hold messaging credentials. It calls a **narrow internal endpoint on the gateway** to send the notification — the gateway stays the sole holder of send capability (a dashboard compromise must not be able to message as Sunny). That endpoint is **localhost-only, shared-secret authenticated, and rate-limited**, and it sends *only* the fixed "dashboard access requested" template (for a given request id + device hint) to the **owner** via the gateway's existing `send()` — it cannot send arbitrary text or to arbitrary recipients. Worst-case abuse is a spurious approval prompt to the owner.
 3. On approval, the server marks the request approved and **issues a signed, httpOnly, `SameSite=Lax` session token** bound to that browser; the waiting page advances to the dashboard.
 4. Sessions are stored server-side (a `dashboard_sessions` table) with an expiry and are **revocable**; access requests **default-deny on timeout**.
 
@@ -48,7 +48,8 @@ Only the owner can approve (the approve secret reaches only the owner's DM). Thi
 ### D-WD5 — Privacy & safety
 - Auth is **required before exposure**; if auth is unconfigured the server binds **localhost-only** rather than serving private data over the tunnel.
 - **No secrets are ever rendered** (secrets are env-only and not in `config.json`; the config/health view shows only non-secret settings).
-- Read-only: no route mutates state, so there is no write/CSRF surface; the only state-changing actions are auth (approve/revoke), which are owner-gated and use one-time secrets.
+- Read-only over Sunny's state: no route mutates memory/messages/schedules. The dashboard's only writes are to its **own auth store** (sessions/access-requests).
+- The dashboard process holds **no messaging credentials** — it asks the gateway (via the narrow internal endpoint, D-WD4) to notify the owner, so a dashboard compromise cannot message as Sunny.
 
 ### D-WD6 — Strictly observability, not control
 No chat box, no "send message," no schedule/job triggers, no memory edits. The dashboard only *reflects* Sunny's state. (If control is ever wanted, it's a separate change with its own gating.)

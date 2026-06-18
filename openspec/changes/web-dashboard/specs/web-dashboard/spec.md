@@ -87,7 +87,7 @@ The dashboard SHALL present per-turn activity metrics derived from stored turn m
 - **AND** a health panel shows whether the service, database, scheduler, and gateway are healthy
 
 ### Requirement: iMessage-approval device authentication
-Access to the dashboard SHALL be default-deny. A request from a device without a valid session SHALL create a pending access request and cause Sunny to send the **owner** an approval prompt over the messaging gateway containing a one-time approval secret. Only the owner SHALL be able to approve. On approval, the requesting device SHALL receive a signed, httpOnly session token; sessions SHALL be expirable and revocable. Pending requests SHALL default-deny on timeout. The dashboard SHALL NOT serve private data to an unapproved device.
+Access to the dashboard SHALL be default-deny. A request from a device without a valid session SHALL create a pending access request and cause the **owner** to be sent an approval prompt over the messaging gateway containing a one-time approval secret. The dashboard service SHALL NOT itself hold messaging credentials; it SHALL request the owner notification from the gateway through a narrow internal interface (the gateway remains the sole sender). Only the owner SHALL be able to approve. On approval, the requesting device SHALL receive a signed, httpOnly session token; sessions SHALL be expirable and revocable. Pending requests SHALL default-deny on timeout. The dashboard SHALL NOT serve private data to an unapproved device.
 
 #### Scenario: Unknown device requests access
 - **WHEN** a device without a valid session opens the dashboard

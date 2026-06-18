@@ -24,8 +24,9 @@
 
 - [ ] 4.1 `dashboard_sessions` + `access_requests` store (Drizzle migration): signed httpOnly session token, device hint, expiry, revoked; pending request id + one-time secret + status (D-WD4).
 - [ ] 4.2 Auth gate on the SPA shell **and** the `dashboard/api/*` routes: valid session → allow; otherwise create a pending request, return 401/waiting state (D-WD4).
-- [ ] 4.3 Owner approval: the dashboard DMs the owner with device details + a one-time approve link — cross-process, so via the Sendblue REST API directly (or by writing the request to the shared store for the gateway to deliver); the approve route validates the secret, marks approved, issues the session token; default-deny on timeout (D-WD4).
-- [ ] 4.4 Session expiry + revocation; bind localhost-only when auth is unconfigured (D-WD4/5).
+- [ ] 4.3 **Gateway internal notify endpoint** (lives on the gateway, not the dashboard): localhost-only + shared-secret authed + rate-limited; sends the owner the fixed "dashboard access requested" template (request id + device hint + approve link) via the gateway's existing `send()`. Keeps the gateway the sole holder of messaging credentials (D-WD4).
+- [ ] 4.4 Owner approval flow: the dashboard calls that endpoint (it holds no Sendblue creds); the owner taps the one-time approve link; the dashboard's approve route validates the secret, marks the request approved, and issues the signed session token; default-deny on timeout (D-WD4).
+- [ ] 4.5 Session expiry + revocation; bind the dashboard localhost-only when auth is unconfigured (D-WD4/5).
 
 ## 5. Pages (React views consuming the API)
 
