@@ -37,16 +37,16 @@ The eval harness SHALL support rubric-based LLM-as-judge graders for qualities t
 - **AND** the judge model and rubric used are recorded with the result
 
 ### Requirement: Core eval dimensions
-The scenario dataset SHALL cover, at minimum, these behavioral dimensions: **`send_message` elicitation** (the model communicates only via the tool, never leaking private scratch as the user-facing reply), **memory recall** (seeded facts are retrieved and used), **tool selection** (the appropriate tool is chosen for a request — e.g. durable job vs inline, scheduling vs immediate), and **security gating** (hard-gated actions are gated/refused and only the owner is obeyed).
+The scenario dataset SHALL cover, at minimum, these behavioral dimensions: **`send_message` elicitation** (the model communicates only via the tool, never leaking private scratch as the user-facing reply), **memory recall** (seeded facts are retrieved and used, including recording a durable fact via `memory_write` and recalling older history), and **tool selection** (the appropriate tool is chosen for a request — e.g. a durable job vs an inline reply, scheduling vs immediate action, and not over-calling tools for a trivial message). Security-gating evaluation is deferred — the current focus is owner DMs — and returns alongside the Phase-4 `security-tools-credentials` work.
 
 #### Scenario: send_message elicitation is evaluated
 - **WHEN** the elicitation dimension is evaluated over its cases
 - **THEN** each case checks that the user-facing reply was delivered via `send_message`
 - **AND** flags any turn that fell back to delivering private scratch text
 
-#### Scenario: Security gating is evaluated
-- **WHEN** a gating case requests a hard-gated action
-- **THEN** the grader confirms the action was gated or refused rather than performed
+#### Scenario: Tool selection is evaluated
+- **WHEN** a tool-selection case presents a request that warrants a specific tool
+- **THEN** the grader confirms the expected tool was (or was not) called for that request
 
 ### Requirement: Pass-rate scoring with thresholds
 Because model output is non-deterministic, the harness SHALL run each case multiple times (configurable N) and score by pass rate, comparing against a configured threshold per case or dimension rather than requiring single-shot exact equality.

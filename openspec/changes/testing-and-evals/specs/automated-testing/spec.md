@@ -41,11 +41,11 @@ Integration tests SHALL run against a disposable Postgres instance whose schema 
 - **WHEN** an integration test seeds messages and queries conversation recall
 - **THEN** the tsvector/FTS recall path returns the expected matches against the real database
 
-### Requirement: Injectable clock for time-dependent code
-Time-dependent behavior (schedule/cron evaluation, date-tagged memory facts, the scheduler ticker) SHALL be testable with an injectable clock so tests can advance time deterministically rather than waiting in real time.
+### Requirement: Deterministic time control
+Time-dependent behavior (schedule/cron evaluation, date-tagged memory facts, the scheduler ticker) SHALL be testable with controlled time so tests advance time deterministically rather than waiting in real time, without requiring production code to change.
 
-#### Scenario: Scheduled job fires under a controlled clock
-- **WHEN** a test sets a schedule and advances the injected clock past its due time
+#### Scenario: Scheduled job fires under controlled time
+- **WHEN** a test sets a schedule and advances controlled time past its due time
 - **THEN** the scheduler dispatches the job deterministically without real-time waiting
 
 ### Requirement: Durable workflow step coverage
@@ -66,3 +66,16 @@ The unit and integration lanes plus type-checking SHALL run automatically in CI 
 - **WHEN** the default CI gate runs
 - **THEN** it performs typecheck, unit, and integration lanes only
 - **AND** it does not invoke the paid eval harness
+
+### Requirement: Initial coverage of the current surface
+This change SHALL deliver written tests covering the existing foundation, not only the harness. The **unit** lane SHALL cover, at minimum: sender authorization and identity normalization; schedule duration/next-run (once/interval/cron) computation; memory write semantics (add/replace/remove), topic-name sanitization, and core-file overflow; system-prompt assembly including its byte-stability under unchanged inputs; the turn delivery classification (`send_message` vs fallback vs silence), trailing non-user-message trimming, and group speaker-prefixing; config schema defaults/validation; and dispatcher dedup, eviction, and steering-vs-new-run behavior. The **integration** lane SHALL cover, at minimum: inbound dedup, recent-window ordering, and full-text keyword recall against real Postgres; the scheduler ticker dispatching due schedules and advancing next-run; and the agent loop end-to-end with the mock model and fake gateway (including the fallback-delivery path and the persisted per-turn record).
+
+#### Scenario: Foundation has written coverage
+- **WHEN** this change is complete
+- **THEN** the listed unit and integration behaviors each have at least one test
+- **AND** those tests run in the default CI gate
+
+#### Scenario: send_message guard is covered both ways
+- **WHEN** the loop coverage runs
+- **THEN** a turn that calls `send_message` is recorded as delivered via `send_message`
+- **AND** a turn that produces only private scratch is delivered as fallback text and flagged

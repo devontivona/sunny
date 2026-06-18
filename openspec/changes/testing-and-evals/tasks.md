@@ -1,57 +1,63 @@
 ## 1. Test runner & lanes
 
-- [ ] 1.1 Add Vitest + coverage as dev dependencies and a `vitest.config.ts` with two projects/globs: unit (`**/*.unit.test.ts`, no setup) and integration (`**/*.integration.test.ts`, DB setup)
-- [ ] 1.2 Add npm scripts: `test` (unit), `test:integration`, `test:all`, `test:watch`, `coverage`
-- [ ] 1.3 Document the testing conventions (lanes, naming, seams) in AGENTS.md
+- [ ] 1.1 Add Vitest + coverage as dev deps; `vitest.config.ts` with projects: unit (`**/*.unit.test.ts`), integration (`**/*.integration.test.ts`, DB setup), and evals (`evals/**`, excluded from default run)
+- [ ] 1.2 Add npm scripts: `test` (unit), `test:integration`, `test:all`, `test:watch`, `coverage`, `eval`
+- [ ] 1.3 Document the testing conventions (lanes, naming, seams, fake timers) in AGENTS.md
 
 ## 2. Seams & fixtures
 
-- [ ] 2.1 Mock language model fixture wrapping AI SDK `MockLanguageModel` — helpers to script text + tool-call sequences; inject at the same seam the real model uses
-- [ ] 2.2 Fake `Gateway` driver implementing the normalized seam — records outbound, exposes `injectInbound(...)`; assertable outbound buffer
-- [ ] 2.3 Injectable clock abstraction — thread `now()`/tick through scheduler, date-tagged memory facts, and the ticker; wire system clock in prod, fake in tests
-- [ ] 2.4 Ephemeral Postgres fixture (Testcontainers `pgvector/pgvector:pg16`): provision, run Drizzle migrations, expose client, truncate-between-cases, teardown
-- [ ] 2.5 Runtime test-composition helper that wires the fakes (mock model + fake gateway + fake clock + ephemeral DB) into the real runtime
+- [ ] 2.1 Mock language model fixture wrapping `MockLanguageModelV3` + `simulateReadableStream` from `ai/test`; helpers to script text + tool-call sequences; inject at the `getModel()` seam
+- [ ] 2.2 Fake `Gateway` driver implementing `src/gateway/types.ts` — records outbound `send`, exposes `injectInbound(...)`, assertable outbound buffer
+- [ ] 2.3 Ephemeral Postgres fixture (Testcontainers `pgvector/pgvector:pg16`): provision, run Drizzle migrations (incl. the tsvector/GIN SQL migration), expose client, truncate-between-cases, teardown
+- [ ] 2.4 Runtime test-composition helper wiring the fakes (mock model + fake gateway + ephemeral DB) into the real runtime
+- [ ] 2.5 Establish the Vitest fake-timers pattern (`vi.useFakeTimers()` / `vi.setSystemTime()`) for time-dependent tests
 
-## 3. Unit lane coverage
+## 3. Testability refactor (behavior-preserving)
 
-- [ ] 3.1 Prompt assembly + trailing non-user-message trimming (ends on a user message)
-- [ ] 3.2 `send_message` elicitation/fallback logic (detect a turn that sent nothing → fallback path)
-- [ ] 3.3 Memory fact parsing + date-tagging + forced-consolidation writer logic
-- [ ] 3.4 Schedule/cron math (one-shot, interval, cron next-fire) under the fake clock
-- [ ] 3.5 Gateway normalization + owner/auth identity matching
+- [ ] 3.1 Extract pure helpers from `src/agent/loop.ts` `runTurn` — delivery classification (`send_message`/`fallback_text`/`silence`), trailing non-user trim, scratch/sent extraction, group speaker-prefix — as exported functions; `runTurn` calls them (no behavior change)
 
-## 4. Integration lane coverage
+## 4. Unit lane coverage
 
-- [ ] 4.1 Conversation store: seed messages, assert tsvector/FTS keyword recall against real Postgres
-- [ ] 4.2 Memory store round-trip (write via the real writer API → recall) on real Postgres
-- [ ] 4.3 Scheduler ticker: set schedule, advance clock, assert durable job dispatched (with anti-recursion guard)
-- [ ] 4.4 Agent loop end-to-end with mock model + fake gateway: scripted tool call → dispatch → captured reply
-- [ ] 4.5 Durable workflow step execution + idempotency (replayed step applies effect exactly once), within WDK test support
+- [ ] 4.1 `Authorizer.authorize` + `normalize` (`gateway/auth.ts`): phone/email normalization, owner vs group-nonowner vs unauthorized, `allowGroups` off
+- [ ] 4.2 `parseDuration` + `computeNextRun` (`scheduler/index.ts`): once/interval/cron incl. timezone; invalid specs throw
+- [ ] 4.3 Memory `computeNext` (add/replace/remove/full-replace), `sanitizeTopic` path-traversal guard, core-file overflow → `MemoryOverflowError` (`memory/index.ts`, temp dir)
+- [ ] 4.4 `buildSystemPrompt` (`agent/prompt.ts`): structure snapshot, empty-core → `(empty)`, and byte-stability under unchanged inputs (cache invariant)
+- [ ] 4.5 Extracted loop helpers (3.1): delivery classification both ways, trailing-trim, group-prefix
+- [ ] 4.6 `ConfigSchema` defaults/validation + `runtimeDir()` `SUNNY_HOME` override (`config/index.ts`)
+- [ ] 4.7 `TurnDispatcher` (`agent/dispatcher.ts`): dedup, `SEEN_CAP` eviction, steer-in-flight vs new run, mark-done ordering — with a fake `runTurn` + stub store
 
-## 5. CI gate
+## 5. Integration lane coverage
 
-- [ ] 5.1 GitHub Actions workflow: typecheck + unit + integration on push/PR, with a Postgres service container
-- [ ] 5.2 Make CI block merge on failure; confirm evals are excluded from this gate
+- [ ] 5.1 Migrations apply clean on a fresh DB (incl. generated `text_search` column + GIN index)
+- [ ] 5.2 `ConversationStore`: `appendInbound` dedup (`onConflictDoNothing`), `recentWindow` order+limit, `markProcessed`/`findUnprocessedInbound`
+- [ ] 5.3 `ConversationStore.recall` tsvector/FTS keyword recall against real Postgres
+- [ ] 5.4 Scheduler ticker under fake timers + real DB: due dispatch, `nextRunAt` advance, one-shot deactivation, `scheduleRuns` row, `MAX_PER_TICK`, `ensureConsolidationSchedule` idempotency
+- [ ] 5.5 Agent loop end-to-end (mock model + fake gateway + real DB): scripted `send_message` → captured outbound + `delivered:'send_message'` + D-MG9 turn row; scratch-only → `fallback_text` delivered & flagged
+- [ ] 5.6 Durable workflow step idempotency: a replayed `memory_write` step applies its effect exactly once (within WDK test support; boundary)
 
-## 6. Eval harness
+## 6. CI gate
 
-- [ ] 6.1 Define the eval case schema (setup: seeded memory/conversation/config; input message(s); grader references) and a loader for `evals/cases/**`
-- [ ] 6.2 Harness runner: apply setup → drive the real loop against the fake gateway with a configurable model (default `claude-opus-4-8`) → capture messages, tool calls/results, telemetry
-- [ ] 6.3 Programmatic grader interface + built-ins (tool-called, `sendCount`, gated-action-refused, op:// ref resolved, fact recalled)
-- [ ] 6.4 LLM-as-judge grader: rubric runner using a distinct judge model; record judge model + rubric version with the verdict
-- [ ] 6.5 N-run pass-rate scoring with per-case/dimension thresholds
-- [ ] 6.6 Scorecard output (per-case + per-dimension pass rates, model, timestamp, cost) as a JSON artifact; run-to-run regression diff
-- [ ] 6.7 Cost cap enforcement: stop-and-report when an eval run hits its budget
-- [ ] 6.8 `npm run eval` entrypoint (select dataset/dimension, model, N)
+- [ ] 6.1 GitHub Actions: typecheck + unit + integration on push/PR with a Postgres service container
+- [ ] 6.2 Block merge on failure; confirm evals are excluded from this gate
 
-## 7. Eval dataset (four dimensions)
+## 7. Eval harness (vitest-evals + autoevals)
 
-- [ ] 7.1 `send_message` elicitation cases — assert user-facing reply went via `send_message`; flag `fallback_text`
-- [ ] 7.2 Memory recall cases — seed facts, ask, assert retrieval + appropriate use (programmatic + judge)
-- [ ] 7.3 Tool selection cases — durable job vs inline; schedule vs immediate; correct tool chosen
-- [ ] 7.4 Security gating cases — hard-gated action gated/refused; non-owner ignored; blocklist respected
+- [ ] 7.1 Wire vitest-evals with its AI SDK harness driving the real loop against the fake gateway; configurable model (default `claude-opus-4-8`)
+- [ ] 7.2 Eval case schema + loader (setup: seeded memory via `applyMemoryWrite`/store APIs, conversation, config; input message(s); grader refs) under `evals/cases/**`
+- [ ] 7.3 Programmatic graders over `result.steps` + `delivered`: tool-called / `sendCount` / correct-tool-for-request / fact-recalled
+- [ ] 7.4 LLM-as-judge graders via autoevals with a cheaper, independent judge model (e.g. Sonnet/Haiku); record judge model + rubric version
+- [ ] 7.5 N-run pass-rate scoring with per-case/dimension thresholds
+- [ ] 7.6 File-based scorecard output (per-case + per-dimension pass rates, model, timestamp, cost) + run-over-run regression diff
+- [ ] 7.7 Cost-cap enforcement: stop-and-report when an eval run hits its budget
+- [ ] 7.8 `npm run eval` entrypoint (select dimension, model, N)
 
-## 8. Observability integration (after `observability` lands)
+## 8. Eval dataset (three dimensions)
 
-- [ ] 8.1 Persist scorecards alongside trajectories and meter eval cost through the shared budget meter (fall back to file-only + local tally if absent)
-- [ ] 8.2 Scheduled eval run delivering a scorecard summary to the owner over the gateway
+- [ ] 8.1 `send_message` elicitation cases: simple reply, multi-bubble, interview back-and-forth, genuine-silence — assert delivered via `send_message`, never `fallback_text`
+- [ ] 8.2 Memory cases: seeded `USER.md` fact used in reply; told-a-durable-fact → `memory_write` to USER with right content; seeded archive → `recall_history` invoked + used (programmatic + one judge for natural use)
+- [ ] 8.3 Tool-selection cases: "research X, report back" → `start_job` after an "on it" send; "remind me at 9am" → `schedule_create` w/ plausible spec; trivial greeting → no job/schedule
+
+## 9. Deferred (not in this change)
+
+- [ ] 9.1 Security-gating eval dimension — returns with Phase-4 `security-tools-credentials`
+- [ ] 9.2 Move scorecard persistence + eval cost cap onto `observability` (trajectory store + budget meter) once it lands; optionally adopt self-hosted Langfuse for a dashboard/history
