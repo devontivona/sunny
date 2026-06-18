@@ -4,13 +4,6 @@ A self-hosted, single-user **personal AI agent** that runs on a home server and 
 
 The architecture is inspired by Nous Research's **Hermes Agent**, re-implemented on a **TypeScript / Vercel** substrate (AI SDK + Chat SDK + Workflow DevKit) with **Claude Opus 4.8**.
 
-## Status
-
-**Phases 0–3 implemented** — a live iMessage loop (Opus), files-first memory, durable
-Tier-2 jobs + self-scheduling, and idempotent / double-text-steered turns. Remaining:
-Phase 4 (security, tools, credentials), Phase 5 (skills), Phase 6 (observability),
-Phase 7 (subagents). See `openspec/changes/bootstrap-sunny/tasks.md`.
-
 ## Running & deploying
 
 Sunny is a long-lived service — a Nitro-built Node server plus a Postgres database. Nitro
@@ -70,18 +63,6 @@ WORKFLOW_POSTGRES_URL="$DATABASE_URL" npx workflow-postgres-setup
   `https://sunny-gateway.waywardlane.com/webhooks/sendblue` and the signing secret to
   `SENDBLUE_WEBHOOK_SECRET`. Health check: `/health`.
 
-### Production hardening (deferred — task 4.0)
-
-The service currently runs `nitro dev` (a file-watcher — reboot-safe under devbox, but it
-rebuilds/restarts on source edits, so don't edit live on the box mid-operation). When
-development settles, switch the devbox command to a built artifact for a lighter,
-deterministic process:
-
-```bash
-npm run build   # nitro build → .output
-# devbox cmd → sh -c 'nitro build && node .output/server/index.mjs'   (or build once, then: node .output/server/index.mjs)
-```
-
 ## Web dashboard (read-only)
 
 A **read-only** terminal-styled web dashboard (`web-dashboard` change) gives a window
@@ -129,13 +110,10 @@ with **hot reload for both front end and back end** over one public URL.
 
 ## Design
 
-The full architecture is captured as an [OpenSpec](https://github.com/Fission-AI/OpenSpec) change:
-
-- **[`openspec/changes/bootstrap-sunny/`](openspec/changes/bootstrap-sunny/)**
-  - [`proposal.md`](openspec/changes/bootstrap-sunny/proposal.md) — why, what changes, capabilities, impact
-  - [`design.md`](openspec/changes/bootstrap-sunny/design.md) — per-capability design decisions, rejected alternatives, and the post-design review resolutions
-  - [`specs/`](openspec/changes/bootstrap-sunny/specs/) — ten capability specs (requirements + scenarios)
-  - [`tasks.md`](openspec/changes/bootstrap-sunny/tasks.md) — phased build plan
+The full architecture lives in [`openspec/`](openspec/) — canonical capability specs in
+[`openspec/specs/`](openspec/specs/), planned work in [`openspec/changes/`](openspec/changes/),
+and the design history (proposals, design decisions, rejected alternatives) under
+[`openspec/changes/archive/`](openspec/changes/archive/).
 
 ## Capabilities
 
