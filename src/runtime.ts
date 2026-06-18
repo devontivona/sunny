@@ -20,16 +20,23 @@ export interface Runtime {
   db: Db;
 }
 
-let startedPromise: Promise<Runtime> | null = null;
-
 /**
  * Memoized startup shared by all entrypoints (Nitro routes + plugin). Runs once:
  * load config, connect Postgres + migrate, seed memory, wire the gateway. The
  * WDK Postgres world is started separately by the Nitro plugin.
+ *
+ * The memo is pinned on `globalThis` (not a module-level `let`) so it survives
+ * Vite's server-module re-evaluation in the unified dev server: a back-end edit
+ * re-evals route modules but MUST NOT re-run startup, or each edit would leak a
+ * new scheduler interval + Sendblue init + world subscription. In standalone
+ * Nitro this is just a singleton (a no-op difference).
  */
+const RUNTIME_KEY = Symbol.for('sunny.runtime');
+
 export function getRuntime(): Promise<Runtime> {
-  if (!startedPromise) startedPromise = start();
-  return startedPromise;
+  const g = globalThis as Record<symbol, unknown>;
+  if (!g[RUNTIME_KEY]) g[RUNTIME_KEY] = start();
+  return g[RUNTIME_KEY] as Promise<Runtime>;
 }
 
 async function start(): Promise<Runtime> {
@@ -82,20 +89,27 @@ async function start(): Promise<Runtime> {
   }
 
   // Scheduling (D-SC2): the ~60s ticker dispatches due schedules as durable jobs.
-  startScheduler({
-    db,
-    dispatch: async (schedule, runId) => {
-      await startWorkflow(runScheduledJob, [
-        {
-          scheduleId: schedule.id,
-          runId,
-          threadId: schedule.threadId,
-          prompt: schedule.prompt,
-          ownerName: config.owner.name,
-        },
-      ]);
-    },
-  });
+  // SUNNY_DISABLE_SCHEDULER=1 lets a second instance run without scheduling — e.g.
+  // the unified dashboard service during the interim where it overlaps the legacy
+  // gateway against one DB (avoids double-firing schedules until cutover).
+  if (process.env.SUNNY_DISABLE_SCHEDULER === '1') {
+    log.warn('scheduler disabled (SUNNY_DISABLE_SCHEDULER=1) — this instance will not fire schedules');
+  } else {
+    startScheduler({
+      db,
+      dispatch: async (schedule, runId) => {
+        await startWorkflow(runScheduledJob, [
+          {
+            scheduleId: schedule.id,
+            runId,
+            threadId: schedule.threadId,
+            prompt: schedule.prompt,
+            ownerName: config.owner.name,
+          },
+        ]);
+      },
+    });
+  }
 
   log.info('runtime started');
   return { config, gateway, store, db };

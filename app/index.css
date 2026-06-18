@@ -1,0 +1,93 @@
+@import 'tailwindcss';
+/* Theme tokens generated from DESIGN.md (D-WD7) — do not hand-edit theme.css. */
+@import './theme.css';
+
+/*
+ * Global terminal baseline. The DESIGN.md export quotes each fontFamily token as
+ * a single CSS string (an alpha-tool quirk), so the monospace stack is applied
+ * here as the document default rather than via the generated `--font-*` tokens.
+ * Everything else (colors, sizes, radii, spacing, tracking) comes from theme.css.
+ */
+:root {
+  --font-mono: ui-monospace, 'JetBrains Mono', 'Fira Code', 'SFMono-Regular', Menlo, Consolas,
+    monospace;
+  /* The terminal cell: one row of vertical rhythm. Everything is a multiple. */
+  --row: 24px;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-mono);
+  background-color: var(--color-bg);
+  color: var(--color-fg);
+  /* Clip any few-px horizontal overflow (e.g. trailing letter-spacing) so it
+     can't trigger a horizontal scrollbar — which would steal height and force a
+     phantom vertical scrollbar. `clip` (not `hidden`) leaves vertical scroll alone. */
+  overflow-x: clip;
+  /* One size, one line height — the grid (D-WD2 / DESIGN.md typography). */
+  font-size: 15px;
+  line-height: var(--row);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  font-family: inherit;
+}
+
+/* Single type size: native headings must not scale. Hierarchy is weight/case/rules. */
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-size: 1em;
+  line-height: var(--row);
+  margin: 0;
+}
+
+/* Every interactive element reads as a hyperlink, not a button (TUI). */
+button {
+  font: inherit;
+  line-height: var(--row);
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+/* Thin, terminal-style scrollbars. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border) transparent;
+}
+*::-webkit-scrollbar {
+  height: 8px;
+  width: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: var(--radius-full);
+}
+
+/* Opt-out: scrolls but shows no scrollbar (e.g. the nav, horizontally-scrolling tables). */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+a {
+  color: var(--color-tertiary);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}

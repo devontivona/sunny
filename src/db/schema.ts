@@ -87,3 +87,52 @@ export const scheduleRuns = pgTable('schedule_runs', {
 
 export type ScheduleRow = typeof schedules.$inferSelect;
 export type NewScheduleRow = typeof schedules.$inferInsert;
+
+/**
+ * Web-dashboard authentication store (web-dashboard D-WD4). The dashboard runs as
+ * a separate process but shares this Postgres; these are the ONLY tables it
+ * writes. Everything else it touches (messages, schedules, memory files) is
+ * read-only. Sessions are server-side + revocable; access requests are the
+ * iMessage-approval device-pairing handshake.
+ */
+
+/** An issued, revocable browser session (httpOnly signed cookie carries the id). */
+export const dashboardSessions = pgTable(
+  'dashboard_sessions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    /** Coarse device hint captured at issuance (user-agent + IP/time). */
+    deviceHint: text('device_hint'),
+    revoked: boolean('revoked').notNull().default(false),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('dashboard_sessions_expiry_idx').on(t.revoked, t.expiresAt)],
+);
+
+/**
+ * A pending device-pairing request. The owner approves by tapping a one-time
+ * link (carrying `secret`) delivered to their DM; the requesting browser (bound
+ * by a pending cookie) then exchanges the approved request for a session. Status
+ * default-denies on timeout.
+ */
+export const accessRequests = pgTable(
+  'access_requests',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    /** One-time approval secret; only ever delivered to the owner's DM. */
+    secret: text('secret').notNull(),
+    deviceHint: text('device_hint'),
+    status: text('status').notNull().default('pending'), // 'pending' | 'approved' | 'denied' | 'expired' | 'consumed'
+    /** The session minted when the approved request is exchanged (one-time). */
+    sessionId: uuid('session_id'),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    approvedAt: timestamp('approved_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('access_requests_status_idx').on(t.status, t.expiresAt)],
+);
+
+export type DashboardSessionRow = typeof dashboardSessions.$inferSelect;
+export type AccessRequestRow = typeof accessRequests.$inferSelect;

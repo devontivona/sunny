@@ -1,0 +1,112 @@
+// JSON shapes returned by the dashboard's read-only API (src/dashboard/api/*).
+// Kept in sync by hand with the server transforms — the app and server build
+// under different tsconfigs, so they don't share a module.
+
+export interface MemoryCore {
+  sunny: string;
+  user: string;
+  index: string;
+}
+
+export interface TopicSummary {
+  name: string;
+  /** The INDEX.md router line for this topic, if present. */
+  summary: string | null;
+}
+
+export interface TopicDoc {
+  name: string;
+  content: string;
+}
+
+export interface TurnUsage {
+  in: number | null;
+  out: number | null;
+  cached: number | null;
+  cacheWrite: number | null;
+}
+
+export interface ConversationMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  timestamp: string;
+  senderName: string | null;
+  /** Delivered bubbles: the user's text, or each assistant `send_message`. */
+  delivered: string[];
+  /** Assistant's retained private scratch (never delivered); null for users. */
+  scratch: string | null;
+  delivery: string | null;
+  steps: number | null;
+  usage: TurnUsage | null;
+}
+
+export interface ThreadSummary {
+  threadId: string;
+  label: string;
+  isGroup: boolean;
+  lastAt: string;
+  count: number;
+  preview: string;
+}
+
+export interface SearchHit {
+  id: string;
+  threadId: string;
+  role: 'user' | 'assistant';
+  timestamp: string;
+  senderName: string | null;
+  text: string;
+}
+
+export interface ScheduleRunView {
+  id: string;
+  firedAt: string;
+  status: string;
+  output: string | null;
+  error: string | null;
+}
+
+export interface ScheduleView {
+  id: string;
+  kind: string;
+  spec: string;
+  label: string | null;
+  prompt: string;
+  threadId: string;
+  timezone: string;
+  active: boolean;
+  nextRunAt: string | null;
+  lastRunAt: string | null;
+  runs: ScheduleRunView[];
+}
+
+export interface ActivityTurn {
+  id: string;
+  threadId: string;
+  timestamp: string;
+  model: string | null;
+  delivery: string | null;
+  steps: number | null;
+  usage: TurnUsage | null;
+}
+
+export interface HealthComponent {
+  ok: boolean;
+  detail: string;
+}
+
+export interface Health {
+  service: HealthComponent;
+  database: HealthComponent;
+  scheduler: HealthComponent;
+  gateway: HealthComponent;
+  unprocessedInbound: number;
+  generatedAt: string;
+}
+
+export type AuthState =
+  | { state: 'authenticated' }
+  | { state: 'open' } // dev-open (DASHBOARD_DEV_OPEN=1): no gate
+  | { state: 'unconfigured' } // no session secret set: dashboard disabled
+  | { state: 'anonymous' }
+  | { state: 'pending'; requestId: string; deviceHint: string };
