@@ -65,12 +65,13 @@ Each eval run SHALL produce a persisted scorecard (per-case and per-dimension pa
 - **AND** it can be compared against a prior run to surface regressions
 
 ### Requirement: Evals are cost-controlled and off the per-commit path
-Evals SHALL be invoked on demand or on a schedule, never as part of the per-commit CI gate, and SHALL be bounded by a cost cap. An eval run that would exceed its budget SHALL stop and report rather than continue spending.
+Evals SHALL be invoked on demand (locally and via a manual CI trigger), never as part of the per-commit CI gate, and SHALL be bounded by a cost cap. An eval run that would exceed its budget SHALL stop and report rather than continue spending. Project guidance SHALL direct running the evals after any change to agent behavior (prompt, loop, tools, model, or memory wiring).
 
 #### Scenario: Eval run respects its budget cap
 - **WHEN** an eval run reaches its configured cost cap
 - **THEN** the run stops and reports what completed rather than continuing to spend
 
-#### Scenario: Results delivered over the gateway
-- **WHEN** a scheduled eval run finishes
-- **THEN** its scorecard summary can be delivered to the owner over the messaging gateway
+#### Scenario: Evals excluded from the merge gate
+- **WHEN** the per-commit CI gate runs
+- **THEN** it does not invoke the eval harness
+- **AND** the eval harness is invocable on demand locally and via a manual CI trigger

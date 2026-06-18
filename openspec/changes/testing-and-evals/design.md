@@ -55,10 +55,19 @@ Most checks are **programmatic trajectory assertions** on the loop's native outp
 Each case runs N times (configurable); the score is the pass rate vs a per-case/dimension threshold. This is the core accommodation for nondeterminism — a single failing sample is signal, not a red build. Thresholds start lenient and tighten as behavior stabilizes.
 
 ### D9: Two CI lanes, evals out of the gate
-`typecheck + unit + integration` run on every push/PR (GitHub Actions, Postgres service container) and block merge. Evals run **on demand** (`npm run eval`) or **scheduled**, as a separate Vitest project, bounded by a cost cap. Keeping evals off the per-commit path is what makes the scheme affordable and non-flaky.
+`typecheck + unit + integration` run on every push/PR (GitHub Actions, Postgres service container) and block merge. Evals run **on demand** — locally via `npm run eval` and in CI via a manual `workflow_dispatch` — as a separate Vitest project, bounded by a cost cap. There is **no automatic eval schedule**; instead, agent guidance (D11/AGENTS.md) directs running evals after any change to *agent behavior*. Keeping evals off the per-commit path is what makes the scheme affordable and non-flaky.
 
 ### D10: File-based scorecards now; Langfuse deferred
 Each eval run writes a JSON scorecard (per-case + per-dimension pass rates, model, timestamp, cost) plus a run-over-run regression diff — enough to catch behavioral drift without standing up infrastructure. A self-hosted **Langfuse** (MIT, fully free self-hosted for evals, offline CI) is the sanctioned escalation *if/when* we want a persistent dashboard, dataset management, and trend history; because datasets + assertions run against AI SDK's portable `result.steps`, adopting it later won't rewrite what evals check. When `observability` lands, scorecard persistence + the eval cost cap can move onto its trajectory/budget machinery.
+
+### D11: GitHub Actions — two workflows, secret-free gate, manual evals
+The project is GitHub-hosted, so CI is two Actions workflows:
+- **`ci.yml` (the merge gate)** — on `pull_request` + `push` to `main`: `setup-node` (Node 22, npm cache) → `npm ci` → `typecheck` → `unit` → WDK world setup → `integration`, with a **Postgres service container** (`pgvector/pgvector:pg16`). It uses the mock model, so it needs **no `ANTHROPIC_API_KEY`** and runs safely on fork PRs at zero API cost. `main` gets **branch protection** requiring this check.
+- **`evals.yml` (off the gate)** — `workflow_dispatch` only (no `schedule`): `npm run eval` with the `ANTHROPIC_API_KEY` secret + cost cap and a `concurrency` guard, uploading the JSON scorecard as a build artifact. Manual by choice — cost stays opt-in.
+
+**Testcontainers ↔ service container reconciliation (closes D4's loose end):** the integration fixture uses `process.env.TEST_DATABASE_URL` when present, else spins up Testcontainers. CI sets `TEST_DATABASE_URL` to its service container (fast, no nested Docker); local dev gets zero-setup Testcontainers. Identical tests, both environments.
+
+**Process guidance (AGENTS.md), not just config:** (1) **before pushing**, run the full deterministic suite locally — `npm run typecheck && npm run test && npm run test:integration` (integration needs Docker for Testcontainers); (2) **after changing agent behavior** — prompt, loop, tools, model, or memory wiring — run `npm run eval` and check the scorecard for regressions before pushing. Evals are never required by the gate, but the agent is told to exercise them when behavior changes.
 
 ## Risks / Trade-offs
 
