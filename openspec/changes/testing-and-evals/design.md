@@ -53,7 +53,7 @@ Survey conclusion for a self-hosted, no-egress-preferred, *agentic*, Vitest-base
 *Rejected:* **Braintrust** — the platform is closed and ships results to its backend by default (Enterprise-gated self-host), failing the no-egress constraint (its `autoevals` lib is fine à la carte, which is what we use). **Phoenix** (JS evals alpha) and **Laminar** (no trajectory primitive) are weaker TS-agent fits today. A **pure in-house harness** was viable but rebuilds the dataset/scoring/threshold/concurrency plumbing vitest-evals already provides; low lock-in makes the framework the better start.
 
 ### D7: Assert on AI SDK `result.steps`; judge with a cheaper, independent model
-Most checks are **programmatic trajectory assertions** on the loop's native outputs — `result.steps.flatMap(s => s.toolCalls)`, the `delivered` classification, the persisted projection — which is cheaper and far less flaky than judge-heavy grading. The architecture makes this possible because *speaking is a tool call*, so "did it use `send_message`?" is a fact, not an opinion. LLM-as-judge (autoevals) is reserved for genuinely fuzzy qualities (tone, helpfulness, natural memory use) and uses a **different, cheaper model** than the one under test (e.g. Sonnet/Haiku judging an Opus turn) to stay independent and bound cost; the judge model + rubric are versioned with each result.
+Most checks are **programmatic trajectory assertions** on the loop's native outputs — `result.steps.flatMap(s => s.toolCalls)`, the `delivered` classification, the persisted projection — which is cheaper and far less flaky than judge-heavy grading. The architecture makes this possible because *speaking is a tool call*, so "did it use `send_message`?" is a fact, not an opinion. LLM-as-judge (autoevals) is reserved for genuinely fuzzy qualities (tone, helpfulness, natural memory use) and uses **Sonnet** — a different, cheaper model than the Opus turn under test — to stay independent and bound cost (D14); the judge model + rubric are versioned with each result.
 
 Graders assert on the **trajectory** (`result.steps` tool calls + the captured outbound), not on database state — note that an owner-DM turn fire-and-forget seeds the nightly-consolidation schedule, so the `schedules` table is never empty during evals; a "no schedule created" check must look at the turn's tool calls, not the table.
 
@@ -107,6 +107,12 @@ Fix: a **behavior-preserving DI refactor** that gives `createAgentRunner` option
 
 This is preferred over `vi.mock('./model.js')` / `vi.mock('workflow/api')`: module-mocking works but is opaque and easy to drift, whereas explicit DI keeps the real composition visible and is the same path production uses.
 
+### D14: Eval configuration — TS cases, Opus under test, Sonnet judge
+- **Case format: typed TS modules** (not YAML). vitest-evals datasets are TS, and TS gives types on the case/grader shape and lets cases reference grader code directly — worth more than YAML's lighter diffs for a dataset this size. Cases stay versioned, reviewable files under `evals/cases/**`.
+- **Model under test: Opus (`claude-opus-4-8`), the production model** — "practice like we play": the eval measures the real production path, not a cheaper proxy. A cheaper model remains overridable per run for fast local iteration, but the default and the baseline are Opus.
+- **Judge: Sonnet** — independent from the Opus under test and materially cheaper, while a stronger judge than Haiku for the fuzzy tone/quality calls.
+- **N (runs per case): configurable, small default** (≈5) with lenient initial thresholds (D8), tightened as behavior stabilizes — a tuning knob, not an architectural choice.
+
 ## Risks / Trade-offs
 
 - **WDK is experimental and doesn't run on PGlite** (graphile_worker needs multi-connection / LISTEN-NOTIFY) → Scope the durable test to **step-function idempotency** — a replayed `memory_write` step applies its effect exactly once — against PGlite + the memory fs, *without* standing up the graphile_worker world. Treat a full crash/restart-resume run as a boundary; if ever wanted it uses the `TEST_DATABASE_URL` real-PG hatch and stays out of the default gate.
@@ -128,6 +134,4 @@ Rollback: remove the CI lane / scripts; the directories, dev-deps, and the extra
 
 ## Open Questions
 
-- **Eval case file format** — YAML vs a typed TS module. YAML is reviewer-friendly; TS gives types and reuse of grader code. vitest-evals leans toward TS datasets, which may settle this toward TS.
-- **Default eval model & N** — production Opus for the truest signal vs a cheaper model for routine runs with Opus reserved for release gates. Likely both, configured per lane.
-- **Judge model** — Sonnet vs Haiku for the autoevals judge; trade grading fidelity against cost.
+None outstanding at design time. The earlier configuration questions are resolved in D14 (TS cases, Opus under test, Sonnet judge, configurable small N). The only deferred items are explicit non-goals already scoped out: security-gating evals (Phase-4 `security-tools-credentials`) and a full WDK crash-resume test (behind the `TEST_DATABASE_URL` real-PG hatch).

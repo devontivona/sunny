@@ -53,10 +53,10 @@
 ## 7. Eval harness (vitest-evals + autoevals)
 
 - [ ] 7.1 Wire vitest-evals driving the real loop against the fake gateway + the recording fake durable-`start` (2.4); model via `config.modelId` (default `claude-opus-4-8`); graders read the captured trajectory, not DB state
-- [ ] 7.2 Eval case schema + loader (setup: seeded memory via `applyMemoryWrite`/store APIs, conversation, config; input message(s); grader refs) under `evals/cases/**`
+- [ ] 7.2 Eval case schema + loader as typed TS modules under `evals/cases/**` (setup: seeded memory via `applyMemoryWrite`/store APIs, conversation, config, `isOwner`/`isGroup`; input message(s); grader refs)
 - [ ] 7.3 Programmatic graders over `result.steps` + `delivered`: tool-called / `sendCount` / correct-tool-for-request / fact-recalled
-- [ ] 7.4 LLM-as-judge graders via autoevals with a cheaper, independent judge model (e.g. Sonnet/Haiku); record judge model + rubric version
-- [ ] 7.5 N-run pass-rate scoring with per-case/dimension thresholds
+- [ ] 7.4 LLM-as-judge graders via autoevals with Sonnet as the independent judge (cheaper than the Opus under test); record judge model + rubric version
+- [ ] 7.5 N-run pass-rate scoring (configurable N, default ≈5) with per-case/dimension thresholds, lenient to start
 - [ ] 7.6 File-based scorecard output (per-case + per-dimension pass rates, model, timestamp, cost); diff each run against the committed `evals/baseline.json` baseline; updating the baseline is an explicit, reviewed commit (D10)
 - [ ] 7.7 Cost-cap enforcement: stop-and-report when an eval run hits its budget
 - [ ] 7.8 `npm run eval` entrypoint (select dimension, model, N)
