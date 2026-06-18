@@ -30,7 +30,14 @@ export async function runEvalCase(c: EvalCase, modelId = DEFAULT_MODEL_ID): Prom
     const config = makeConfig({ modelId, ...c.setup?.config });
     await seedMemory(config, c.setup?.memory ?? []);
 
-    const rt = createTestRuntime({ db: tdb.db, model: anthropic(modelId), config });
+    // Evals exercise the REAL delivery-recovery path (Haiku): a missed turn must
+    // actually recover so the elicitation metric reflects production behavior.
+    const rt = createTestRuntime({
+      db: tdb.db,
+      model: anthropic(modelId),
+      recoveryModel: anthropic(config.recoveryModelId),
+      config,
+    });
 
     // Seed prior conversation through the real store (so format drift is caught).
     let n = 0;
