@@ -29,12 +29,12 @@ There SHALL be a fake `Gateway` driver that records outbound messages and lets t
 - **THEN** the reply is captured by the fake gateway for assertion
 - **AND** nothing is sent to Sendblue
 
-### Requirement: Ephemeral database fixture
-Integration tests SHALL run against a disposable Postgres instance whose schema is created from the project's Drizzle migrations at setup and discarded at teardown, isolated from any development or production database.
+### Requirement: In-process database fixture, no external services
+Integration tests SHALL run against an in-process Postgres whose schema is created from the project's Drizzle migrations at setup and discarded at teardown, requiring no Docker daemon or external database. The fixture MAY accept an override (e.g. a `TEST_DATABASE_URL`) to target a real Postgres for cases the in-process engine cannot host.
 
-#### Scenario: Fresh schema per integration run
+#### Scenario: Fresh schema per integration run, without Docker
 - **WHEN** the integration lane starts
-- **THEN** a disposable Postgres is provisioned and migrated to current schema
+- **THEN** an in-process Postgres is created and migrated to current schema with no Docker or external service
 - **AND** test data does not touch the dev or production database
 
 #### Scenario: Keyword recall is covered

@@ -2,13 +2,13 @@
 
 - [ ] 1.1 Add Vitest + coverage as dev deps; `vitest.config.ts` with projects: unit (`**/*.unit.test.ts`), integration (`**/*.integration.test.ts`, DB setup), and evals (`evals/**`, excluded from default run)
 - [ ] 1.2 Add npm scripts: `test` (unit), `test:integration`, `test:all`, `test:watch`, `coverage`, `eval`
-- [ ] 1.3 Document in AGENTS.md: the testing conventions (lanes, naming, seams, fake timers); **before pushing**, run the full deterministic suite (`npm run typecheck && npm run test && npm run test:integration`, Docker required for integration); **after changing agent behavior** (prompt/loop/tools/model/memory), run `npm run eval` and check the scorecard for regressions
+- [ ] 1.3 Document in AGENTS.md: the testing conventions (lanes, naming, seams, fake timers); **before pushing**, run the full deterministic suite (`npm run typecheck && npm run test && npm run test:integration` — no Docker needed, integration uses in-process PGlite); **after changing agent behavior** (prompt/loop/tools/model/memory), run `npm run eval` and check the scorecard for regressions
 
 ## 2. Seams & fixtures
 
 - [ ] 2.1 Mock language model fixture wrapping `MockLanguageModelV3` + `simulateReadableStream` from `ai/test`; helpers to script text + tool-call sequences; inject at the `getModel()` seam
 - [ ] 2.2 Fake `Gateway` driver implementing `src/gateway/types.ts` — records outbound `send`, exposes `injectInbound(...)`, assertable outbound buffer
-- [ ] 2.3 Ephemeral Postgres fixture (Testcontainers `pgvector/pgvector:pg16`): provision, run Drizzle migrations (incl. the tsvector/GIN SQL migration), expose client, truncate-between-cases, teardown
+- [ ] 2.3 In-process Postgres fixture via PGlite (`@electric-sql/pglite` + `drizzle-orm/pglite`): fresh in-memory instance per test file, run Drizzle migrations (incl. the tsvector/GIN SQL migration), expose client, teardown — no Docker; honor optional `TEST_DATABASE_URL` real-PG override
 - [ ] 2.4 Runtime test-composition helper wiring the fakes (mock model + fake gateway + ephemeral DB) into the real runtime
 - [ ] 2.5 Establish the Vitest fake-timers pattern (`vi.useFakeTimers()` / `vi.setSystemTime()`) for time-dependent tests
 
@@ -33,12 +33,12 @@
 - [ ] 5.3 `ConversationStore.recall` tsvector/FTS keyword recall against real Postgres
 - [ ] 5.4 Scheduler ticker under fake timers + real DB: due dispatch, `nextRunAt` advance, one-shot deactivation, `scheduleRuns` row, `MAX_PER_TICK`, `ensureConsolidationSchedule` idempotency
 - [ ] 5.5 Agent loop end-to-end (mock model + fake gateway + real DB): scripted `send_message` → captured outbound + `delivered:'send_message'` + D-MG9 turn row; scratch-only → `fallback_text` delivered & flagged
-- [ ] 5.6 Durable workflow step idempotency: a replayed `memory_write` step applies its effect exactly once (within WDK test support; boundary)
+- [ ] 5.6 Durable workflow step idempotency: a replayed `memory_write` step applies its effect exactly once, tested against PGlite + the memory fs without standing up the graphile_worker world (full crash-resume is a boundary, gated behind `TEST_DATABASE_URL` real-PG if ever exercised)
 
 ## 6. CI (GitHub Actions)
 
-- [ ] 6.1 Integration fixture honors `TEST_DATABASE_URL` when set, else falls back to Testcontainers (CI = service container, local = Testcontainers)
-- [ ] 6.2 `.github/workflows/ci.yml` (merge gate) on `pull_request` + `push` to `main`: `npm ci` → typecheck → unit → WDK world setup → integration, with a `pgvector/pgvector:pg16` service container; no `ANTHROPIC_API_KEY` (mock model → fork-safe, zero API cost)
+- [ ] 6.1 Integration fixture defaults to in-process PGlite (no env, no Docker); uses `TEST_DATABASE_URL` real Postgres only when explicitly set
+- [ ] 6.2 `.github/workflows/ci.yml` (merge gate) on `pull_request` + `push` to `main`: `npm ci` → typecheck → unit → integration; no service container, no Docker, no `ANTHROPIC_API_KEY` (mock model + PGlite → fork-safe, zero API cost)
 - [ ] 6.3 `.github/workflows/evals.yml` off the gate: `workflow_dispatch` only, `ANTHROPIC_API_KEY` secret + cost cap + `concurrency` guard, uploads the scorecard artifact
 - [ ] 6.4 Configure `main` branch protection to require the `ci.yml` check
 
