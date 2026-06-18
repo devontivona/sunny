@@ -11,6 +11,8 @@
 :root {
   --font-mono: ui-monospace, 'JetBrains Mono', 'Fira Code', 'SFMono-Regular', Menlo, Consolas,
     monospace;
+  /* The terminal cell: one row of vertical rhythm. Everything is a multiple. */
+  --row: 24px;
 }
 
 html {
@@ -22,14 +24,42 @@ body {
   font-family: var(--font-mono);
   background-color: var(--color-bg);
   color: var(--color-fg);
-  font-size: var(--text-body-md);
-  line-height: 1.6;
+  /* Clip any few-px horizontal overflow (e.g. trailing letter-spacing) so it
+     can't trigger a horizontal scrollbar — which would steal height and force a
+     phantom vertical scrollbar. `clip` (not `hidden`) leaves vertical scroll alone. */
+  overflow-x: clip;
+  /* One size, one line height — the grid (D-WD2 / DESIGN.md typography). */
+  font-size: 15px;
+  line-height: var(--row);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
 
 * {
   font-family: inherit;
+}
+
+/* Single type size: native headings must not scale. Hierarchy is weight/case/rules. */
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-size: 1em;
+  line-height: var(--row);
+  margin: 0;
+}
+
+/* Every interactive element reads as a hyperlink, not a button (TUI). */
+button {
+  font: inherit;
+  line-height: var(--row);
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
 }
 
 /* Thin, terminal-style scrollbars. */

@@ -2,12 +2,12 @@ import { useState } from 'react';
 import { apiGet } from '../api';
 import type { ConversationMessage, SearchHit, ThreadSummary } from '../types';
 import { Markdown } from '../components/Markdown';
-import { ErrorNote, Loading, Panel, PageTitle, formatTime, useAsync } from '../components/ui';
+import { Link, LinkButton } from '../components/Link';
+import { ErrorNote, Loading, PageTitle, formatTime, useAsync } from '../components/ui';
 import { navigate } from '../router';
 
-// Conversation view (5.3): recent messages per thread — role, time, delivered
-// bubbles, and (for Sunny) the retained private scratch — plus keyword search
-// over the full archive (backed by `recall()` / FTS).
+// Conversation view (5.3): an index page (search + thread list) and a nested
+// thread page (breadcrumb + messages with retained scratch + keyword search).
 
 interface ThreadList {
   threads: ThreadSummary[];
@@ -22,9 +22,9 @@ function Bubble({ m }: { m: ConversationMessage }) {
   const isSunny = m.role === 'assistant';
   return (
     <div className="mb-md">
-      <div className="mb-xs flex items-baseline gap-sm text-label-sm tracking-[0.08em] text-fg-dim">
+      <div className="mb-xs flex items-baseline gap-sm text-fg-dim">
         <span className={isSunny ? 'text-secondary' : 'text-primary'}>
-          {isSunny ? 'サニー' : (m.senderName ?? 'user')}
+          {isSunny ? 'サニー' : m.senderName || 'You'}
         </span>
         <span>{formatTime(m.timestamp)}</span>
         {m.delivery && m.delivery !== 'send_message' && (
@@ -32,25 +32,20 @@ function Bubble({ m }: { m: ConversationMessage }) {
         )}
       </div>
       {m.delivered.length > 0 ? (
-        <div className="space-y-xs">
+        <div className="text-fg">
           {m.delivered.map((text, i) => (
-            <div
-              key={i}
-              className="rounded-md border border-border bg-surface px-md py-sm text-body-md text-fg"
-            >
-              <Markdown>{text}</Markdown>
-            </div>
+            <Markdown key={i}>{text}</Markdown>
           ))}
         </div>
       ) : (
-        !m.scratch && <div className="text-body-sm text-fg-dim italic">(silent turn)</div>
+        !m.scratch && <div className="text-fg-dim italic">(silent turn)</div>
       )}
       {m.scratch && (
-        <details className="mt-xs rounded-md border border-dashed border-border/70 bg-bg-dark/40 px-md py-sm">
-          <summary className="cursor-pointer text-label-sm tracking-[0.08em] text-fg-dim">
-            retained scratch (private)
+        <details className="mt-xs pl-md">
+          <summary className="cursor-pointer list-none text-primary hover:underline [&::-webkit-details-marker]:hidden">
+            › Retained scratch (private)
           </summary>
-          <div className="mt-sm text-body-sm text-fg-muted">
+          <div className="mt-xs text-fg-muted">
             <Markdown>{m.scratch}</Markdown>
           </div>
         </details>
@@ -59,120 +54,124 @@ function Bubble({ m }: { m: ConversationMessage }) {
   );
 }
 
-function Search() {
+/** Index page: a search prompt above the thread list. When searching, the
+ *  results replace the thread list as the body (annotations #5/#6). */
+function ConversationIndex() {
   const [q, setQ] = useState('');
   const [submitted, setSubmitted] = useState('');
-  const state = useAsync<{ results: SearchHit[] }>(
+  const searching = submitted.trim().length > 0;
+
+  const threads = useAsync<ThreadList>(() => apiGet<ThreadList>('/conversation/threads'), []);
+  const results = useAsync<{ results: SearchHit[] }>(
     () =>
-      submitted.trim()
+      searching
         ? apiGet<{ results: SearchHit[] }>(`/conversation/search?q=${encodeURIComponent(submitted)}`)
         : Promise.resolve({ results: [] }),
     [submitted],
   );
+
   return (
-    <Panel title="keyword search">
+    <div>
+      <PageTitle>Conversation</PageTitle>
       <form
         onSubmit={(e) => {
           e.preventDefault();
           setSubmitted(q);
         }}
-        className="mb-sm flex gap-sm"
+        className="mb-md flex items-baseline gap-sm"
       >
+        <span className="text-fg-dim" aria-hidden>
+          $
+        </span>
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="search message history…"
-          className="flex-1 rounded-sm border border-border bg-bg-dark px-sm py-xs text-body-sm text-fg outline-none focus:border-primary"
+          placeholder="Search message history…"
+          className="flex-1 bg-transparent px-0 text-fg caret-primary outline-none placeholder:text-fg-dim"
         />
-        <button
-          type="submit"
-          className="rounded-sm border border-border px-md py-xs text-label-md text-fg-muted hover:bg-surface-elevated hover:text-fg"
-        >
-          recall
-        </button>
+        {searching && (
+          <LinkButton
+            onClick={() => {
+              setQ('');
+              setSubmitted('');
+            }}
+          >
+            clear
+          </LinkButton>
+        )}
       </form>
-      {submitted && state.status === 'loading' && <Loading />}
-      {state.status === 'error' && <ErrorNote error={state.error} />}
-      {submitted && state.status === 'ready' && (
-        state.data.results.length === 0 ? (
-          <p className="text-body-sm text-fg-dim">no matches.</p>
+
+      {searching ? (
+        results.status === 'loading' ? (
+          <Loading />
+        ) : results.status === 'error' ? (
+          <ErrorNote error={results.error} />
+        ) : results.data.results.length === 0 ? (
+          <p className="text-fg-dim">No matches.</p>
         ) : (
           <ul className="space-y-sm">
-            {state.data.results.map((h) => (
-              <li key={h.id} className="border-l-2 border-border pl-md">
-                <div className="text-label-sm text-fg-dim">
+            {results.data.results.map((h) => (
+              <li key={h.id}>
+                <div className="text-fg-dim">
                   <span className={h.role === 'assistant' ? 'text-secondary' : 'text-primary'}>
-                    {h.role === 'assistant' ? 'サニー' : (h.senderName ?? 'user')}
+                    {h.role === 'assistant' ? 'サニー' : h.senderName || 'You'}
                   </span>{' '}
                   · {formatTime(h.timestamp)}
                 </div>
-                <div className="text-body-sm text-fg-muted line-clamp-3">{h.text}</div>
+                <div className="line-clamp-3 text-fg-muted">{h.text}</div>
               </li>
             ))}
           </ul>
         )
+      ) : threads.status === 'loading' ? (
+        <Loading />
+      ) : threads.status === 'error' ? (
+        <ErrorNote error={threads.error} />
+      ) : threads.data.threads.length === 0 ? (
+        <p className="text-fg-dim">No threads yet.</p>
+      ) : (
+        <ul>
+          {threads.data.threads.map((t) => (
+            <li key={t.threadId} className="flex items-baseline justify-between gap-md">
+              <LinkButton onClick={() => navigate(`conversation/${encodeURIComponent(t.threadId)}`)}>
+                {t.label}
+              </LinkButton>
+              <span className="shrink-0 text-fg-dim">
+                {t.count} · {formatTime(t.lastAt)}
+              </span>
+            </li>
+          ))}
+        </ul>
       )}
-    </Panel>
+    </div>
   );
 }
 
-function ThreadDetailView({ threadId }: { threadId: string }) {
+/** Nested thread page: breadcrumb back to the index, then the messages (#5). */
+function ThreadPage({ threadId }: { threadId: string }) {
   const state = useAsync<ThreadDetail>(
     () => apiGet<ThreadDetail>(`/conversation/thread?id=${encodeURIComponent(threadId)}`),
     [threadId],
   );
+  const label = state.status === 'ready' ? state.data.label : '…';
   return (
     <div>
+      <div className="mb-md font-bold text-fg">
+        <Link to="conversation">Conversation</Link>
+        <span className="font-normal text-fg-dim"> / {label}</span>
+      </div>
       {state.status === 'loading' && <Loading />}
       {state.status === 'error' && <ErrorNote error={state.error} />}
-      {state.status === 'ready' && (
-        <Panel title={state.data.label}>
-          {state.data.messages.length === 0 ? (
-            <p className="text-body-sm text-fg-dim">no messages.</p>
-          ) : (
-            state.data.messages.map((m) => <Bubble key={m.id} m={m} />)
-          )}
-        </Panel>
-      )}
+      {state.status === 'ready' &&
+        (state.data.messages.length === 0 ? (
+          <p className="text-fg-dim">No messages.</p>
+        ) : (
+          state.data.messages.map((m) => <Bubble key={m.id} m={m} />)
+        ))}
     </div>
   );
 }
 
 export function Conversation({ threadId }: { threadId: string | null }) {
-  const threads = useAsync<ThreadList>(() => apiGet<ThreadList>('/conversation/threads'), []);
-  return (
-    <div>
-      <PageTitle>conversation</PageTitle>
-      <Search />
-      <Panel title="threads">
-        {threads.status === 'loading' && <Loading />}
-        {threads.status === 'error' && <ErrorNote error={threads.error} />}
-        {threads.status === 'ready' &&
-          (threads.data.threads.length === 0 ? (
-            <p className="text-body-sm text-fg-dim">no threads yet.</p>
-          ) : (
-            <ul className="space-y-xs">
-              {threads.data.threads.map((t) => (
-                <li key={t.threadId}>
-                  <button
-                    type="button"
-                    onClick={() => navigate(`conversation/${encodeURIComponent(t.threadId)}`)}
-                    className={[
-                      'flex w-full items-baseline justify-between gap-md rounded-sm px-sm py-xs text-left hover:bg-surface-elevated',
-                      threadId === t.threadId ? 'bg-surface-elevated' : '',
-                    ].join(' ')}
-                  >
-                    <span className="text-body-sm text-primary">{t.label}</span>
-                    <span className="shrink-0 text-label-sm text-fg-dim">
-                      {t.count} · {formatTime(t.lastAt)}
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          ))}
-      </Panel>
-      {threadId && <ThreadDetailView threadId={threadId} />}
-    </div>
-  );
+  return threadId ? <ThreadPage threadId={threadId} /> : <ConversationIndex />;
 }

@@ -2,100 +2,104 @@
 version: alpha
 name: サニー Terminal
 description: >-
-  The visual identity for Sunny's read-only web dashboard — a terminal-inspired
-  observability surface themed after the Tokyo Night VS Code palette, set in a
-  monospace coder typeface. Source of truth for the dashboard's Tailwind theme.
+  The visual identity for Sunny's read-only web dashboard — a TUI (text-user-
+  interface) rendered in the browser: GitHub Dark palette, one monospace size on
+  a fixed vertical rhythm, hierarchy from weight / case / rules, links not buttons.
 colors:
-  # Surfaces (Tokyo Night backgrounds, darkest → elevated)
-  bg: "#1a1b26"
-  bg-dark: "#16161e"
-  surface: "#1f2335"
-  surface-elevated: "#292e42"
-  border: "#414868"
+  # Surfaces (GitHub Dark "canvas", darkest → elevated)
+  bg: "#0d1117"
+  bg-dark: "#010409"
+  surface: "#161b22"
+  surface-elevated: "#21262d"
+  border: "#30363d"
   # Foreground / text
-  fg: "#c0caf5"
-  fg-muted: "#a9b1d6"
-  fg-dim: "#565f89"
-  # Accents (semantic roles map onto Tokyo Night's accent hues)
-  primary: "#7aa2f7"
-  secondary: "#bb9af7"
-  tertiary: "#7dcfff"
-  neutral: "#565f89"
+  fg: "#e6edf3"
+  fg-muted: "#8b949e"
+  fg-dim: "#6e7681"
+  # Accents (GitHub Dark semantic roles)
+  primary: "#58a6ff"
+  secondary: "#bc8cff"
+  tertiary: "#58a6ff"
+  neutral: "#6e7681"
   # Status
-  success: "#9ece6a"
-  warning: "#e0af68"
-  error: "#f7768e"
-  info: "#7dcfff"
-  accent: "#ff9e64"
+  success: "#3fb950"
+  warning: "#d29922"
+  error: "#f85149"
+  info: "#58a6ff"
+  accent: "#f0883e"
 typography:
+  # ONE size (15px) on ONE line-height (24px row). Every level is the same size;
+  # hierarchy comes from weight, case, color, and rules — never size (a terminal
+  # has a single cell height). Levels are kept as named roles only.
   masthead:
     fontFamily: ui-monospace, "JetBrains Mono", "Fira Code", monospace
-    fontSize: 28px
+    fontSize: 15px
     fontWeight: 700
-    lineHeight: 1.1
-    letterSpacing: 0.15em
+    lineHeight: 24px
+    letterSpacing: 0.2em
   headline-lg:
     fontFamily: ui-monospace, "JetBrains Mono", "Fira Code", monospace
-    fontSize: 22px
+    fontSize: 15px
     fontWeight: 700
-    lineHeight: 1.2
+    lineHeight: 24px
+    letterSpacing: 0.04em
   headline-md:
     fontFamily: ui-monospace, "JetBrains Mono", "Fira Code", monospace
-    fontSize: 17px
-    fontWeight: 600
-    lineHeight: 1.3
+    fontSize: 15px
+    fontWeight: 700
+    lineHeight: 24px
   body-lg:
     fontFamily: ui-monospace, "JetBrains Mono", "Fira Code", monospace
     fontSize: 15px
     fontWeight: 400
-    lineHeight: 1.6
+    lineHeight: 24px
   body-md:
     fontFamily: ui-monospace, "JetBrains Mono", "Fira Code", monospace
-    fontSize: 14px
+    fontSize: 15px
     fontWeight: 400
-    lineHeight: 1.6
+    lineHeight: 24px
   body-sm:
     fontFamily: ui-monospace, "JetBrains Mono", "Fira Code", monospace
-    fontSize: 12px
+    fontSize: 15px
     fontWeight: 400
-    lineHeight: 1.5
+    lineHeight: 24px
   label-md:
     fontFamily: ui-monospace, "JetBrains Mono", "Fira Code", monospace
-    fontSize: 12px
+    fontSize: 15px
     fontWeight: 500
-    lineHeight: 1.2
+    lineHeight: 24px
     letterSpacing: 0.08em
   label-sm:
     fontFamily: ui-monospace, "JetBrains Mono", "Fira Code", monospace
-    fontSize: 11px
+    fontSize: 15px
     fontWeight: 500
-    lineHeight: 1.2
-    letterSpacing: 0.1em
+    lineHeight: 24px
+    letterSpacing: 0.08em
 spacing:
-  base: 16px
-  xs: 4px
-  sm: 8px
-  md: 16px
-  lg: 24px
-  xl: 40px
+  # All vertical space is a multiple of the 24px row (or its 12px half / 6px
+  # quarter), so blocks land on the terminal grid.
+  base: 24px
+  xs: 6px
+  sm: 12px
+  md: 24px
+  lg: 36px
+  xl: 48px
+  row: 24px
 rounded:
+  # Sharp corners — a terminal draws boxes with line characters, never radii.
   none: 0px
-  sm: 3px
-  md: 6px
-  lg: 10px
+  sm: 0px
+  md: 0px
+  lg: 0px
   full: 9999px
 components:
   link:
-    textColor: "{colors.tertiary}"
-  menu-item:
+    textColor: "{colors.primary}"
+  pane:
+    backgroundColor: "{colors.bg}"
     textColor: "{colors.fg}"
-    rounded: "{rounded.sm}"
-    padding: 8px
-  card:
-    backgroundColor: "{colors.surface}"
-    textColor: "{colors.fg}"
-    rounded: "{rounded.md}"
-    padding: 16px
+    rounded: "{rounded.none}"
+    padding: 24px
 ---
 
 # サニー Terminal
@@ -104,86 +108,107 @@ components:
 
 This is the design language for **Sunny's web dashboard** — a *read-only* window
 into a personal AI agent's innards: what it remembers, what it has said (and
-privately thought), what it has scheduled, and how it is running. It is a place
-for **looking, not driving**.
+privately thought), what it has scheduled, and how it is running. A place for
+**looking, not driving**.
 
-The mood is a calm, late-night terminal: a dark canvas, a single monospace
-voice, and restrained jewel-toned accents drawn from the **Tokyo Night** VS Code
-theme. The interface should read like a well-kept `tmux` session — dense but
-legible, structured like a directory listing, never noisy. Color is used
-sparingly and semantically (status, links, emphasis), never decoratively. The
-overall feeling is precise, trustworthy, and quietly technical.
+It should not merely be *dark and monospace* — it should read as an actual
+**TUI rendered in the browser**, like `lazygit`, `htop`, or a well-kept `tmux`
+session. That means a single type size on a fixed character grid, regions drawn
+with line rules rather than floating cards, hierarchy carried by **weight, case,
+color, and spacing**, and a strict vertical rhythm so the whole page looks
+*printed by a terminal*, line by line. Precise, dense, quietly technical.
 
 ## Colors
 
-The palette is **Tokyo Night**: deep desaturated-indigo surfaces under a soft
-periwinkle foreground, with a small set of luminous accents reserved for meaning.
+The palette is **GitHub Dark** (Primer): near-black slate canvases under a soft
+off-white foreground, with a small set of accents reserved for meaning.
 
-- **Background (#1a1b26):** The base canvas — a near-black indigo that anchors
-  every page and keeps long reading sessions easy on the eyes.
-- **Surface (#1f2335) / Surface Elevated (#292e42):** Tonal layers for cards and
-  panels; depth comes from these steps in tone, not from shadow.
-- **Border (#414868):** A muted slate for hairline rules, dividers, and panel
-  edges.
-- **Foreground (#c0caf5):** The primary periwinkle text color, with **Muted
-  (#a9b1d6)** for secondary text and **Dim (#565f89)** for metadata and comments.
-- **Primary (#7aa2f7):** Tokyo Night blue — the core interactive accent for
-  emphasis and active navigation.
-- **Secondary (#bb9af7):** A magenta-violet for secondary emphasis and headings.
-- **Tertiary (#7dcfff):** Cyan — used exclusively for hyperlinks so links are
-  unmistakable against prose.
-- **Status — Success (#9ece6a), Warning (#e0af68), Error (#f7768e):** Green /
-  amber / red, used only to signal health and run outcomes.
-- **Accent (#ff9e64):** A warm orange held in reserve for the rare highlight that
-  must stand apart from the cool palette.
+- **Background (#0d1117):** The base canvas. **Inset (#010409)** is the darkest
+  well (code blocks); **Surface (#161b22)** / **Surface Elevated (#21262d)** are
+  the faint tonal steps used sparingly for grouping.
+- **Border (#30363d):** The line color — every rule, divider, and box edge.
+- **Foreground (#e6edf3):** Primary text, with **Muted (#8b949e)** for secondary
+  text and **Dim (#6e7681)** for metadata, timestamps, and comments.
+- **Primary (#58a6ff):** GitHub blue — links, active navigation, and every
+  interactive affordance (which all read as links, never buttons).
+- **Secondary (#bc8cff):** Purple — Sunny's own voice and section emphasis.
+- **Status — Success (#3fb950), Warning (#d29922), Error (#f85149):** Green /
+  amber / red, used only for health and run outcomes.
+- **Accent (#f0883e):** Orange, held in reserve for a rare highlight.
 
 ## Typography
 
-A single **monospace coder stack** (`ui-monospace, "JetBrains Mono",
-"Fira Code", monospace`) is used everywhere — the terminal aesthetic depends on
-the fixed-width grid. Hierarchy comes from size and weight, not from switching
-families.
+A single **monospace coder stack** at a **single size (15px)** on a **24px line**
+— the cell of the grid. There is exactly one font size; you may **not** scale
+text for emphasis. Hierarchy is expressed only by:
 
-- **Masthead:** The Katakana name **サニー** sits at the top of every page in
-  bold, widely letter-spaced monospace — the prompt banner of the session.
-- **Headlines:** Bold/semibold monospace establish page and section structure.
-- **Body:** Regular monospace at 14–15px with generous line-height for the
-  long-form markdown of memory and conversation.
-- **Labels:** Small, uppercase-friendly monospace with extra letter-spacing for
-  metadata, timestamps, and menu chrome — the "status line" voice.
+- **Weight** — bold for headings, section labels, and Sunny's name.
+- **Case** — **Title Case** for headings, labels, and chrome (never lowercase,
+  never ALL-CAPS). Filenames keep their literal case (`SUNNY.md`).
+- **Color** — dim for metadata, blue for links, purple for Sunny, status hues.
+- **Spacing** — headings/sections are set off by a blank row, the way a terminal
+  prints a heading; never by a larger font, a rule, or an underline.
+
+Italics may mark quoted or de-emphasized text. The masthead **サニー** is the
+same size as everything else — bold and widely spaced, like a title bar, not a
+logo.
 
 ## Layout
 
-A single-column, **fixed-max-width reading column** (roughly 960px) centered on
-the canvas, evoking a focused terminal pane. A strict **8px spacing scale** (with
-a 4px half-step) keeps a consistent vertical rhythm; cards use 16px internal
-padding.
+A single-column, **fixed-max-width reading column** (~900px) centered on the
+canvas — one focused terminal pane.
+
+**Vertical rhythm is law.** Every line of text sits on the 24px baseline grid,
+and every vertical gap (between paragraphs, list rows, sections, panels) is a
+whole multiple of the 24px row (or its 12px half). Nothing uses an arbitrary
+margin; the page should look like consecutive printed lines with blank lines
+between blocks. Horizontal padding is a multiple of the character width.
 
 Navigation differs by page depth: the **home page** presents the menu as a
-**vertical, enumerated index** (a terminal directory listing); **child pages**
-pin the menu as a **horizontal, side-scrolling bar** at the top so it never
-wraps on narrow screens.
+**vertical, enumerated index** (a directory listing); **child pages** pin the
+menu as a **horizontal, side-scrolling bar** at the top.
 
 ## Elevation & Depth
 
-Depth is conveyed through **tonal layers**, not shadow. The page background is the
-darkest tone; cards and panels step up through Surface and Surface Elevated, and
-**borders** (not drop shadows) delineate regions. This keeps the flat, matte feel
-of a terminal.
+There is **no elevation** — no shadows, no floating cards — and **no CSS borders,
+rules, dividers, or `<hr>`s**. A terminal draws structure with text and blank
+space, not strokes. Regions are delineated by **spacing (blank rows), indentation,
+and dim Title-Case labels**. The faint surface tones are used only to shade an
+inset (a code block, a selected row), never to outline or lift a region off the
+page.
 
 ## Shapes
 
-Restrained, lightly-softened rectangles. Corner radii stay small (3–10px) so the
-UI feels engineered rather than rounded; the `full` radius is reserved for status
-dots and pills. Sharp, consistent edges reinforce the technical character.
+**No CSS-drawn shapes** — no `border`, `rule`, `outline`, `box-shadow`, or rounded
+corner anywhere; structure is text on the canvas. The one exception is the
+terminal's *own* way to draw a frame: **box-drawing line characters**
+(`┌─┐ │ └─┘`, `─`) rendered as text. Used sparingly (e.g. framing the top nav),
+an ASCII line-box is on-language; a CSS border is not. The only non-text element
+in the whole UI is the small round status dot — no pills, no rounded buttons.
+
+## Components
+
+- **Links & actions:** every interactive element renders as a **hyperlink** —
+  blue text, underline on hover, no border, no fill, no padding box. Navigation,
+  "request access", search submit, tab, accordion toggle: all are link text
+  (optionally bracketed `[like this]` or prefixed `›`), never a styled button.
+- **Panes:** a titled region is just a Title-Case dim label and the content below
+  it, separated from neighbors by a blank row. No box, no border, no rule.
+- **Headings:** bold, Title-Case text on the grid, set off by a blank row — never
+  by a larger font, a rule, an underline, or a border.
+- **ASCII frames:** where a region genuinely needs a frame (e.g. the top nav),
+  draw it with box-drawing *characters* (`┌─┐ │ └─┘`), not a CSS border.
+- **Tables/lists:** dense rows on the baseline grid, columns aligned by the
+  monospace cell and separated by spacing (not hairlines); metadata dimmed.
 
 ## Do's and Don'ts
 
-- Do render links in the cyan tertiary color, as human-readable text — never show
-  a raw URL.
-- Do reserve green/amber/red strictly for status and run outcomes.
-- Do keep to the single monospace family; vary size and weight for hierarchy.
-- Don't use drop shadows; convey depth with tonal surface steps and borders.
-- Don't introduce decorative color — accents must carry meaning.
-- Don't expose any control affordance (send, edit, trigger); this surface is
-  observe-only.
+- Do render every action as a hyperlink (blue, hover-underline) — never a button.
+- Do Title-Case headings, labels, and chrome — never lowercase, never ALL-CAPS.
+- Do express hierarchy with weight, case, color, and spacing — never size.
+- Do keep every block on the 24px baseline grid for a consistent vertical rhythm.
+- Do reserve green/amber/red strictly for status and run outcomes; links stay blue.
+- Do draw any needed frame with box-drawing *characters* (`┌─┐`), used sparingly.
+- Don't use a second font size, rounded corners, shadows, cards, or any CSS border
+  / rule / divider / `<hr>` — a terminal has no strokes.
+- Don't render a raw URL, or expose any control (send/edit/trigger) — observe-only.

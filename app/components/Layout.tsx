@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { href, navigate } from '../router';
+import { LinkButton } from './Link';
 
 // Shared layout (D-WD2): the サニー masthead on every page, plus a menu whose
 // placement depends on depth — the home page renders a vertical enumerated index
@@ -13,56 +14,79 @@ export interface NavItem {
 export const NAV: NavItem[] = [
   { path: 'sunny', label: 'SUNNY.md' },
   { path: 'user', label: 'USER.md' },
-  { path: 'memory', label: 'memory' },
-  { path: 'conversation', label: 'conversation' },
-  { path: 'schedules', label: 'schedules' },
-  { path: 'activity', label: 'activity & health' },
+  { path: 'memory', label: 'Memory' },
+  { path: 'conversation', label: 'Conversation' },
+  { path: 'schedules', label: 'Schedules' },
+  { path: 'activity', label: 'Activity' },
+  { path: 'health', label: 'Health' },
 ];
 
 function Masthead() {
   return (
-    <header className="border-b border-border bg-bg-dark/60">
-      <div className="mx-auto flex max-w-[960px] items-baseline gap-md px-md py-md">
+    <header>
+      <div className="mx-auto flex max-w-[900px] items-baseline gap-sm px-md py-sm">
         <a
           href={href('')}
-          className="text-masthead font-bold tracking-[0.15em] text-fg no-underline hover:text-primary"
+          className="font-bold tracking-[0.2em] text-fg no-underline hover:text-primary"
           aria-label="home"
         >
           サニー
         </a>
-        <span className="text-label-sm tracking-[0.1em] text-fg-dim">read-only dashboard</span>
       </div>
     </header>
   );
 }
 
-/** Horizontal, side-scrolling top menu for child pages (D-WD2). */
+/**
+ * A box drawn with TUI line-characters (┌─┐ │ └─┘) — the one place we "draw" a
+ * border, with text, the way a terminal does. The top/bottom fills are a long run
+ * of `─` clipped to width.
+ */
+function AsciiBox({ children }: { children: ReactNode }) {
+  const fill = '─'.repeat(300);
+  return (
+    <div className="text-fg-dim">
+      <div className="flex select-none">
+        <span>┌</span>
+        <span className="flex-1 overflow-hidden whitespace-nowrap">{fill}</span>
+        <span>┐</span>
+      </div>
+      <div className="flex">
+        <span className="select-none">│</span>
+        <div className="min-w-0 flex-1 overflow-x-auto px-sm text-fg">{children}</div>
+        <span className="select-none">│</span>
+      </div>
+      <div className="flex select-none">
+        <span>└</span>
+        <span className="flex-1 overflow-hidden whitespace-nowrap">{fill}</span>
+        <span>┘</span>
+      </div>
+    </div>
+  );
+}
+
+/** Horizontal, side-scrolling top menu for child pages (D-WD2). Items are links. */
 function TopMenu({ active }: { active: string }) {
   return (
-    <nav className="border-b border-border bg-surface/40">
-      <div className="mx-auto max-w-[960px] overflow-x-auto px-md">
-        <ul className="flex min-w-max gap-xs py-sm">
+    <nav className="mx-auto max-w-[900px] px-md py-sm">
+      <AsciiBox>
+        <ul className="flex min-w-max gap-md">
           {NAV.map((item) => {
             const isActive = active === item.path || active.startsWith(`${item.path}/`);
             return (
-              <li key={item.path}>
-                <button
-                  type="button"
+              <li key={item.path} className="whitespace-nowrap">
+                <LinkButton
+                  active={isActive}
                   onClick={() => navigate(item.path)}
-                  className={[
-                    'whitespace-nowrap rounded-sm px-sm py-xs text-label-md tracking-[0.06em] transition-colors',
-                    isActive
-                      ? 'bg-surface-elevated text-primary'
-                      : 'text-fg-muted hover:bg-surface-elevated hover:text-fg',
-                  ].join(' ')}
+                  className={isActive ? 'text-primary' : 'text-fg-muted hover:text-primary'}
                 >
                   {item.label}
-                </button>
+                </LinkButton>
               </li>
             );
           })}
         </ul>
-      </div>
+      </AsciiBox>
     </nav>
   );
 }
@@ -76,11 +100,15 @@ export function Layout({
   active: string;
   children: ReactNode;
 }) {
+  // No forced `min-h-screen` (100vh): that mismatches the real viewport by a hair
+  // (sub-pixel / scrollbar rounding) and produces a phantom scroll on pages that
+  // fit. The page is exactly its content height — `body` paints `bg-bg` across the
+  // whole viewport via background propagation, so short pages still look full.
   return (
-    <div className="min-h-screen bg-bg text-fg">
+    <div className="text-fg">
       <Masthead />
       {!home && <TopMenu active={active} />}
-      <main className="mx-auto max-w-[960px] px-md py-lg">{children}</main>
+      <main className="mx-auto max-w-[900px] px-md py-md">{children}</main>
     </div>
   );
 }

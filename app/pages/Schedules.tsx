@@ -1,6 +1,8 @@
+import { useState } from 'react';
 import { Accordion } from '@base-ui/react/accordion';
 import { apiGet } from '../api';
 import type { ScheduleView } from '../types';
+import { LinkButton } from '../components/Link';
 import { ErrorNote, Loading, PageTitle, StatusDot, formatTime, useAsync } from '../components/ui';
 
 // Schedules & runs (5.4): each schedule with kind/spec/label/next-run/active,
@@ -13,48 +15,54 @@ function statusColor(status: string): string {
 }
 
 function ScheduleCard({ s }: { s: ScheduleView }) {
+  const [showPrompt, setShowPrompt] = useState(false);
   return (
-    <div className="mb-md rounded-md border border-border bg-surface p-md">
+    <div className="mb-md">
       <div className="flex items-baseline justify-between gap-md">
         <div className="flex items-baseline gap-sm">
           <StatusDot ok={s.active} />
-          <span className="text-body-lg text-fg">{s.label ?? '(unlabeled)'}</span>
-          <span className="rounded-sm bg-surface-elevated px-xs text-label-sm text-tertiary">
-            {s.kind}
-          </span>
+          <span className="font-bold text-fg">{s.label ?? '(Unlabeled)'}</span>
+          <span className="text-fg-dim">[{s.kind}]</span>
         </div>
-        <span className="text-label-sm text-fg-dim">{s.active ? 'active' : 'inactive'}</span>
+        <span className="text-fg-dim">{s.active ? 'Active' : 'Inactive'}</span>
       </div>
-      <dl className="mt-sm grid grid-cols-[auto_1fr] gap-x-md gap-y-xs text-body-sm">
-        <dt className="text-fg-dim">spec</dt>
-        <dd className="text-fg-muted">{s.spec}</dd>
-        <dt className="text-fg-dim">next run</dt>
-        <dd className="text-fg-muted">{formatTime(s.nextRunAt)}</dd>
-        <dt className="text-fg-dim">last run</dt>
-        <dd className="text-fg-muted">{formatTime(s.lastRunAt)}</dd>
-        <dt className="text-fg-dim">prompt</dt>
-        <dd className="text-fg-muted line-clamp-2">{s.prompt}</dd>
+      <dl className="mt-xs grid grid-cols-[7rem_1fr] text-fg-muted">
+        <dt className="text-fg-dim">Spec</dt>
+        <dd>{s.spec}</dd>
+        <dt className="text-fg-dim">Next Run</dt>
+        <dd>{formatTime(s.nextRunAt)}</dd>
+        <dt className="text-fg-dim">Last Run</dt>
+        <dd>{formatTime(s.lastRunAt)}</dd>
+        <dt className="text-fg-dim">Prompt</dt>
+        <dd>
+          <span className={showPrompt ? '' : 'line-clamp-2'}>{s.prompt}</span>
+          <LinkButton onClick={() => setShowPrompt((v) => !v)} className="text-fg-dim hover:text-primary">
+            {showPrompt ? '› collapse' : '› expand'}
+          </LinkButton>
+        </dd>
       </dl>
 
       {s.runs.length > 0 && (
-        <Accordion.Root className="mt-sm border-t border-border pt-sm">
+        <Accordion.Root className="mt-sm">
           <Accordion.Item value="runs">
             <Accordion.Header>
-              <Accordion.Trigger className="flex w-full items-center justify-between text-label-md tracking-[0.06em] text-fg-dim hover:text-fg">
-                <span>recent runs ({s.runs.length})</span>
-                <span aria-hidden>▾</span>
+              <Accordion.Trigger className="group flex items-center gap-sm text-primary hover:underline">
+                <span aria-hidden className="transition-transform group-data-[panel-open]:rotate-90">
+                  ▸
+                </span>
+                Recent Runs ({s.runs.length})
               </Accordion.Trigger>
             </Accordion.Header>
-            <Accordion.Panel className="pt-sm">
-              <ul className="space-y-xs">
+            <Accordion.Panel className="pt-xs">
+              <ul className="pl-md">
                 {s.runs.map((r) => (
-                  <li key={r.id} className="rounded-sm bg-bg-dark/40 px-sm py-xs text-body-sm">
-                    <div className="flex items-baseline justify-between">
+                  <li key={r.id}>
+                    <div className="flex items-baseline justify-between gap-md">
                       <span className={statusColor(r.status)}>{r.status}</span>
-                      <span className="text-label-sm text-fg-dim">{formatTime(r.firedAt)}</span>
+                      <span className="text-fg-dim">{formatTime(r.firedAt)}</span>
                     </div>
-                    {r.output && <div className="mt-xs text-fg-muted">{r.output}</div>}
-                    {r.error && <div className="mt-xs text-error">{r.error}</div>}
+                    {r.output && <div className="text-fg-muted">{r.output}</div>}
+                    {r.error && <div className="text-error">{r.error}</div>}
                   </li>
                 ))}
               </ul>
@@ -73,12 +81,12 @@ export function Schedules() {
   );
   return (
     <div>
-      <PageTitle>schedules &amp; runs</PageTitle>
+      <PageTitle>Schedules &amp; Runs</PageTitle>
       {state.status === 'loading' && <Loading />}
       {state.status === 'error' && <ErrorNote error={state.error} />}
       {state.status === 'ready' &&
         (state.data.schedules.length === 0 ? (
-          <p className="text-body-sm text-fg-dim">no schedules.</p>
+          <p className="text-fg-dim">No schedules.</p>
         ) : (
           state.data.schedules.map((s) => <ScheduleCard key={s.id} s={s} />)
         ))}

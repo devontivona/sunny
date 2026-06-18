@@ -1,8 +1,8 @@
 import { apiGet } from '../api';
-import type { MemoryCore, TopicDoc, TopicSummary } from '../types';
+import type { TopicDoc, TopicSummary } from '../types';
 import { Markdown } from '../components/Markdown';
 import { Link } from '../components/Link';
-import { ErrorNote, Loading, Panel, PageTitle, useAsync } from '../components/ui';
+import { ErrorNote, Loading, PageTitle, useAsync } from '../components/ui';
 
 interface MemoryIndex {
   index: string;
@@ -20,50 +20,36 @@ function TopicView({ name }: { name: string }) {
   return (
     <div>
       <PageTitle>topics/{name}.md</PageTitle>
-      <p className="mb-md text-label-md">
+      <p className="mb-md">
         <Link to="memory">← all topics</Link>
       </p>
       {state.status === 'loading' && <Loading />}
       {state.status === 'error' && <ErrorNote error={state.error} />}
-      {state.status === 'ready' && (
-        <div className="rounded-md border border-border bg-surface p-lg">
-          <Markdown>{state.data.content || '_(empty)_'}</Markdown>
-        </div>
-      )}
+      {state.status === 'ready' && <Markdown>{state.data.content || '_(empty)_'}</Markdown>}
     </div>
   );
 }
 
 function MemoryHome() {
-  const core = useAsync<MemoryCore>(() => apiGet<MemoryCore>('/memory/core'), []);
   const idx = useAsync<MemoryIndex>(() => apiGet<MemoryIndex>('/memory/topics'), []);
   return (
     <div>
-      <PageTitle>memory</PageTitle>
-      <Panel title="INDEX.md">
-        {core.status === 'loading' && <Loading />}
-        {core.status === 'error' && <ErrorNote error={core.error} />}
-        {core.status === 'ready' && <Markdown>{core.data.index || '_(empty)_'}</Markdown>}
-      </Panel>
-      <Panel title="topic documents">
-        {idx.status === 'loading' && <Loading />}
-        {idx.status === 'error' && <ErrorNote error={idx.error} />}
-        {idx.status === 'ready' &&
-          (idx.data.topics.length === 0 ? (
-            <p className="text-body-sm text-fg-dim">no topic docs yet.</p>
-          ) : (
-            <ul className="space-y-xs">
-              {idx.data.topics.map((t) => (
-                <li key={t.name} className="flex items-baseline gap-md">
-                  <Link to={`memory/${encodeURIComponent(t.name)}`} className="text-primary hover:underline">
-                    {t.name}
-                  </Link>
-                  {t.summary && <span className="text-body-sm text-fg-dim">{t.summary}</span>}
-                </li>
-              ))}
-            </ul>
-          ))}
-      </Panel>
+      <PageTitle>Memory</PageTitle>
+      {idx.status === 'loading' && <Loading />}
+      {idx.status === 'error' && <ErrorNote error={idx.error} />}
+      {idx.status === 'ready' &&
+        (idx.data.topics.length === 0 ? (
+          <p className="text-fg-dim">No topic docs yet.</p>
+        ) : (
+          <ul>
+            {idx.data.topics.map((t) => (
+              <li key={t.name} className="flex items-baseline gap-md">
+                <Link to={`memory/${encodeURIComponent(t.name)}`}>{t.name}</Link>
+                {t.summary && <span className="text-fg-dim">{t.summary}</span>}
+              </li>
+            ))}
+          </ul>
+        ))}
     </div>
   );
 }

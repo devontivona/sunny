@@ -15,11 +15,7 @@ export function CoreDoc({ which }: { which: 'sunny' | 'user' }) {
       <PageTitle>{title}</PageTitle>
       {state.status === 'loading' && <Loading />}
       {state.status === 'error' && <ErrorNote error={state.error} />}
-      {state.status === 'ready' && (
-        <div className="rounded-md border border-border bg-surface p-lg">
-          <Markdown>{state.data[which] || '_(empty)_'}</Markdown>
-        </div>
-      )}
+      {state.status === 'ready' && <Markdown>{state.data[which] || '_(empty)_'}</Markdown>}
     </div>
   );
 }

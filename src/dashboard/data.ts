@@ -228,7 +228,7 @@ export class DashboardData {
 
     const uptime = Math.round((now - this.startedAt) / 1000);
     return {
-      service: { ok: true, detail: `up ${uptime}s` },
+      service: { ok: true, detail: `up ${formatDuration(uptime)}` },
       database,
       scheduler,
       gateway,
@@ -248,6 +248,20 @@ function parseIndexSummaries(index: string): Map<string, string> {
     if (m && m[1] && m[2]) map.set(sanitizeTopic(m[1]), m[2].trim());
   }
   return map;
+}
+
+/** Pretty-print a duration in seconds as the two largest units (e.g. "3d 4h", "45m"). */
+function formatDuration(totalSeconds: number): string {
+  const d = Math.floor(totalSeconds / 86400);
+  const h = Math.floor((totalSeconds % 86400) / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
+  const parts: string[] = [];
+  if (d) parts.push(`${d}d`);
+  if (h) parts.push(`${h}h`);
+  if (m) parts.push(`${m}m`);
+  if (s && parts.length < 2) parts.push(`${s}s`);
+  return parts.slice(0, 2).join(' ') || '0s';
 }
 
 function isGroupThread(threadId: string): boolean {

@@ -57,17 +57,18 @@ export function Takeover({ children }: { children: ReactNode }) {
 }
 
 export function Loading({ label = 'loading…' }: { label?: string }) {
-  return <div className="py-lg text-label-md text-fg-dim">{label}</div>;
+  return <div className="text-fg-dim">{label}</div>;
 }
 
 export function ErrorNote({ error }: { error: Error }) {
-  return (
-    <div className="my-md rounded-md border border-error/40 bg-error/10 p-md text-body-sm text-error">
-      error: {error.message}
-    </div>
-  );
+  return <div className="my-sm text-error">! error: {error.message}</div>;
 }
 
+/**
+ * A titled region drawn TUI-style: an UPPERCASE dim label and the content below —
+ * no card, no border, no rule, no shadow (a terminal has no lines; DESIGN.md).
+ * Hierarchy is the dim label + whole-row spacing.
+ */
 export function Panel({
   title,
   children,
@@ -78,22 +79,21 @@ export function Panel({
   right?: ReactNode;
 }) {
   return (
-    <section className="mb-md rounded-md border border-border bg-surface p-md">
+    <section className="mb-md">
       {(title || right) && (
-        <div className="mb-sm flex items-center justify-between">
-          {title && (
-            <h2 className="text-label-md tracking-[0.08em] text-fg-dim uppercase">{title}</h2>
-          )}
+        <div className="flex items-center justify-between gap-sm">
+          {title && <span className="text-fg-dim">{title}</span>}
           {right}
         </div>
       )}
-      {children}
+      <div className="pt-sm">{children}</div>
     </section>
   );
 }
 
+/** Page heading printed like a terminal section line: a bold Title-Case heading. */
 export function PageTitle({ children }: { children: ReactNode }) {
-  return <h1 className="mb-lg text-headline-lg font-bold text-fg">{children}</h1>;
+  return <div className="mb-md font-bold text-fg">{children}</div>;
 }
 
 export function StatusDot({ ok }: { ok: boolean }) {

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiGet, apiPost } from '../api';
 import type { AuthState } from '../types';
 import { Takeover } from './ui';
+import { LinkButton } from './Link';
 
 // iMessage-approval pairing UI (D-WD4). An unrecognized device creates a pending
 // access request (which makes Sunny DM the owner an approval link), then shows a
@@ -65,39 +66,34 @@ export function AuthGate({
 
   return (
     <Takeover>
-      <div className="w-full max-w-[480px] rounded-md border border-border bg-surface p-lg">
-        <div className="mb-md text-masthead font-bold tracking-[0.15em] text-fg">サニー</div>
+      <div className="w-full max-w-[480px]">
+        <div className="mb-sm font-bold tracking-[0.2em] text-fg">サニー</div>
 
         {(phase.kind === 'idle' || phase.kind === 'requesting') && (
           <>
-            <p className="mb-md text-body-md text-fg-muted">
+            <p className="mb-md text-fg-muted">
               This device isn't recognized. Request access and Sunny will message the owner an
               approval link.
             </p>
-            <button
-              type="button"
-              disabled={phase.kind === 'requesting'}
-              onClick={requestAccess}
-              className="rounded-sm border border-primary px-md py-sm text-label-md tracking-[0.06em] text-primary hover:bg-primary/10 disabled:opacity-50"
-            >
+            <LinkButton bracketed disabled={phase.kind === 'requesting'} onClick={requestAccess}>
               {phase.kind === 'requesting' ? 'requesting…' : 'request access'}
-            </button>
+            </LinkButton>
           </>
         )}
 
         {phase.kind === 'waiting' && (
           <>
-            <p className="mb-sm text-body-md text-fg">Waiting for owner approval…</p>
-            <p className="mb-md text-body-sm text-fg-dim">
+            <p className="mb-sm text-fg">Waiting for owner approval…</p>
+            <p className="mb-md text-fg-dim">
               An approval prompt was sent to the owner. Approve it from your iMessage to continue.
             </p>
-            <dl className="grid grid-cols-[auto_1fr] gap-x-md gap-y-xs text-body-sm">
+            <dl className="grid grid-cols-[5rem_1fr] text-fg-muted">
               <dt className="text-fg-dim">request</dt>
-              <dd className="text-fg-muted">{phase.requestId.slice(0, 8)}…</dd>
+              <dd>{phase.requestId.slice(0, 8)}…</dd>
               <dt className="text-fg-dim">device</dt>
-              <dd className="text-fg-muted">{phase.deviceHint}</dd>
+              <dd>{phase.deviceHint}</dd>
             </dl>
-            <div className="mt-md flex items-center gap-sm text-label-sm text-fg-dim">
+            <div className="mt-md flex items-center gap-sm text-fg-dim">
               <span className="inline-block size-[8px] animate-pulse rounded-full bg-warning" />
               polling for approval…
             </div>
@@ -106,22 +102,14 @@ export function AuthGate({
 
         {phase.kind === 'denied' && (
           <>
-            <p className="mb-md text-body-md text-error">
-              Access was not granted (denied or timed out).
-            </p>
-            <button
-              type="button"
-              onClick={requestAccess}
-              className="rounded-sm border border-border px-md py-sm text-label-md text-fg-muted hover:bg-surface-elevated hover:text-fg"
-            >
+            <p className="mb-md text-error">Access was not granted (denied or timed out).</p>
+            <LinkButton bracketed onClick={requestAccess}>
               request again
-            </button>
+            </LinkButton>
           </>
         )}
 
-        {phase.kind === 'error' && (
-          <p className="text-body-md text-error">error: {phase.message}</p>
-        )}
+        {phase.kind === 'error' && <p className="text-error">error: {phase.message}</p>}
       </div>
     </Takeover>
   );

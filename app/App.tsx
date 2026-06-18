@@ -10,7 +10,7 @@ import { CoreDoc } from './pages/CoreDoc';
 import { Memory } from './pages/Memory';
 import { Conversation } from './pages/Conversation';
 import { Schedules } from './pages/Schedules';
-import { Activity } from './pages/Activity';
+import { Activity, Health } from './pages/Activity';
 
 type Auth = { status: 'loading' } | { status: 'resolved'; state: AuthState };
 
@@ -32,6 +32,8 @@ function RouteView() {
       return <Schedules />;
     case 'activity':
       return <Activity />;
+    case 'health':
+      return <Health />;
     default:
       return <Home />;
   }
@@ -68,12 +70,14 @@ export function App() {
   if (auth.state.state === 'unconfigured') {
     return (
       <Takeover>
-        <div className="w-full max-w-[480px] rounded-md border border-border bg-surface p-lg">
-          <div className="mb-md text-masthead font-bold tracking-[0.15em] text-fg">サニー</div>
-          <p className="text-body-md text-fg-muted">
-            The dashboard isn't configured. Set <code className="text-tertiary">DASHBOARD_SESSION_SECRET</code>{' '}
-            to enable iMessage-approval access (or <code className="text-tertiary">DASHBOARD_DEV_OPEN=1</code>{' '}
-            for local development).
+        <div className="w-full max-w-[480px]">
+          <div className="mb-sm font-bold tracking-[0.2em] text-fg">サニー</div>
+          <p className="text-fg-muted">
+            The dashboard isn't configured. Set{' '}
+            <code className="bg-surface-elevated px-xs text-primary">DASHBOARD_SESSION_SECRET</code>{' '}
+            to enable iMessage-approval access (or{' '}
+            <code className="bg-surface-elevated px-xs text-primary">DASHBOARD_DEV_OPEN=1</code> for
+            local development).
           </p>
         </div>
       </Takeover>
