@@ -9,6 +9,8 @@ import {
 } from '../../db/schema.js';
 import { ttl } from '../config.js';
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /**
  * The dashboard's auth store (web-dashboard D-WD4). These writes (sessions +
  * access requests) are the ONLY mutations the dashboard makes — everything else
@@ -31,6 +33,9 @@ export class AuthStore {
   }
 
   async getRequest(id: string): Promise<AccessRequestRow | null> {
+    // Guard: the column is `uuid`, so a malformed id (e.g. from a tampered approve
+    // link) would make Postgres throw — treat it as "not found" instead.
+    if (!UUID_RE.test(id)) return null;
     const [row] = await this.db.select().from(accessRequests).where(eq(accessRequests.id, id));
     return row ?? null;
   }

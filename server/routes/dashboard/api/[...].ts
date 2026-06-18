@@ -256,14 +256,17 @@ export default defineEventHandler(async (event) => {
   }
 });
 
-/** Minimal owner-facing approval result page (no app assets needed). */
+/**
+ * Minimal owner-facing approval result page (no app assets needed). Matches the
+ * dashboard's TUI language: GitHub Dark, one monospace size, no card/border/radius.
+ */
 function approvalPage(message: string, ok: boolean): string {
-  const color = ok ? '#9ece6a' : '#f7768e';
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>サニー</title>
-<style>body{margin:0;height:100vh;display:flex;align-items:center;justify-content:center;background:#1a1b26;color:#c0caf5;font-family:ui-monospace,"JetBrains Mono",monospace}
-.card{max-width:420px;padding:32px;border:1px solid #414868;border-radius:8px;background:#1f2335}
-.m{font-size:28px;font-weight:700;letter-spacing:.15em;margin-bottom:16px}.t{color:${color};line-height:1.6}</style></head>
-<body><div class="card"><div class="m">サニー</div><div class="t">${escapeHtml(message)}</div></div></body></html>`;
+  const color = ok ? '#3fb950' : '#f85149';
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="dark"><title>サニー</title>
+<style>:root{color-scheme:dark}html,body{margin:0}
+body{min-height:100dvh;display:flex;align-items:center;justify-content:center;padding:24px;background:#0d1117;color:#e6edf3;font-family:ui-monospace,"JetBrains Mono","Fira Code",monospace;font-size:15px;line-height:24px}
+.wrap{max-width:480px}.m{font-weight:700;letter-spacing:.2em;margin-bottom:12px}.t{color:${color}}</style></head>
+<body><div class="wrap"><div class="m">サニー</div><div class="t">${escapeHtml(message)}</div></div></body></html>`;
 }
 
 function escapeHtml(s: string): string {
