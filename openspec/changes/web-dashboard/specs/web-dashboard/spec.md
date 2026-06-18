@@ -1,12 +1,23 @@
 ## ADDED Requirements
 
 ### Requirement: Read-only observability dashboard
-Sunny SHALL serve a web dashboard, from the existing application server, that displays its internal state for observation only. The dashboard SHALL NOT provide a chat interface or any control over Sunny (no sending messages, editing memory, or triggering schedules/jobs), and no dashboard route SHALL mutate Sunny's state except authentication session management.
+Sunny SHALL serve a web dashboard that displays its internal state for observation only. The dashboard SHALL NOT provide a chat interface or any control over Sunny (no sending messages, editing memory, or triggering schedules/jobs), and no dashboard route SHALL mutate Sunny's state except authentication session management.
 
 #### Scenario: Dashboard is observe-only
 - **WHEN** a user views any dashboard page
 - **THEN** it displays Sunny's state read-only
 - **AND** there is no control to send a message, edit memory, or trigger a schedule or job
+
+### Requirement: Deployed as a separate service
+The dashboard SHALL run as its own process (a separate command), independent of the gateway / durable-execution service, supervised by devbox and exposed at `sunny.waywardlane.com` (distinct from the gateway's host). It SHALL read Sunny's state (memory files + Postgres) with its own read-only access and SHALL NOT share the gateway's in-process runtime.
+
+#### Scenario: Runs independently of the gateway
+- **WHEN** the dashboard service is started, restarted, or fails
+- **THEN** it runs as its own devbox-supervised process and does not affect the gateway/agent service
+
+#### Scenario: Served at its own host
+- **WHEN** the owner opens the dashboard
+- **THEN** it is served from `sunny.waywardlane.com` via devbox
 
 ### Requirement: Terminal-UI visual language
 The dashboard SHALL present a terminal-inspired interface: a dark background, a monospace/coder font, and the Katakana name for Sunny (サニー) as the masthead at the top of every page. Links SHALL be rendered as human-readable hyperlinks rather than raw URLs. The color scheme SHALL follow a popular VS Code dark theme (Tokyo Night). The home page SHALL present its menu as a vertical list; child pages SHALL present the menu as a horizontal, side-scrolling bar at the top.

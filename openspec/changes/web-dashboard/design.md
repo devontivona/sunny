@@ -2,14 +2,18 @@
 
 ## Context
 
-A read-only observability UI for Sunny's internals, served by the existing Nitro app. The data already exists (memory files + Postgres); this is a presentation + access-control problem, not a data problem. The aesthetic is deliberately terminal-inspired.
+A read-only observability UI for Sunny's internals, served as its **own separate process** (independent of the gateway/durable-execution service). The data already exists (memory files + Postgres); this is a presentation + access-control problem, not a data problem. The aesthetic is deliberately terminal-inspired.
 
 ## Decisions
 
-### D-WD1 — React (Vite) SPA + read-only Nitro JSON API
-The dashboard is a **React single-page app built with Vite**, styled with **Tailwind CSS v4** (`@tailwindcss/vite`, CSS-first `@theme`) and a few **Base UI** (`@base-ui/react`, the maintained MUI headless lib) unstyled primitives (at most dialog / menu / tabs — we need very few). Data comes from **read-only Nitro JSON API routes** under `server/routes/dashboard/api/` that read the memory files (`loadCore`/`readTopic`) and Postgres (conversation store + schedules) via the existing `getRuntime()` seam; the React app fetches and renders them. No route mutates Sunny's state except auth session management (D-WD4).
+### D-WD1 — A separate dashboard service (own command), React (Vite) SPA + read-only JSON API
+The dashboard runs as its **own process / command**, separate from the gateway/durable-execution service. It is a **React single-page app built with Vite**, styled with **Tailwind CSS v4** (`@tailwindcss/vite`, CSS-first `@theme`) and a few **Base UI** (`@base-ui/react`, the maintained MUI headless lib) unstyled primitives (at most dialog / menu / tabs — we need very few). Data comes from **read-only JSON API routes** in the dashboard server that read the memory files (`loadCore`/`readTopic`) and Postgres (conversation store + schedules) through **their own read-only access** to the shared state — *not* the gateway's in-process `getRuntime()` (different process). No route mutates Sunny's state except auth session management (D-WD4).
 
-**Serving — keep the durable build isolated (decision).** Nitro 3 offers a Vite-plugin mode, but the WDK/durable-execution build (`workflow/nitro`) is load-bearing and beta, so v1 does **not** switch Nitro into Vite mode. Instead: `vite build` emits the SPA to `public/dashboard/`, served by the existing CLI-mode Nitro via `publicAssets` (base `/dashboard`); in dev the Vite dev server (HMR) runs alongside `nitro dev` and proxies `/dashboard/api` to it. This fully decouples the front-end from the `workflow/nitro` rollup transform, sidestepping the beta SPA-fallback / transform-ordering pitfalls. Client routing uses hash routes (or a small Nitro SPA-fallback route) so deep links don't 404. A later consolidation to single-server Vite-plugin mode (`@workflow/nitro/vite`'s `workflow()` + `nitro()` + `react()`) is possible once proven — not required for v1.
+**Why a separate service.** The dashboard is public-facing and exposes private data, while the gateway runs the load-bearing durable agent + WDK build. Running the dashboard as its own process gives strong isolation (a dashboard crash/exploit can't touch the agent), an independent deploy/restart, its own URL, and — by construction — leaves the gateway's `workflow/nitro` build entirely untouched (no Vite-vs-WDK build entanglement to reason about at all).
+
+**Build & serve.** `vite build` produces the SPA; the dashboard server serves those static assets plus its JSON API. In dev, the Vite dev server (HMR) runs alongside the dashboard API. The dashboard server is a small dedicated app (its own Nitro app or a minimal Node server — implementation's choice); whichever it is, it is *not* the gateway app.
+
+**Deployment.** Run under **devbox** as its own supervised service (e.g. `sunny-dashboard`, `Restart=always` + linger) with its own Cloudflare tunnel, exposed at **`sunny.waywardlane.com`** — distinct from the gateway at `sunny-gateway.waywardlane.com`.
 
 ### D-WD2 — Visual language (terminal UI)
 - **Masthead:** the Katakana name for Sunny — **サニー** — at the top of every page.
@@ -35,7 +39,7 @@ Each page fetches JSON from its `dashboard/api/*` route; the API returns raw mar
 The dashboard exposes private data over a public tunnel, so access is **default-deny** and pairing happens through the channel Sunny already owns:
 
 1. A request from an **unrecognized device** (no valid session cookie) creates a pending **access request** (random id + secret; captured device hint: user-agent, coarse IP/time) and shows a "waiting for approval" page that sets a pending cookie and polls/refreshes.
-2. Sunny **DMs the owner** (via the gateway) with the request details and a **one-time approve link** containing the request secret (the link is only ever sent to the owner's DM, so tapping it authenticates as the owner). Optionally the owner can reply with an approve code.
+2. The owner is **DM'd** with the request details and a **one-time approve link** containing the request secret (the link is only ever sent to the owner's DM, so tapping it authenticates as the owner). Optionally the owner can reply with an approve code. **Cross-process note:** the dashboard runs separately from the gateway, so it does not call the gateway's `send()` directly — it sends the approval DM via the Sendblue REST API (the same proactive-send-by-thread-id path the gateway uses), or by writing the pending request to the shared store for the gateway to deliver. (Implementation picks one; the Sendblue-direct path keeps the dashboard self-contained.)
 3. On approval, the server marks the request approved and **issues a signed, httpOnly, `SameSite=Lax` session token** bound to that browser; the waiting page advances to the dashboard.
 4. Sessions are stored server-side (a `dashboard_sessions` table) with an expiry and are **revocable**; access requests **default-deny on timeout**.
 
@@ -61,7 +65,8 @@ npx @google/design.md lint DESIGN.md                                            
 
 ## Rejected alternatives
 - **Server-rendered HTML, no SPA (the prior D-WD1):** simpler/safer, but React + Vite is faster to build the multi-page UI and gives a better component story (Base UI); chosen for velocity. Read-only + the auth gate keep the added client surface low-risk.
-- **Nitro Vite-plugin mode (single server) for v1:** nicer (one server, unified dev), but it forces the WDK into beta Vite-mode with real SPA-fallback/transform-ordering pitfalls against the load-bearing durable build. Deferred; v1 keeps CLI-mode Nitro + a decoupled Vite build (D-WD1).
+- **Embedding the dashboard in the gateway app** (serving it from the existing Nitro process via `publicAssets` + the gateway's `getRuntime()`): rejected. The dashboard is public and exposes private data; bundling it into the durable agent process couples their failure/deploy/security domains and would entangle the front-end build with the WDK `workflow/nitro` transform (the beta Vite-vs-WDK pitfalls). A separate service (D-WD1) is cleaner and isolates the durable core by construction.
+- **Nitro Vite-plugin mode inside the gateway:** moot once the dashboard is its own service — there's no need to switch the gateway's build to Vite mode at all.
 - **Hand-written CSS / ad-hoc theme:** rejected in favor of a single DESIGN.md source of truth that lints + generates the Tailwind theme (D-WD7).
 - **No auth / localhost-only only:** the owner wants to view remotely over the tunnel; localhost-only is the *fallback* when auth is unconfigured, not the design.
 - **Password / basic-auth:** another secret to manage and phishable; the iMessage-approval flow reuses Sunny's existing trusted channel and is nicer.
