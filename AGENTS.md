@@ -8,13 +8,80 @@ gotchas for editing the repo. Active/planned work lives in OpenSpec changes unde
 ## Commands
 
 ```bash
-npm run typecheck     # tsc --noEmit (covers src/ + workflows/)
+npm run typecheck     # tsc --noEmit (covers src/, workflows/, tests/, evals/)
 npm run format        # prettier write (src/, server/, plugins/, workflows/)
 npm run dev           # nitro dev (local)
 npm run build         # nitro build → .output
+npm test              # unit lane (pure logic; fast, no I/O)
+npm run test:integration  # integration lane (real modules vs in-process PGlite)
+npm run test:all      # unit + integration
+npm run test:watch    # unit + integration in watch mode
+npm run coverage      # informational coverage (not a merge gate)
+npm run eval          # paid behavioral evals (real model) — on demand only
 ```
 
 `server/` and `plugins/` are validated by the Nitro build, not by `tsc`.
+
+## Testing & evals
+
+Two layers split on the determinism/cost axis (design `testing-and-evals`):
+
+- **Deterministic suite** — the merge gate. Runs on every change, no paid/external
+  calls. Two lanes by filename:
+  - **unit** (`*.unit.test.ts`, colocated in `src/`) — pure logic only: no network,
+    no DB, no model.
+  - **integration** (`*.integration.test.ts`) — real modules against an **in-process
+    PGlite Postgres** (real Postgres in WASM — runs the actual Drizzle migrations incl.
+    the tsvector/GIN FTS path). **No Docker.** Each test file gets a fresh in-memory DB
+    via `createTestDb()` (`tests/db.ts`).
+- **Evals** (`evals/**`, `npm run eval`) — drive the *real* loop against the fake
+  gateway and grade behavior. Paid and non-deterministic, so **never on the gate**;
+  run on demand.
+
+**Seams (inject at the exact point production wires them — no test-only branches):**
+- **Model** — `MockLanguageModelV3` from `ai/test` (scripts text + tool calls), injected
+  via `createAgentRunner({ model })`. Production passes nothing → real `getModel(config)`.
+- **Gateway** — `FakeGateway` (`tests/fakes/gateway.ts`) records outbound + injects inbound;
+  no Sendblue.
+- **Durable start** — a recording fake `start` injected via `createAgentRunner({ start })`;
+  records `start_job` without launching a WDK job.
+- **DB** — `createTestDb()` (in-process PGlite; honors `TEST_DATABASE_URL` for a real-PG
+  escape hatch).
+- **Time** — Vitest fake timers (`vi.useFakeTimers()` + `vi.setSystemTime()`); no
+  production clock-injection.
+- **Fixtures** — typed builders in `tests/factories.ts` (deterministic; **no faker**).
+  Property-based tests (`fast-check`) cover the pure normalizers only.
+
+### Definition of done (every PR)
+
+Before pushing, the deterministic suite must be green locally:
+
+```bash
+npm run typecheck && npm run test && npm run test:integration
+```
+
+(No Docker needed — integration uses in-process PGlite.) **After changing agent behavior**
+(prompt, loop, tools, model, or memory wiring), add/extend an eval case for the affected
+dimension, run `npm run eval`, and paste the scorecard delta in the PR.
+
+What the *same PR* must include, by change type:
+
+| Change | Required in the same PR |
+|---|---|
+| New/changed pure logic (loop helpers, auth, scheduler math, memory, prompt, config) | Unit test(s) covering the new/changed branches |
+| New/changed DB query, schema, or migration | Integration test against PGlite (incl. recall/FTS if touched) |
+| New/changed **agent behavior** (prompt, loop, tool, model, memory wiring) | Add/extend an eval case **and** run `npm run eval`, pasting the scorecard delta |
+| New gateway/transport seam or normalization | Unit test (normalization) + integration test if it touches the store |
+| Bug fix | A regression test that fails before the fix and passes after |
+| Docs/config-only, no behavior change | None — state "no behavior change" in the PR |
+
+Checklist (mirrored in `.github/pull_request_template.md`):
+- [ ] Deterministic suite green locally (`typecheck` + `test` + `test:integration`)
+- [ ] New/changed behavior has matching unit/integration tests (see table)
+- [ ] Bug fixes include a regression test (fails before, passes after)
+- [ ] If **agent behavior** changed: eval case added/updated, `npm run eval` run, scorecard
+      delta pasted — or "N/A: no behavior change"
+- [ ] No silent coverage drop for the code this PR touches
 
 ## Layout
 

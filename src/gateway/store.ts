@@ -2,6 +2,7 @@ import { and, asc, desc, eq, isNull, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import type { Db } from '../db/client.js';
 import { messages } from '../db/schema.js';
+import { isGroupThreadId } from './threadId.js';
 import type { ChannelEvent } from './types.js';
 
 /**
@@ -114,7 +115,7 @@ export class ConversationStore {
       text: r.text,
       attachments: [],
       timestamp: r.timestamp,
-      isGroup: r.threadId.split(':')[2] === 'g',
+      isGroup: isGroupThreadId(r.threadId),
       isOwner: r.isOwner,
     }));
   }

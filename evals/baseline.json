@@ -1,0 +1,154 @@
+{
+  "model": "claude-opus-4-8",
+  "timestamp": "2026-06-18T23:06:59.085Z",
+  "n": 5,
+  "costUsd": 1.9911,
+  "stoppedOnBudget": false,
+  "dimensions": {
+    "elicitation": {
+      "passRate": 0.95,
+      "pass": true
+    },
+    "memory": {
+      "passRate": 0.8666666666666667,
+      "pass": true
+    },
+    "tool-selection": {
+      "passRate": 0.9333333333333332,
+      "pass": true
+    }
+  },
+  "cases": [
+    {
+      "name": "elicitation/simple-reply",
+      "dimension": "elicitation",
+      "runs": 5,
+      "passes": 4,
+      "passRate": 0.8,
+      "threshold": 0.6,
+      "pass": true,
+      "graderPasses": {
+        "delivered-via-send_message": 4,
+        "no-fallback": 4,
+        "sent-something": 4
+      }
+    },
+    {
+      "name": "elicitation/multi-bubble",
+      "dimension": "elicitation",
+      "runs": 5,
+      "passes": 5,
+      "passRate": 1,
+      "threshold": 0.6,
+      "pass": true,
+      "graderPasses": {
+        "delivered-via-send_message": 5,
+        "no-fallback": 5
+      }
+    },
+    {
+      "name": "elicitation/interview",
+      "dimension": "elicitation",
+      "runs": 5,
+      "passes": 5,
+      "passRate": 1,
+      "threshold": 0.6,
+      "pass": true,
+      "graderPasses": {
+        "delivered-via-send_message": 5,
+        "no-fallback": 5,
+        "sent-something": 5
+      }
+    },
+    {
+      "name": "elicitation/silence-when-nothing-to-say",
+      "dimension": "elicitation",
+      "runs": 5,
+      "passes": 5,
+      "passRate": 1,
+      "threshold": 0.6,
+      "pass": true,
+      "graderPasses": {
+        "is-silent": 5
+      }
+    },
+    {
+      "name": "memory/uses-seeded-user-fact",
+      "dimension": "memory",
+      "runs": 5,
+      "passes": 5,
+      "passRate": 1,
+      "threshold": 0.6,
+      "pass": true,
+      "graderPasses": {
+        "delivered-via-send_message": 5,
+        "reply-mentions": 5
+      }
+    },
+    {
+      "name": "memory/records-durable-fact",
+      "dimension": "memory",
+      "runs": 5,
+      "passes": 5,
+      "passRate": 1,
+      "threshold": 0.6,
+      "pass": true,
+      "graderPasses": {
+        "memory-written:USER": 5
+      }
+    },
+    {
+      "name": "memory/recalls-archive",
+      "dimension": "memory",
+      "runs": 5,
+      "passes": 3,
+      "passRate": 0.6,
+      "threshold": 0.6,
+      "pass": true,
+      "graderPasses": {
+        "tool-called:recall_history": 5,
+        "reply-mentions": 3,
+        "natural-recall (judge:claude-sonnet-4-6/v1)": 3
+      }
+    },
+    {
+      "name": "tool-selection/research-starts-job",
+      "dimension": "tool-selection",
+      "runs": 5,
+      "passes": 5,
+      "passRate": 1,
+      "threshold": 0.6,
+      "pass": true,
+      "graderPasses": {
+        "sent-something": 5,
+        "started-job": 5
+      }
+    },
+    {
+      "name": "tool-selection/reminder-schedules",
+      "dimension": "tool-selection",
+      "runs": 5,
+      "passes": 5,
+      "passRate": 1,
+      "threshold": 0.6,
+      "pass": true,
+      "graderPasses": {
+        "tool-called:schedule_create": 5
+      }
+    },
+    {
+      "name": "tool-selection/trivial-greeting-no-heavy-tools",
+      "dimension": "tool-selection",
+      "runs": 5,
+      "passes": 4,
+      "passRate": 0.8,
+      "threshold": 0.6,
+      "pass": true,
+      "graderPasses": {
+        "delivered-via-send_message": 4,
+        "tool-not-called:start_job": 5,
+        "tool-not-called:schedule_create": 5
+      }
+    }
+  ]
+}

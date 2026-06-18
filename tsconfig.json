@@ -15,6 +15,6 @@
     "declaration": true,
     "sourceMap": true
   },
-  "include": ["src/**/*.ts", "workflows/**/*.ts"],
+  "include": ["src/**/*.ts", "workflows/**/*.ts", "tests/**/*.ts", "evals/**/*.ts"],
   "exclude": ["node_modules", "dist", ".output", ".nitro"]
 }

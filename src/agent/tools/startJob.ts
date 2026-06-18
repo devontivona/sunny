@@ -1,14 +1,29 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { start } from 'workflow/api';
-import { runJob } from '../../../workflows/job.js';
+import { runJob, type JobInput } from '../../../workflows/job.js';
+
+/**
+ * Durable-job starter seam (testability refactor D13). Launches `runJob` for a
+ * task and returns its run id. Production wires {@link defaultStartJob} (the real
+ * WDK `start`); tests/evals inject a recording fake so the loop can be driven
+ * without a Workflow DevKit world or a real durable run.
+ */
+export type StartJob = (input: JobInput) => Promise<{ runId: string }>;
+
+/** The real durable starter: hands the task to WDK's `start(runJob, …)`. */
+const defaultStartJob: StartJob = (input) => start(runJob, [input]);
 
 /**
  * `start_job` (durable-execution D-DE1, task 4.2): promote long/async work to a
  * durable Tier-2 job. The job runs to completion independently of this turn,
  * survives restarts, and messages the user with the result when done.
  */
-export function createStartJobTool(threadId: string, ownerName: string) {
+export function createStartJobTool(
+  threadId: string,
+  ownerName: string,
+  startJob: StartJob = defaultStartJob,
+) {
   return tool({
     description:
       'Promote a long-running or asynchronous task to a durable background job. Use this ' +
@@ -24,7 +39,7 @@ export function createStartJobTool(threadId: string, ownerName: string) {
         ),
     }),
     execute: async ({ task }) => {
-      const run = await start(runJob, [{ threadId, task, ownerName }]);
+      const run = await startJob({ threadId, task, ownerName });
       return `Started durable background job ${run.runId}; it will message the user on completion.`;
     },
   });

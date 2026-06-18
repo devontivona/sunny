@@ -105,4 +105,4 @@ This change SHALL deliver written tests covering the existing foundation, not on
 #### Scenario: send_message guard is covered both ways
 - **WHEN** the loop coverage runs
 - **THEN** a turn that calls `send_message` is recorded as delivered via `send_message`
-- **AND** a turn that produces only private scratch is delivered as fallback text and flagged
+- **AND** a turn that produces only private scratch delivers nothing to the user and is flagged as a `fallback_text` miss (raw model text is never auto-sent)

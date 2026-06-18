@@ -7,7 +7,7 @@ import { z } from 'zod';
  * Non-secret configuration (D-PS5). Lives in `~/.sunny/config.json`, hand-editable.
  * Secrets are env-only (ANTHROPIC_API_KEY, SENDBLUE_*) and never appear here.
  */
-const ConfigSchema = z.object({
+export const ConfigSchema = z.object({
   /** AI SDK model id (D-PS3). Provider-agnostic; Opus 4.8 is the default. */
   modelId: z.string().default('claude-opus-4-8'),
   /** Reasoning effort for agentic turns (D-PS3). */
