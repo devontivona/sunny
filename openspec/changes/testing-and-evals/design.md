@@ -13,7 +13,7 @@ The design splits the problem along the determinism/cost axis: a **deterministic
 
 **Goals:**
 - A deterministic unit + integration suite that runs on every commit with no paid/external calls, gating merges — **with real initial coverage of the current surface written**, not just scaffolding.
-- Reusable seams — mock model, fake gateway, ephemeral Postgres, deterministic time — that let any module be tested in isolation or wired together.
+- Reusable seams — mock model, fake gateway, in-process Postgres (PGlite), deterministic time — that let any module be tested in isolation or wired together.
 - A behavioral eval harness that drives the *real* loop over a versioned dataset, graded by programmatic trajectory assertions + LLM-judge, scored by pass rate with file-based regression tracking.
 - Cost discipline: evals never run in the per-commit gate and are budget-capped.
 
@@ -30,7 +30,7 @@ The design splits the problem along the determinism/cost axis: a **deterministic
 Vitest over the Node built-in runner and Jest: native ESM/TypeScript, first-class watch/coverage, easy mocking, and — decisively — it's the substrate the chosen eval runner (vitest-evals) builds on. One runner drives unit, integration, and evals, separated by **Vitest projects**/globs (`*.unit.test.ts`, `*.integration.test.ts`, `evals/**`) rather than separate tools.
 
 ### D2: Mock the model via the AI SDK's test utilities
-Use AI SDK v6's `MockLanguageModelV3` (+ `simulateReadableStream`) from `ai/test`, injected at the same seam `getModel()` fills with `@ai-sdk/anthropic`. This tests the loop/dispatcher/tool wiring deterministically and for free. The SDK mock tracks the real `LanguageModelV3` interface, so it won't drift from production like a hand-rolled fake would.
+Use AI SDK v6's `MockLanguageModelV3` (+ `simulateReadableStream`) from `ai/test` to script deterministic text/tool-calls. This tests the loop/dispatcher/tool wiring for free; the SDK mock tracks the real `LanguageModelV3` interface, so it won't drift from production like a hand-rolled fake would. **Caveat — the injection point doesn't exist yet:** `loop.ts` imports `getModel` directly and `createAgentRunner` has no model dep (`getModel(config)` just returns `anthropic(config.modelId)`, so it can't yield a non-Anthropic mock). D13 adds the narrow DI seam this needs. Note the asymmetry: *evals* select a real model via `config.modelId` and need no DI; only the *mock* requires the seam.
 
 ### D3: Fake `Gateway` driver, not a mocked Sendblue HTTP layer
 Implement the normalized `Gateway` interface (`src/gateway/types.ts`) with an in-memory driver that records outbound (`send`) and exposes an inject-inbound helper. Testing at the normalized seam — not Sendblue's wire format — keeps tests stable across transport changes and matches how the gateway is already abstracted. The same fake serves both the test and eval lanes.
@@ -55,23 +55,23 @@ Survey conclusion for a self-hosted, no-egress-preferred, *agentic*, Vitest-base
 ### D7: Assert on AI SDK `result.steps`; judge with a cheaper, independent model
 Most checks are **programmatic trajectory assertions** on the loop's native outputs — `result.steps.flatMap(s => s.toolCalls)`, the `delivered` classification, the persisted projection — which is cheaper and far less flaky than judge-heavy grading. The architecture makes this possible because *speaking is a tool call*, so "did it use `send_message`?" is a fact, not an opinion. LLM-as-judge (autoevals) is reserved for genuinely fuzzy qualities (tone, helpfulness, natural memory use) and uses a **different, cheaper model** than the one under test (e.g. Sonnet/Haiku judging an Opus turn) to stay independent and bound cost; the judge model + rubric are versioned with each result.
 
+Graders assert on the **trajectory** (`result.steps` tool calls + the captured outbound), not on database state — note that an owner-DM turn fire-and-forget seeds the nightly-consolidation schedule, so the `schedules` table is never empty during evals; a "no schedule created" check must look at the turn's tool calls, not the table.
+
 ### D8: Pass-rate scoring, not single-shot equality
 Each case runs N times (configurable); the score is the pass rate vs a per-case/dimension threshold. This is the core accommodation for nondeterminism — a single failing sample is signal, not a red build. Thresholds start lenient and tighten as behavior stabilizes.
 
-### D9: Two CI lanes, evals out of the gate
-`typecheck + unit + integration` run on every push/PR (GitHub Actions; integration uses in-process PGlite, no service container) and block merge. Evals run **on demand** — locally via `npm run eval` and in CI via a manual `workflow_dispatch` — as a separate Vitest project, bounded by a cost cap. There is **no automatic eval schedule**; instead, agent guidance (D11/AGENTS.md) directs running evals after any change to *agent behavior*. Keeping evals off the per-commit path is what makes the scheme affordable and non-flaky.
+### D9: Principle — deterministic lanes gate, evals never do
+The merge gate is `typecheck + unit + integration` only; the eval lane is always **on-demand**, never per-commit. This is the load-bearing split: it keeps the gate free, fast, deterministic, and secret-free, while evals (paid, non-deterministic) stay opt-in. D11 is the concrete GitHub Actions implementation; D12 is the per-PR discipline that gets evals run when behavior changes despite their absence from the gate.
 
 ### D10: File-based scorecards now; Langfuse deferred
-Each eval run writes a JSON scorecard (per-case + per-dimension pass rates, model, timestamp, cost) plus a run-over-run regression diff — enough to catch behavioral drift without standing up infrastructure. A self-hosted **Langfuse** (MIT, fully free self-hosted for evals, offline CI) is the sanctioned escalation *if/when* we want a persistent dashboard, dataset management, and trend history; because datasets + assertions run against AI SDK's portable `result.steps`, adopting it later won't rewrite what evals check. When `observability` lands, scorecard persistence + the eval cost cap can move onto its trajectory/budget machinery.
+Each eval run writes a JSON scorecard (per-case + per-dimension pass rates, model, timestamp, cost). The **baseline to diff against is a committed file** — `evals/baseline.json` (the last accepted scorecard) — so a run-over-run regression diff works locally, in CI artifacts, and across machines, with no infrastructure. The diff compares the new run to the committed baseline; **updating the baseline is an explicit, reviewed commit** (a behavior PR that moves a dimension's pass rate re-baselines on purpose, in the same PR, visible in review — regressions can't silently rebaseline). This keeps drift honest without a database. A self-hosted **Langfuse** (MIT, fully free self-hosted for evals, offline CI) is the sanctioned escalation *if/when* we want a persistent dashboard, dataset management, and trend history; because datasets + assertions run against AI SDK's portable `result.steps`, adopting it later won't rewrite what evals check. When `observability` lands, scorecard persistence + the eval cost cap can move onto its trajectory/budget machinery.
 
 ### D11: GitHub Actions — two workflows, secret-free gate, manual evals
 The project is GitHub-hosted, so CI is two Actions workflows:
 - **`ci.yml` (the merge gate)** — on `pull_request` + `push` to `main`: `setup-node` (Node 22, npm cache) → `npm ci` → `typecheck` → `unit` → `integration`. No service container and no Docker — integration uses in-process PGlite (D4). It uses the mock model, so it needs **no `ANTHROPIC_API_KEY`** and runs safely on fork PRs at zero API cost. `main` gets **branch protection** requiring this check.
 - **`evals.yml` (off the gate)** — `workflow_dispatch` only (no `schedule`): `npm run eval` with the `ANTHROPIC_API_KEY` secret + cost cap and a `concurrency` guard, uploading the JSON scorecard as a build artifact. Manual by choice — cost stays opt-in.
 
-**Default in-process, optional real-PG override:** the integration fixture defaults to in-process PGlite (no env, no Docker). If `TEST_DATABASE_URL` is set it uses that real Postgres instead — the escape hatch for a full WDK durable-run test, which doesn't run on PGlite (D5).
-
-**Process guidance (AGENTS.md), not just config:** (1) **before pushing**, run the full deterministic suite locally — `npm run typecheck && npm run test && npm run test:integration` (no Docker needed); (2) **after changing agent behavior** — prompt, loop, tools, model, or memory wiring — run `npm run eval` and check the scorecard for regressions before pushing. Evals are never required by the gate, but the agent is told to exercise them when behavior changes.
+The integration fixture defaults to in-process PGlite (no env, no Docker); `TEST_DATABASE_URL`, if set, points it at a real Postgres — the escape hatch for a full WDK durable-run test, which doesn't run on PGlite (D5). Local + agent process guidance (run the deterministic suite before pushing; run evals after agent-behavior changes) lives in D12's definition of done, not duplicated here.
 
 ### D12: Per-PR test/eval discipline — a definition of done for coding agents
 The harness and initial coverage are worthless if new work doesn't carry its own tests. Because the gate can only run tests that exist — and evals are off the gate entirely (cost/flakiness) — ongoing coverage is enforced by an explicit **definition of done** that every coding agent (and human) follows, made machine-visible via AGENTS.md and a PR template. The instructions are concrete, not "write good tests": a change-type → required-artifact mapping.
@@ -96,6 +96,17 @@ The harness and initial coverage are worthless if new work doesn't carry its own
 
 This is the seam that turns "tests exist and get run" into "every behavior-changing PR grows the tests and eval evidence." It's enforced by convention + review (the PR template records the eval scorecard since CI can't), not by a hard coverage percentage — judgment over a number. An **informational** coverage report may be surfaced on PRs to make deltas visible to reviewers, but it does not gate merge.
 
+### D13: Narrow DI for the model and the durable-job starter (the seams the loop is missing)
+"Drive the real loop with fakes" only works if the loop's two externally-binding collaborators can be replaced. Today both are wired by direct import, so neither can:
+- **Model** — `loop.ts` calls `getModel(config)` (a direct import). The mock model (D2) can't be supplied without a seam.
+- **Durable start** — `start_job`'s tool `execute` calls `start(runJob)` from `workflow/api` (`src/agent/tools/startJob.ts`), which needs the WDK world (absent on PGlite). Driving the real loop in tests/evals would either throw or launch a real durable job.
+
+Fix: a **behavior-preserving DI refactor** that gives `createAgentRunner` optional overrides — an injected `model` (default `getModel(config)`) and an injected durable `start` (default the real `workflow/api` start, threaded into `createStartJobTool`). Production passes nothing and is unchanged. Then:
+- **Unit/integration** inject `MockLanguageModelV3` and a fake start that records the call.
+- **Evals** keep the real model (via `config.modelId`) and inject a **recording fake start** — so a tool-selection case grades that the model *chose* `start_job` (it appears in `result.steps`) without executing a durable run. The other tools need no seam: `schedule_*` and `memory_write` write to the test PGlite / temp-fs and are directly assertable.
+
+This is preferred over `vi.mock('./model.js')` / `vi.mock('workflow/api')`: module-mocking works but is opaque and easy to drift, whereas explicit DI keeps the real composition visible and is the same path production uses.
+
 ## Risks / Trade-offs
 
 - **WDK is experimental and doesn't run on PGlite** (graphile_worker needs multi-connection / LISTEN-NOTIFY) → Scope the durable test to **step-function idempotency** — a replayed `memory_write` step applies its effect exactly once — against PGlite + the memory fs, *without* standing up the graphile_worker world. Treat a full crash/restart-resume run as a boundary; if ever wanted it uses the `TEST_DATABASE_URL` real-PG hatch and stays out of the default gate.
@@ -108,7 +119,7 @@ This is the seam that turns "tests exist and get run" into "every behavior-chang
 ## Migration Plan
 
 Additive and incremental; no production behavior changes beyond one behavior-preserving refactor.
-1. Add Vitest + config (unit/integration projects), the seams (mock model, fake gateway, in-process PGlite fixture), and extract the pure helpers from `runTurn`. Wire the CI gate.
+1. Add Vitest + config (unit/integration projects), the seams (mock model, fake gateway, in-process PGlite fixture), the D13 DI refactor (inject `model` + durable `start`), and extract the pure helpers (`runTurn` delivery/trim/prefix; `isGroup` threadId parsing). Wire the CI gate.
 2. **Write the initial unit coverage** (auth/normalize, scheduler math, memory write/sanitize/overflow, prompt assembly + byte-stability, delivery classification/trim/group-prefix, config, dispatcher) and **integration coverage** (store dedup/window/FTS recall, migrations, scheduler ticker, loop end-to-end with mock model, durable step idempotency).
 3. Stand up vitest-evals + autoevals; **write the initial dataset** (elicitation, memory recall, tool selection); add `npm run eval` with file-based scorecards + regression diff.
 4. If/when wanted, adopt self-hosted Langfuse for history, and (once `observability` exists) move scorecard persistence/budget onto it.
@@ -120,4 +131,3 @@ Rollback: remove the CI lane / scripts; the directories, dev-deps, and the extra
 - **Eval case file format** — YAML vs a typed TS module. YAML is reviewer-friendly; TS gives types and reuse of grader code. vitest-evals leans toward TS datasets, which may settle this toward TS.
 - **Default eval model & N** — production Opus for the truest signal vs a cheaper model for routine runs with Opus reserved for release gates. Likely both, configured per lane.
 - **Judge model** — Sonnet vs Haiku for the autoevals judge; trade grading fidelity against cost.
-- **Where the scheduled eval run lives** — Sunny's own scheduler (dogfood durable jobs) vs external CI cron. Dogfooding couples eval health to the system under test.
