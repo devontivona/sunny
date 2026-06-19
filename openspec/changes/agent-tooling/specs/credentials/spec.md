@@ -34,14 +34,3 @@ Each tool SHALL declare the exact `op://` references it is permitted to resolve,
 #### Scenario: Arbitrary path from the model is refused
 - **WHEN** the model supplies an `op://` reference outside a tool's declared whitelist
 - **THEN** it is not resolved
-
-### Requirement: Token hardening and rotation
-The Service Account token SHALL be stored in a hardened, restricted-permission location (root-owned, `0600`, e.g. a systemd `EnvironmentFile`), SHALL NOT be committed to the repository or written to logs/context, and SHALL be rotated on a schedule.
-
-#### Scenario: Token not exposed
-- **WHEN** logs, context, or the repository are inspected
-- **THEN** the Service Account token does not appear in any of them
-
-#### Scenario: Scheduled rotation
-- **WHEN** the rotation schedule fires
-- **THEN** a new token is issued and the old one is retired

@@ -57,13 +57,6 @@ A fixed set of catastrophic actions SHALL be refused regardless of approval mode
 - **WHEN** any tool attempts to read the 1Password Service Account token file
 - **THEN** the attempt is refused
 
-### Requirement: Credentialed browser isolation
-The browser that drives the user's logged-in sessions SHALL run in an isolated profile/process separate from the rest of the host, so that a prompt-injected page cannot reach the broader host or other sessions.
-
-#### Scenario: Browser runs isolated
-- **WHEN** Sunny performs credentialed browsing
-- **THEN** it does so in an isolated browser profile/process
-
 ### Requirement: Untrusted content is data, not instructions
 Content from web pages, emails, skill files, and other external sources SHALL be treated as untrusted data. Sunny SHALL NOT follow instructions embedded in such content, and any high-consequence action prompted while processing untrusted content SHALL still pass through approval/blocklist gating.
 

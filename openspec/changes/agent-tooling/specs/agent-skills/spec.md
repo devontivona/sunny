@@ -35,7 +35,7 @@ Sunny SHALL be able to create, edit, and delete its own skills. A self-authored 
 - **THEN** the change takes effect on the next run
 
 ### Requirement: Installed skills are untrusted and gated
-Installing a skill from an external source (e.g. a registry or git repo) SHALL be treated as introducing untrusted code: the installation SHALL require user approval and SHALL be reviewable before the skill is enabled.
+Installing a skill from an external source (e.g. a registry or git repo) SHALL be treated as introducing untrusted code: the installation SHALL require user approval and SHALL be reviewable before the skill is enabled. (The approval mechanism itself is delivered by the `security-permissions` change; this change establishes the trust-tier distinction and the install path.)
 
 #### Scenario: External install requires approval
 - **WHEN** Sunny attempts to install a skill from an external source
@@ -46,7 +46,7 @@ Installing a skill from an external source (e.g. a registry or git repo) SHALL b
 - **THEN** it follows the auto-and-notify path, not the approval-gated install path
 
 ### Requirement: Skills cannot escalate privilege
-When a skill runs scripts or invokes tools, those actions SHALL pass through the same tool-access gating, approval tiers, and hard blocklist as any other tool use. A skill's `allowed-tools` declaration MAY further restrict but SHALL NOT expand what it can do.
+When a skill runs scripts or invokes tools, those actions SHALL pass through the same tool-access gating, approval tiers, and hard blocklist as any other tool use. A skill's `allowed-tools` declaration MAY further restrict but SHALL NOT expand what it can do. (The gating/approval/blocklist enforcement is delivered by the `security-permissions` change; this change ensures skill actions route through the same tool surface so that enforcement applies uniformly once present.)
 
 #### Scenario: Skill action still gated
 - **WHEN** a skill's instructions or scripts attempt a high-consequence action
@@ -62,3 +62,14 @@ A skill SHALL be validated against the `SKILL.md` schema when created or install
 #### Scenario: Invalid skill rejected
 - **WHEN** a created or installed skill fails schema validation
 - **THEN** it is not activated
+
+### Requirement: Seeded skill-management and capability skills
+Sunny SHALL ship with a set of seeded known-good skills so it can extend itself from day one, including: a skill-authoring skill (how to write a good `SKILL.md`, e.g. from `anthropics/skills`), a skill-discovery/installation skill (how to find and install skills via `npx skills` and related installers), and the `devbox` skill (build/run/host). Seeded skills SHALL be installable through the same install path as any other skill.
+
+#### Scenario: Skill-authoring and discovery skills are present
+- **WHEN** Sunny needs to author a new skill or find an existing one
+- **THEN** a seeded skill-authoring skill and a seeded skill-discovery/installation skill are available to guide it
+
+#### Scenario: Seeded skills use the standard install path
+- **WHEN** a seeded skill is installed
+- **THEN** it is installed through the same `SKILL.md` install path as any other skill

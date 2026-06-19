@@ -13,4 +13,4 @@ Add the **observability** capability (originally Phase 6 of `bootstrap-sunny`): 
 
 ## Impact
 
-Builds on the bootstrapped foundation and complements **security-tools-credentials** (the audit log records tool/secret access; budget caps bound autonomous runs). The per-run cost cap here is what `scheduling`'s "Bounded autonomous dispatch" requirement points to.
+Builds on the bootstrapped foundation and complements **security-permissions** (the audit log records tool/secret access; budget caps bound autonomous runs). The per-run cost cap here is what `scheduling`'s "Bounded autonomous dispatch" requirement points to.

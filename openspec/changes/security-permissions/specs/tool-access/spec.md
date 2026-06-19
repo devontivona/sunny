@@ -1,5 +1,9 @@
 ## ADDED Requirements
 
+> These requirements add the *enforcement* layer over the tool-registration contract
+> and concrete tools introduced by the `agent-tooling` change. They read the risk-tier
+> and `op://` declarations recorded there (D-TA0) and make them binding.
+
 ### Requirement: Command-level permissioning (deny-by-default)
 Capability is exposed primarily through a small tool surface (notably a shell/bash tool plus a few genuinely non-CLI tools), so permissioning SHALL be applied at the level of the command being run, not by proliferating one tool per permissioned activity. A deny-by-default command-approval policy SHALL classify each command as allow / ask / deny. Classification SHALL be based on a parsed representation of the command (not naive prefix string-matching), evaluating every sub-command across pipes, substitutions, and chaining, and SHALL fail closed (anything unparseable, substitution-bearing, or otherwise uncertain becomes ask, never allow).
 
@@ -30,14 +34,6 @@ Commands whose risk is unknown, or that are destructive, irreversible, money-spe
 - **WHEN** a command sends email or performs a credentialed action on the owner's behalf
 - **THEN** it requires owner approval first
 
-### Requirement: Per-command credential injection
-Secrets SHALL be injected into the specific command invocation that needs them (resolving `op://` references into that subprocess's environment at execution time), and SHALL NOT be exposed to the model or placed in the model's context. A command SHALL only receive credential references explicitly permitted for it (or its skill).
-
-#### Scenario: Secret bound to one command only
-- **WHEN** a command needs a credential
-- **THEN** the value is resolved into that subprocess's environment at run time
-- **AND** is not visible to the model or to other commands
-
 ### Requirement: Taint-tracking and step-up authorization for untrusted-derived commands
 Sunny SHALL track whether a command's construction was influenced by untrusted content (web pages, email bodies, installed-skill output). Commands with no such influence ("clean") MAY run under the normal command policy with full host access. Commands so influenced ("tainted") SHALL require step-up authorization: a high-friction confirmation that shows the command and flags its untrusted provenance, distinct from an ordinary in-band approval. In unattended runs (no human available to authorize), a tainted command SHALL be blocked and deferred to the owner, or confined to a targeted sandbox. Network egress SHALL be restricted as a backstop regardless.
 
@@ -53,14 +49,13 @@ Sunny SHALL track whether a command's construction was influenced by untrusted c
 - **WHEN** a tainted command arises during a scheduled/autonomous run with no human to authorize
 - **THEN** it is blocked and deferred to the owner (or confined to a targeted sandbox), not run with full host access
 
-### Requirement: Credentialed browser tool routing
-The credentialed browser tool SHALL run through the isolated browser profile, SHALL resolve site logins only from its whitelisted references at fill-time within the automation layer, and SHALL treat any credentialed action as approval-required.
+### Requirement: Credentialed action approval gate
+Any credentialed action performed on the owner's behalf (a credentialed browser action on a logged-in site, or an act-as-owner capability such as sending email) SHALL require owner approval before it executes. The credentialed browse capability and its isolated persistent profile are provided by the `agent-tooling` change; this requirement gates the *actions* taken through it.
 
-#### Scenario: Login filled without exposing the value
-- **WHEN** the browser tool authenticates to a site
-- **THEN** it resolves the login from its whitelisted reference and fills it in the automation layer
-- **AND** the value is not exposed to the model
+#### Scenario: Credentialed browser action gated
+- **WHEN** the browse capability performs an action on a logged-in site on the owner's behalf
+- **THEN** it requires owner approval first
 
-#### Scenario: Credentialed action gated
-- **WHEN** the browser tool performs an action on a logged-in site on the user's behalf
-- **THEN** it requires user approval first
+#### Scenario: Email send gated
+- **WHEN** the email skill is about to send mail as the owner
+- **THEN** it requires owner approval first

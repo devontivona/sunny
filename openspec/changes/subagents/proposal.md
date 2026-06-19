@@ -13,4 +13,4 @@ Add the **subagents** capability (originally Phase 7 of `bootstrap-sunny`): a `d
 
 ## Impact
 
-Builds on **durable-execution** (durable delegation), **security-tools-credentials** (least-privilege toolsets; the no-credential untrusted-content pattern), and **observability** (child spans/trajectories).
+Builds on **durable-execution** (durable delegation), **agent-tooling** (least-privilege toolsets via the per-tool credential whitelist) and **security-permissions** (the no-credential untrusted-content pattern), and **observability** (child spans/trajectories).
