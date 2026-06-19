@@ -1,15 +1,26 @@
 ## ADDED Requirements
 
 ### Requirement: SKILL.md standard, stored as files
-Skills SHALL follow the `agentskills.io` `SKILL.md` format — a `skills/<name>/SKILL.md` with YAML frontmatter (at least `name` and `description`) and a markdown body, plus optional `scripts/`, `references/`, and `assets/`. Skills SHALL be stored as plain files under `~/.sunny/skills/` compatible with version control.
+Skills SHALL follow the `agentskills.io` `SKILL.md` format — a `skills/<name>/SKILL.md` with YAML frontmatter (at least `name` and `description`) and a markdown body, plus optional `scripts/`, `references/`, and `assets/`. Skills SHALL be stored as plain files in a dedicated git repository the user controls, with `~/.sunny/skills/` as the local working copy.
 
 #### Scenario: A skill is a standard SKILL.md directory
 - **WHEN** a skill exists
-- **THEN** it is a directory containing a `SKILL.md` with `name` and `description` frontmatter, stored under the skills directory
+- **THEN** it is a directory containing a `SKILL.md` with `name` and `description` frontmatter, stored in the skill repository
 
-#### Scenario: Skills are version-controllable
-- **WHEN** the skills directory is inspected
-- **THEN** it consists of plain files that can be committed to version control
+#### Scenario: Skills are version-controlled
+- **WHEN** the skill repository is inspected
+- **THEN** it consists of plain files whose history records every skill change
+
+### Requirement: Unified skill store and install path
+Self-authored and externally found skills SHALL share one workflow: both live in the dedicated skill repository and are installed/updated through the same `npx skills` path (`npx skills add owner/repo`). A self-authored skill SHALL be committed to the repository and become installable by that same path; an external skill MAY be vendored into the repository. Sunny committing to the repository SHALL use a declared credential reference for git authentication.
+
+#### Scenario: Self-authored and found skills use one install path
+- **WHEN** Sunny authors a skill or installs an external one
+- **THEN** both are recorded in the skill repository and installed through the same `npx skills` workflow
+
+#### Scenario: Commit uses a declared credential
+- **WHEN** Sunny commits a skill to the repository
+- **THEN** git authentication uses a declared credential reference, not a value exposed to the model
 
 ### Requirement: Progressive-disclosure loading
 Only skill metadata (`name` + `description`) SHALL be loaded into context by default; a skill's body SHALL be loaded only when a task matches, and its `references`/`scripts` only when needed. Script code SHALL NOT be loaded into context (only its output). The metadata index SHALL be budget-capped, dropping least-used descriptions first while retaining names.

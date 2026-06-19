@@ -11,15 +11,15 @@ Every tool SHALL be registered through a uniform contract that declares, at mini
 - **WHEN** the policy or credential layer inspects a tool
 - **THEN** it can read the tool's risk tier and credential references through the same contract for every tool
 
-### Requirement: Core thin tools (bash, file read, web fetch)
-Sunny SHALL expose capability primarily through a `bash` tool that executes a command on the host and returns its output, plus thin `file-read` and `web-fetch` tools. Content returned by `web-fetch` (and by `bash` commands that read external content) SHALL be treated as untrusted data.
+### Requirement: Core thin tools (bash, file read)
+Sunny SHALL expose capability primarily through a `bash` tool that executes a command on the host and returns its output, plus a thin `file-read` tool. The thin-tool surface SHALL be kept minimal; higher capabilities (browsing, fetching web pages, email, building sites) SHALL be CLIs driven via bash or `SKILL.md` skills over bash, NOT dedicated tools. Web fetching SHALL be performed via bash (e.g. a fetch CLI) or the browse capability rather than a dedicated `web-fetch` tool. Any external content entering Sunny's context (fetched pages, command output that reads remote data) SHALL be treated as untrusted data.
 
 #### Scenario: Bash runs a command and returns output
 - **WHEN** Sunny invokes the bash tool with a command
 - **THEN** the command runs on the host and its stdout/stderr and exit status are returned
 
 #### Scenario: Fetched content is untrusted
-- **WHEN** the web-fetch tool retrieves a URL
+- **WHEN** Sunny fetches a web page (via bash or the browse capability)
 - **THEN** the returned content is handled as untrusted data, not as instructions
 
 ### Requirement: Per-command credential injection
@@ -31,7 +31,7 @@ Secrets SHALL be injected into the specific command invocation that needs them (
 - **AND** is not visible to the model or to other commands
 
 ### Requirement: Credentialed browse capability
-Sunny SHALL provide a browse capability with two modes: a **credentialed** mode that runs in an isolated, persistent browser profile (a local on-disk session/profile, e.g. an `agent-browser` durable session) that retains session/cookie state across runs so the owner logs in once and the session is reused; and a **research** mode that uses an ephemeral, un-credentialed context. The owner's authenticated session state SHALL reside on the local host (not third-party infrastructure) by default. Site logins SHALL be resolved only from the capability's declared `op://` references at fill-time within the automation layer and SHALL NOT be exposed to the model.
+Sunny SHALL provide a browse capability with two modes: a **credentialed** mode that runs in an isolated, persistent browser profile (a local on-disk session/profile, e.g. an `agent-browser` durable session) that retains session/cookie state across runs so the owner logs in once and the session is reused; and a **research** mode that uses an ephemeral, un-credentialed context. The capability SHALL be driven as a CLI (e.g. the `agent-browser` CLI) through the bash tool rather than a dedicated browser tool. The owner's authenticated session state SHALL reside on the local host (not third-party infrastructure) by default. Site logins SHALL be resolved only from the capability's declared `op://` references at fill-time within the automation layer and SHALL NOT be exposed to the model.
 
 #### Scenario: Session persists across runs
 - **WHEN** the owner has logged into a site in the credentialed profile

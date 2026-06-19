@@ -4,10 +4,13 @@
 > **security-permissions** change, which reads the declarations recorded here. D-*
 > decisions are in this change's `design.md`. Ungated state is attended-testing-only.
 
+## Foundations
+- [ ] 0 Prefer AI SDK primitives — before building the tool registration, MCP, agent loop, skill, or sandbox plumbing, evaluate what the Vercel AI SDK already provides (tools, MCP client, agents/loops, skills, Vercel Sandbox) and wrap it; hand-roll only where there's no equivalent, and note why (build principle).
+
 ## Skills runtime (agent-skills)
-- [ ] 1 `SKILL.md` loader (agentskills.io format) from `~/.sunny/skills/`; progressive disclosure (metadata index on the cached prefix, body on trigger, scripts/refs on demand) (D-SK1/2).
-- [ ] 2 Self-authoring `skill_manage` tool (create/edit/delete), auto+notify, validate before activation (D-SK4/7).
-- [ ] 3 Installed-skill path via `npx skills add owner/repo`; trust-tier marking (self-authored vs installed); seed known-good defaults incl. a **skill-authoring** skill, a **skill-discovery/installation** skill, and `devbox` (D-SK1/5). *(Install approval + non-escalation enforcement: security-permissions.)*
+- [ ] 1 `SKILL.md` loader (agentskills.io format), local working copy at `~/.sunny/skills/` synced from the skill repo; progressive disclosure (metadata index on the cached prefix, body on trigger, scripts/refs on demand) (D-SK1/2/8).
+- [ ] 2 Self-authoring `skill_manage` tool (create/edit/delete), auto+notify, validate before activation, then commit to the skill repo (D-SK4/7/8).
+- [ ] 3 Dedicated git **skill repo** (e.g. `devontivona/skills`) Sunny can commit to (git auth via a declared `op://` ref); **unified install path** — self-authored *and* found skills both flow through `npx skills add` (`devontivona/skills/<name>` for self-authored, `owner/repo` for external); trust-tier marking; seed known-good defaults incl. a **skill-authoring** skill, a **skill-discovery/installation** skill, and `devbox` (D-SK1/5/8). *(Install approval + non-escalation enforcement: security-permissions.)*
 - [ ] 4 (Deferred-ready) `pgvector` retrieval over skill descriptions when the metadata budget is exceeded (D-SK3).
 
 ## Credential plumbing (credentials)
@@ -16,7 +19,7 @@
 
 ## Tool contract + thin tools (tool-access)
 - [ ] 7 Uniform tool-registration contract: every tool declares risk tier + `op://` references, recorded but **not yet enforced** (the seam security-permissions reads) (D-TA0).
-- [ ] 8 Thin tools: `bash` (run host command, return output), `file-read`, `web-fetch`; fetched/read external content marked untrusted (D-TA2).
+- [ ] 8 Thin tools (minimal surface): `bash` (run host command, return output), `file-read`, memory ops. Web fetching is bash (a fetch CLI) or the browse capability — **not** a dedicated tool; any external content entering context is marked untrusted (D-TA2).
 - [ ] 9 Per-command `op run` credential injection: `op://` → that subprocess's env at exec time, masked in output, never in model context (D-TA5).
 
 ## Capabilities as skills

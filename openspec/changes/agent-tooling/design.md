@@ -16,6 +16,17 @@ around the existing tool surface, with tool interfaces unchanged.
 The ungated state is **attended-testing-only** — no autonomous/scheduled runs of
 credentialed or destructive capabilities until `security-permissions` lands.
 
+## Build principle: prefer AI SDK primitives, don't hand-roll
+
+Sunny is built on the Vercel AI SDK. Before building any of the machinery in this
+change from scratch, evaluate what the AI SDK already provides and use it: **tools**
+(`tool()` definitions, typed args/results), **MCP** (MCP client/transport for external
+tool servers), **agents/loops** (multi-step tool-calling, stop conditions), **skills**,
+and **sandboxes** (Vercel Sandbox for isolated execution). The registration contract
+(D-TA0), tool surface, and any skill/sandbox plumbing should wrap AI SDK primitives
+rather than reimplement them. Hand-roll only where the AI SDK genuinely has no
+equivalent, and note why.
+
 ---
 
 # Agent Skills
@@ -37,7 +48,8 @@ Because installed skills are untrusted third-party code, they are gated at insta
 - **D-SK1 — Adopt the `SKILL.md` open standard, files-first.** `skills/<name>/SKILL.md`
   (YAML frontmatter — `name`, `description` required; optional `license`,
   `compatibility`, `metadata.version`, `allowed-tools`) plus optional `scripts/`,
-  `references/`, `assets/`, stored under `~/.sunny/skills/`, git-able like the memory soul.
+  `references/`, `assets/`. The store of record is a dedicated git repo (D-SK8); the
+  local `~/.sunny/skills/` is the working copy.
 - **D-SK2 — Progressive-disclosure loading on a shared always-on budget.** Only
   `name` + `description` are always in context; the body loads on match; `references/`
   /`scripts/` on demand (script code never enters context, only output). The metadata
@@ -47,8 +59,9 @@ Because installed skills are untrusted third-party code, they are gated at insta
   metadata budget — reusing the memory L3 local-embeddings + `pgvector` path. No new datastore.
 - **D-SK4 — Self-authoring loop (auto + notify).** A `skill_manage` tool lets Sunny
   create/edit/delete its own skills: reflect on a completed task → write a pushy,
-  keyword-rich `SKILL.md` → validate → auto-discovered next run. Created automatically,
-  user notified, immediately usable, reviewable/reversible via git.
+  keyword-rich `SKILL.md` → validate → commit to the skill repo (D-SK8) → auto-discovered
+  next run. Created automatically, user notified, immediately usable, reviewable/reversible
+  via the repo's git history.
 - **D-SK5 — Two trust tiers: self-authored (trusted) vs installed (untrusted).**
   Self-authored → auto+notify. Installed (any agentskills-compatible Git source via
   `npx skills add`) → untrusted code; install is APPROVAL-gated and reviewed
@@ -61,6 +74,15 @@ Because installed skills are untrusted third-party code, they are gated at insta
   tiers, and blocklist apply (enforced in `security-permissions`). `allowed-tools`
   may only *further restrict*.
 - **D-SK7 — Validation before activation** against the `SKILL.md` schema; invalid → not activated.
+- **D-SK8 — Unified personal skill repo.** Skills persist in a dedicated git repo Sunny
+  can commit to (e.g. `devontivona/skills`). This unifies the two paths into one
+  workflow: a **self-authored** skill is committed to the repo and then installed like
+  any other via `npx skills add devontivona/skills/<name>`; **found** external skills are
+  installed via `npx skills add owner/repo` and may be vendored into the same repo. So
+  `npx skills` is the single install path for both, and the repo's git history is the
+  durable, reviewable, portable record (`~/.sunny/skills/` is just the synced working
+  copy). NB: Sunny committing/pushing requires git auth — a credential reference (D-CR3),
+  and `git push` is gated by the command policy in `security-permissions`.
 
 ---
 
@@ -82,11 +104,14 @@ registration contract every tool follows.
   These declarations are recorded and surfaced (dashboard) in this change but not yet
   gated; `security-permissions` adds the engine that reads them. This is the seam that
   lets enforcement layer on without changing tool interfaces.
-- **D-TA2 — Bash-centric capability; capabilities compose as skills.** Thin tools:
-  `bash` (universal), `file-read`, `web-fetch`, plus the non-CLI browse capability and
-  memory ops. Higher capabilities are `SKILL.md` skills over bash: **email** (himalaya),
-  **website-builder** (devbox), research/todos. Command-level *permissioning* of these
-  (D-TA1) is in `security-permissions`.
+- **D-TA2 — Bash-centric capability; capabilities compose as skills.** The thin-tool
+  surface is deliberately minimal: `bash` (universal), `file-read`, and **memory ops**
+  (the one genuinely non-CLI tool — DB mutation). Everything else is a CLI driven via
+  bash or a `SKILL.md` skill over bash: **browse** (the `agent-browser` CLI, D-TA3),
+  **email** (himalaya), **website-builder** (devbox), **web fetch** (a fetch CLI such as
+  `curl`/a markdown-extractor, or the browse capability for rendered pages), research/todos.
+  So even browsing and fetching are CLIs-over-bash, exactly like email — **not** dedicated
+  tools. Command-level *permissioning* of all of these (D-TA1) is in `security-permissions`.
 - **D-TA3 — Credentialed browse capability (engine: Vercel `agent-browser`, default).**
   `agent-browser` (the native CDP CLI) is the default engine. Rationale (verified from
   primary sources): it is **token-efficient by design** (compact ref-based a11y page
@@ -95,7 +120,9 @@ registration contract every tool follows.
   auto-loaded on start; `--profile <path>` for full state; optional **AES-256-GCM** at
   rest) so the owner logs in once and the session survives restarts; it ships a built-in
   encrypted **auth vault** so "the LLM never sees passwords" out of the box; and being a
-  **CLI** it fits Sunny's bash-centric design (D-TA2) rather than fighting it. The owner's
+  **CLI** it fits Sunny's bash-centric design (D-TA2) rather than fighting it: Sunny
+  drives it through the **bash tool** (gated per-command in `security-permissions`),
+  exactly like himalaya for email — there is no dedicated browser tool. The owner's
   session state stays on the local host. Two modes: a **credentialed** persistent profile
   (login once, reused) and an **ephemeral research** context. 1Password remains the
   source of truth (D-CR1): Sunny resolves the `op://` reference and seeds the session /
