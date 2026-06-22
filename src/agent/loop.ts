@@ -12,6 +12,7 @@ import type { SunnyConfig } from '../config/index.js';
 import type { ChannelEvent, Gateway } from '../gateway/types.js';
 import type { ConversationStore } from '../gateway/store.js';
 import type { Db } from '../db/client.js';
+import type { CredentialResolver } from '../credentials/index.js';
 import { loadCore, memoryPaths } from '../memory/index.js';
 import { loadSkillIndex, skillsPaths } from '../skills/index.js';
 import { logger } from '../logger.js';
@@ -49,6 +50,14 @@ export interface AgentRunnerDeps {
    * `start_job`. Production omits it and the tool uses the real WDK `start`.
    */
   start?: StartJob;
+  /**
+   * Credential resolver (credentials D-CR2). Production builds it from
+   * `OP_SERVICE_ACCOUNT_TOKEN`; credentialed tools scope it to their declared
+   * references per-tool (D-CR3, `scopeResolver`). Absent when no token is
+   * configured — credentialed tools are then unavailable. (Consumed by the
+   * credentialed tools/skills added in later tasks: browse, email, bash op-run.)
+   */
+  credentials?: CredentialResolver;
 }
 
 /**

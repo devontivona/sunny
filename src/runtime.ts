@@ -9,6 +9,7 @@ import { SendblueGateway } from './gateway/sendblue.js';
 import type { ChannelEvent, Gateway } from './gateway/types.js';
 import { initMemory } from './memory/index.js';
 import { initSkills } from './skills/index.js';
+import { resolverFromEnv } from './credentials/index.js';
 import { startScheduler } from './scheduler/index.js';
 import { logger } from './logger.js';
 
@@ -73,7 +74,13 @@ async function start(): Promise<Runtime> {
   } else {
     // Ack-fast turns through the dispatcher: per-thread serialization + steering
     // (4.1/4.1b). The gateway returns the webhook 200 immediately; turns run async.
-    const runTurn = createAgentRunner({ config, store, gateway, db });
+    const runTurn = createAgentRunner({
+      config,
+      store,
+      gateway,
+      db,
+      credentials: resolverFromEnv() ?? undefined,
+    });
     dispatcher = new TurnDispatcher(runTurn, store);
     gateway.onInbound(async (event: ChannelEvent) => dispatcher!.enqueue(event));
   }

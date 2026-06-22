@@ -14,8 +14,8 @@
 - [ ] 4 (Deferred by design) `pgvector` retrieval over skill descriptions when the metadata budget is exceeded — not needed at current library size; reuses memory L3 infra when it lands (D-SK3).
 
 ## Credential plumbing (credentials)
-- [ ] 5 1Password setup: dedicated read-only `Sunny` vault + Service Account; `OP_SERVICE_ACCOUNT_TOKEN` from an `EnvironmentFile` (not committed); `@1password/sdk` wrapper resolving `op://` refs **in the tool layer only**, never to the model (D-CR1/2). *(Token hardening + rotation: security-permissions.)*
-- [ ] 6 Per-tool `op://` reference whitelist as part of the tool-registration contract; the model cannot resolve an arbitrary reference (D-CR3 / D-TA0).
+- [x] 5 `@1password/sdk` resolver in the tool layer (`src/credentials/index.ts`): `OnePasswordResolver` resolves `op://vault/item/field` refs, values never returned to the model or logged (D-CR2); `resolverFromEnv` reads `OP_SERVICE_ACCOUNT_TOKEN`, wired into runtime → loop deps. *(Manual setup for Devon — create the dedicated read-only `Sunny` vault + Service Account; documented in `.env.example`. Token hardening + rotation: security-permissions.)* *(Unit-tested.)*
+- [x] 6 Per-tool `op://` reference whitelist (`scopeResolver`, D-CR3): a scoped resolver refuses any reference not in its declared set, so the model cannot resolve an arbitrary path — the credential half of the D-TA0 contract. Plus `resolveEnv` for `op run`-style subprocess injection (D-TA5). `src/credentials/index.ts` (D-CR3/D-TA0). *(Unit-tested.)*
 
 ## Tool contract + thin tools (tool-access)
 - [ ] 7 Uniform tool-registration contract: every tool declares risk tier + `op://` references, recorded but **not yet enforced** (the seam security-permissions reads) (D-TA0).
