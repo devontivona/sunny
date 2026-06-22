@@ -1,20 +1,20 @@
 {
   "model": "claude-opus-4-8",
-  "timestamp": "2026-06-18T23:06:59.085Z",
+  "timestamp": "2026-06-18T23:57:45.570Z",
   "n": 5,
-  "costUsd": 1.9911,
+  "costUsd": 2.2474,
   "stoppedOnBudget": false,
   "dimensions": {
     "elicitation": {
-      "passRate": 0.95,
+      "passRate": 1,
       "pass": true
     },
     "memory": {
-      "passRate": 0.8666666666666667,
+      "passRate": 1,
       "pass": true
     },
     "tool-selection": {
-      "passRate": 0.9333333333333332,
+      "passRate": 1,
       "pass": true
     }
   },
@@ -23,14 +23,14 @@
       "name": "elicitation/simple-reply",
       "dimension": "elicitation",
       "runs": 5,
-      "passes": 4,
-      "passRate": 0.8,
+      "passes": 5,
+      "passRate": 1,
       "threshold": 0.6,
       "pass": true,
       "graderPasses": {
-        "delivered-via-send_message": 4,
-        "no-fallback": 4,
-        "sent-something": 4
+        "delivered-via-send_message": 5,
+        "no-fallback": 5,
+        "sent-something": 5
       }
     },
     {
@@ -101,14 +101,14 @@
       "name": "memory/recalls-archive",
       "dimension": "memory",
       "runs": 5,
-      "passes": 3,
-      "passRate": 0.6,
+      "passes": 5,
+      "passRate": 1,
       "threshold": 0.6,
       "pass": true,
       "graderPasses": {
         "tool-called:recall_history": 5,
-        "reply-mentions": 3,
-        "natural-recall (judge:claude-sonnet-4-6/v1)": 3
+        "reply-mentions": 5,
+        "natural-recall (judge:claude-sonnet-4-6/v1)": 5
       }
     },
     {
@@ -140,12 +140,12 @@
       "name": "tool-selection/trivial-greeting-no-heavy-tools",
       "dimension": "tool-selection",
       "runs": 5,
-      "passes": 4,
-      "passRate": 0.8,
+      "passes": 5,
+      "passRate": 1,
       "threshold": 0.6,
       "pass": true,
       "graderPasses": {
-        "delivered-via-send_message": 4,
+        "delivered-via-send_message": 5,
         "tool-not-called:start_job": 5,
         "tool-not-called:schedule_create": 5
       }

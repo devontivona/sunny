@@ -4,7 +4,13 @@ import type { ChannelEvent } from '../src/gateway/types.js';
 import { createTestDb, type TestDb } from './db.js';
 import { createTestRuntime, type TestRuntime } from './harness.js';
 import { makeChannelEvent } from './factories.js';
-import { modelThatOnlyScratches, modelThatSends, modelThatThrows } from './fakes/model.js';
+import {
+  generateToolCall,
+  modelThatOnlyScratches,
+  modelThatSends,
+  modelThatThrows,
+  scriptModel,
+} from './fakes/model.js';
 
 const NO_STEER: SteerHandle = { drain: () => [] };
 
@@ -61,17 +67,63 @@ describe('agent loop end-to-end', () => {
     expect(win.filter((m) => m.role === 'assistant')).toHaveLength(1);
   });
 
-  it('scratch-only turn → nothing delivered, flagged as fallback_text (no autosend)', async () => {
-    const rt = createTestRuntime({ db: tdb.db, model: modelThatOnlyScratches('a private reply') });
-    const ev = makeChannelEvent({ text: 'hi' });
+  it('stay_silent turn → delivered=silence, nothing sent, no recovery', async () => {
+    // Recovery must NOT run (default recoveryModel throws if it does).
+    const rt = createTestRuntime({
+      db: tdb.db,
+      model: scriptModel([
+        { toolCalls: [{ toolName: 'stay_silent', input: {} }] },
+        { finishReason: 'stop' },
+      ]),
+    });
+    const ev = makeChannelEvent({ text: '👍' });
     await runOnce(rt, ev);
 
-    // Raw model text is private (D-MG8): the user hears NOTHING this turn…
     expect(rt.gateway.texts()).toEqual([]);
-    // …but the miss is still recorded as telemetry on the persisted turn.
     const turn = (await lastTurn(rt, ev.threadId)).find((m) => m.role === 'assistant');
-    const meta = (turn!.payload as { metadata?: { delivered?: string } }).metadata;
-    expect(meta?.delivered).toBe('fallback_text');
+    const meta = (turn!.payload as { metadata?: { delivered?: string; recovered?: boolean } })
+      .metadata;
+    expect(meta?.delivered).toBe('silence');
+    expect(meta?.recovered).toBeFalsy();
+  });
+
+  it('miss (scratch, no send/silent) → recovery composes a send; delivered=send_message', async () => {
+    const rt = createTestRuntime({
+      db: tdb.db,
+      model: modelThatOnlyScratches('I think the answer is 42 but let me phrase it nicely'),
+      recoveryModel: generateToolCall('send_message', { text: "It's 42." }),
+    });
+    const ev = makeChannelEvent({ text: 'what is the answer?' });
+    await runOnce(rt, ev);
+
+    // The recovery pass delivered a composed message (not the raw scratch).
+    expect(rt.gateway.texts()).toEqual(["It's 42."]);
+    const turn = (await lastTurn(rt, ev.threadId)).find((m) => m.role === 'assistant');
+    const payload = turn!.payload as {
+      parts: Array<{ type: string; input?: { text?: string } }>;
+      metadata?: { delivered?: string; recovered?: boolean };
+    };
+    expect(payload.metadata?.delivered).toBe('send_message');
+    expect(payload.metadata?.recovered).toBe(true);
+    // The recovery send is recorded in history as a send_message tool call.
+    expect(payload.parts.some((p) => p.type === 'tool-send_message')).toBe(true);
+  });
+
+  it('miss → recovery can still choose silence (delivered=silence, nothing sent)', async () => {
+    const rt = createTestRuntime({
+      db: tdb.db,
+      model: modelThatOnlyScratches('User just said thanks — no reply needed.'),
+      recoveryModel: generateToolCall('stay_silent', {}),
+    });
+    const ev = makeChannelEvent({ text: 'thanks!' });
+    await runOnce(rt, ev);
+
+    expect(rt.gateway.texts()).toEqual([]); // recovery picked silence — no ghosting AND no spam
+    const turn = (await lastTurn(rt, ev.threadId)).find((m) => m.role === 'assistant');
+    const meta = (turn!.payload as { metadata?: { delivered?: string; recovered?: boolean } })
+      .metadata;
+    expect(meta?.delivered).toBe('silence');
+    expect(meta?.recovered).toBe(true);
   });
 
   it('model error → user gets the error reply and the runner survives the next turn', async () => {
@@ -89,5 +141,40 @@ describe('agent loop end-to-end', () => {
     const ev2 = makeChannelEvent({ messageId: 'after-error', text: 'still there?' });
     await runOnce(rt2, ev2);
     expect(rt2.gateway.texts()).toEqual(['recovered']);
+  });
+
+  describe('text delivery mode (candidate design)', () => {
+    it("delivers the model's reply text directly, split into bubbles on blank lines", async () => {
+      const rt = createTestRuntime({
+        db: tdb.db,
+        deliveryMode: 'text',
+        model: modelThatOnlyScratches('Paris 🇫🇷\n\nAnything else?'),
+      });
+      const ev = makeChannelEvent({ text: 'capital of France?' });
+      await runOnce(rt, ev);
+
+      expect(rt.gateway.texts()).toEqual(['Paris 🇫🇷', 'Anything else?']); // two bubbles
+      const turn = (await lastTurn(rt, ev.threadId)).find((m) => m.role === 'assistant');
+      const meta = (turn!.payload as { metadata?: { delivered?: string } }).metadata;
+      expect(meta?.delivered).toBe('send_message');
+    });
+
+    it('stay_silent → nothing delivered, delivered=silence (no send_message tool exists)', async () => {
+      const rt = createTestRuntime({
+        db: tdb.db,
+        deliveryMode: 'text',
+        model: scriptModel([
+          { toolCalls: [{ toolName: 'stay_silent', input: {} }] },
+          { finishReason: 'stop' },
+        ]),
+      });
+      const ev = makeChannelEvent({ text: '👍' });
+      await runOnce(rt, ev);
+
+      expect(rt.gateway.texts()).toEqual([]);
+      const turn = (await lastTurn(rt, ev.threadId)).find((m) => m.role === 'assistant');
+      const meta = (turn!.payload as { metadata?: { delivered?: string } }).metadata;
+      expect(meta?.delivered).toBe('silence');
+    });
   });
 });

@@ -10,7 +10,11 @@ import { z } from 'zod';
 export const ConfigSchema = z.object({
   /** AI SDK model id (D-PS3). Provider-agnostic; Opus 4.8 is the default. */
   modelId: z.string().default('claude-opus-4-8'),
-  /** Reasoning effort for agentic turns (D-PS3). */
+  /** Cheap model for the delivery-recovery pass (D-MG8). Defaults to Haiku. */
+  recoveryModelId: z.string().default('claude-haiku-4-5'),
+  /** Extended thinking for conversational turns: `adaptive` (default) or `off`. */
+  thinking: z.enum(['adaptive', 'off']).default('adaptive'),
+  /** Reasoning effort for agentic turns when thinking is on (D-PS3). */
   effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).default('high'),
   /** Devon's timezone (used by scheduling later). */
   timezone: z.string().default('America/New_York'),
@@ -50,6 +54,7 @@ export type SunnyConfig = z.infer<typeof ConfigSchema> & {
 
 const DEFAULT_CONFIG_JSON = `{
   "modelId": "claude-opus-4-8",
+  "recoveryModelId": "claude-haiku-4-5",
   "effort": "high",
   "timezone": "America/New_York",
   "owner": {

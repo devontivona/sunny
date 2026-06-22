@@ -12,12 +12,27 @@ export function getModel(config: SunnyConfig): LanguageModel {
 }
 
 /**
+ * The cheap model for the delivery-recovery pass (D-MG8): when the main turn
+ * produces text but never calls `send_message`/`stay_silent`, a forced one-shot
+ * pass on this model composes the message (or chooses silence). Runs WITHOUT
+ * thinking so the forced tool call is permitted (forcing ⊥ extended thinking on
+ * Anthropic). Defaults to Haiku; overridable via `config.recoveryModelId`.
+ */
+export function getRecoveryModel(config: SunnyConfig): LanguageModel {
+  return anthropic(config.recoveryModelId);
+}
+
+/**
  * Anthropic provider options for agentic turns (D-PS3):
- * - adaptive thinking, `display: 'omitted'` so reasoning is private and never
- *   reaches the user (reinforces D-MG8: raw model output is private).
- * - effort tier from config (default `high`).
+ * - `adaptive` thinking with `display: 'omitted'` (reasoning private, reinforces
+ *   D-MG8) + the effort tier from config — OR thinking fully `disabled` when
+ *   `config.thinking === 'off'` (no native private reasoning channel; the model's
+ *   plain-text scratchpad becomes its reasoning space).
  */
 export function anthropicProviderOptions(config: SunnyConfig) {
+  if (config.thinking === 'off') {
+    return { anthropic: { thinking: { type: 'disabled' as const } } };
+  }
   return {
     anthropic: {
       thinking: { type: 'adaptive' as const, display: 'omitted' as const },

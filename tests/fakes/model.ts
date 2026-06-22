@@ -122,3 +122,31 @@ export function modelThatThrows(message = 'mock model failure'): MockLanguageMod
     doStream: () => Promise.reject(new Error(message)),
   });
 }
+
+/**
+ * A `doGenerate` mock that makes a single (forced) tool call — for the delivery
+ * recovery pass, which uses `generateText` (not streaming). The named tool's real
+ * `execute` runs, so e.g. `send_message` delivers + bumps the counter.
+ */
+export function generateToolCall(toolName: string, input: unknown = {}): MockLanguageModelV3 {
+  return new MockLanguageModelV3({
+    modelId: 'mock-recovery',
+    doGenerate: () =>
+      Promise.resolve({
+        content: [
+          { type: 'tool-call', toolCallId: 'rc-1', toolName, input: JSON.stringify(input) },
+        ],
+        finishReason: { unified: 'tool-calls', raw: undefined },
+        usage: ZERO_USAGE,
+        warnings: [],
+      }),
+  });
+}
+
+/** A recovery model that must NOT be invoked — fails loudly if a test triggers recovery. */
+export function recoveryNotExpected(): MockLanguageModelV3 {
+  return new MockLanguageModelV3({
+    modelId: 'mock-recovery',
+    doGenerate: () => Promise.reject(new Error('unexpected recovery pass')),
+  });
+}

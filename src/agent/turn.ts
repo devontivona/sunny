@@ -14,20 +14,24 @@ import type { StoredMessage } from '../gateway/store.js';
 export type Delivery = 'send_message' | 'fallback_text' | 'silence';
 
 /**
- * Classify how a turn was delivered from the two observable signals: how many
- * times `send_message` was called, and whether any private scratch text exists.
+ * Classify how a turn was delivered from three observable signals: how many times
+ * `send_message` was called, whether the model affirmatively called `stay_silent`,
+ * and whether any private scratch text exists.
  *
  * - `send_message` — the intended path: the model spoke via the tool.
- * - `fallback_text` — an elicitation MISS: the model produced only private scratch
- *   and never called send_message. Nothing is delivered (raw text is private); the
- *   runner logs it so the miss stays measurable. This is the regression signal.
- * - `silence` — nothing to say: no send, no scratch (a deliberate, valid choice).
+ * - `silence` — a deliberate, valid choice: the model called `stay_silent`, OR it
+ *   produced nothing at all (no send, no scratch).
+ * - `fallback_text` — an elicitation MISS: the model wrote private scratch but
+ *   called NEITHER `send_message` nor `stay_silent`. This is what triggers the
+ *   recovery pass (and, if recovery is somehow skipped, what gets logged as the
+ *   regression signal). Raw scratch is never delivered as-is.
  *
- * From the user's perspective both `fallback_text` and `silence` mean "no message
- * arrived"; they are kept distinct purely as telemetry (a miss vs. real restraint).
+ * From the user's perspective `silence` and an unrecovered `fallback_text` both
+ * mean "no message arrived"; they are kept distinct purely as telemetry.
  */
-export function classifyDelivery(sendCount: number, scratch: string): Delivery {
+export function classifyDelivery(sendCount: number, scratch: string, staySilent = false): Delivery {
   if (sendCount > 0) return 'send_message';
+  if (staySilent) return 'silence';
   if (scratch) return 'fallback_text';
   return 'silence';
 }
@@ -53,6 +57,33 @@ export function extractScratch(parts: UIMessage['parts']): string {
     .map((p) => p.text)
     .join('\n')
     .trim();
+}
+
+/**
+ * Build a `tool-send_message` UIMessage part for a delivered message. Used to
+ * record a recovery-pass send (which happens in a separate model call) into the
+ * turn's history as a `send_message` tool call — the same shape the main loop
+ * persists — so the next turn's context reinforces "speaking == send_message".
+ */
+export function sendMessagePart(text: string, toolCallId: string): UIMessage['parts'][number] {
+  return {
+    type: 'tool-send_message',
+    toolCallId,
+    state: 'output-available',
+    input: { text },
+    output: 'delivered',
+  } as UIMessage['parts'][number];
+}
+
+/**
+ * Split a reply into iMessage bubbles on blank lines (text delivery mode). A reply
+ * with no blank line is one bubble; empty/whitespace yields no bubbles.
+ */
+export function splitBubbles(text: string): string[] {
+  return text
+    .split(/\n\s*\n/)
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
 /** The delivered messages of a turn: the `text` input of each `send_message` call. */

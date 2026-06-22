@@ -41,3 +41,6 @@ coverage/
 
 # Eval run scorecards (artifacts; evals/baseline.json is committed)
 evals/scorecards/
+
+# Experiment result dumps (artifacts)
+evals/experiments/results/
