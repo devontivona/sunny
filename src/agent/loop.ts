@@ -136,7 +136,7 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
       ...(event.isOwner && !event.isGroup ? createCredentialTools(config, deps.credentials) : {}),
       // Host tools (bash, file_read): owner DMs only — real host access, attended
       // only until command-permissioning lands (security-permissions; D-TA2).
-      ...(event.isOwner && !event.isGroup ? createBashTools(config) : {}),
+      ...(event.isOwner && !event.isGroup ? createBashTools(config, deps.credentials) : {}),
       ...memoryTools,
     };
     const agent = new ToolLoopAgent({

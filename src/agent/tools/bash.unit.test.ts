@@ -2,7 +2,10 @@ import { describe, it, expect } from 'vitest';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readFileSafe, runBash } from './bash.js';
+import { makeConfig } from '../../../tests/factories.js';
+import { FakeResolver } from '../../../tests/fakes/credentials.js';
+import { registerCredential } from '../../credentials/index.js';
+import { execBash, readFileSafe, runBash } from './bash.js';
 
 const CWD = process.cwd();
 
@@ -50,5 +53,54 @@ describe('readFileSafe', () => {
     const f = join(mkdtempSync(join(tmpdir(), 'sunny-bash-')), 'big.txt');
     writeFileSync(f, 'x'.repeat(500));
     expect(readFileSafe(f, 100)).toMatch(/truncated 400 of 500 bytes/);
+  });
+});
+
+describe('execBash credential injection (D-TA5)', () => {
+  const REF = 'op://Sunny/gmail/password';
+
+  it('injects a vault secret into the env and masks it from output', async () => {
+    const config = makeConfig();
+    await registerCredential(config.runtimeDir, 'gmail', REF);
+    const resolver = new FakeResolver({ [REF]: 'topsecret' });
+
+    const out = await execBash(config, resolver, {
+      command: 'echo "[$EMAIL_PW]"',
+      credentials: { EMAIL_PW: 'gmail' },
+    });
+    expect(out).toContain('[«redacted»]'); // value used by the command but masked
+    expect(out).not.toContain('topsecret'); // never leaks to the model
+  });
+
+  it('errors when a credential is requested but no resolver is configured', async () => {
+    const config = makeConfig();
+    const out = await execBash(config, undefined, {
+      command: 'echo hi',
+      credentials: { X: 'gmail' },
+    });
+    expect(out).toMatch(/no 1Password token/);
+  });
+
+  it('errors on an unknown credential name', async () => {
+    const config = makeConfig();
+    const out = await execBash(config, new FakeResolver({}), {
+      command: 'echo hi',
+      credentials: { X: 'nope' },
+    });
+    expect(out).toMatch(/resolving credential "nope"/);
+  });
+
+  it("strips Sunny's own secrets from the subprocess env", async () => {
+    const config = makeConfig();
+    process.env.OP_SERVICE_ACCOUNT_TOKEN = 'should-not-leak';
+    try {
+      const out = await execBash(config, undefined, {
+        command: 'echo "[$OP_SERVICE_ACCOUNT_TOKEN]"',
+      });
+      expect(out).toContain('[]'); // stripped → empty
+      expect(out).not.toContain('should-not-leak');
+    } finally {
+      delete process.env.OP_SERVICE_ACCOUNT_TOKEN;
+    }
   });
 });
