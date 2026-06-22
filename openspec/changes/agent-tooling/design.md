@@ -90,15 +90,22 @@ Because installed skills are untrusted third-party code, they are gated at insta
   tiers, and blocklist apply (enforced in `security-permissions`). `allowed-tools`
   may only *further restrict*.
 - **D-SK7 — Validation before activation** against the `SKILL.md` schema; invalid → not activated.
-- **D-SK8 — Unified personal skill repo.** Skills persist in a dedicated git repo Sunny
-  can commit to (e.g. `devontivona/skills`). This unifies the two paths into one
-  workflow: a **self-authored** skill is committed to the repo and then installed like
-  any other via `npx skills add devontivona/skills/<name>`; **found** external skills are
-  installed via `npx skills add owner/repo` and may be vendored into the same repo. So
-  `npx skills` is the single install path for both, and the repo's git history is the
-  durable, reviewable, portable record (`~/.sunny/skills/` is just the synced working
-  copy). NB: Sunny committing/pushing requires git auth — a credential reference (D-CR3),
-  and `git push` is gated by the command policy in `security-permissions`.
+- **D-SK8 — Canonical skill repo (self-authored + curated only).** Skills persist in a
+  dedicated **private** git repo (`config.skills.repo`, e.g. `devontivona/skills`) that is
+  the store of record; `~/.sunny/skills/` is a **clone** of it, synced on init (clone on a
+  fresh host, fast-forward pull otherwise) and committed + pushed on every self-authored
+  edit, so Sunny's improvements round-trip durably. The repo holds **self-authored** skills
+  plus **curated first-party** defaults (e.g. `email`) — **not** found/installed external
+  skills: those are installed from their own upstream repos and tracked by a lockfile
+  (`skills-lock.json`), re-fetched from source, **not vendored** in (keeps the repo "your
+  stuff", avoids staleness/license bloat). The **bundled seeds** (`src/skills/seeds.ts`)
+  become a **fallback** for cold-start / when no repo is configured (write-if-missing after
+  sync). **Git access is the host's own auth** (e.g. the gh credential helper / an SSH
+  deploy key), set up when provisioning the box — **not** an `op://` ref; this removes the
+  bootstrap chicken-and-egg (cloning a private repo no longer depends on the credential
+  plumbing). Best-practice: scope that git credential to just the skills repo (deploy key /
+  fine-grained PAT) for least privilege; `git push` is still gated by the command policy in
+  `security-permissions`.
 
 ---
 

@@ -14,9 +14,10 @@ const exec = promisify(execFile);
  * `SKILL.md` files under `~/.sunny/skills/<name>/`, inside the single `~/.sunny`
  * git repo (created by initMemory). Progressive disclosure mirrors the memory
  * core: only name + description are always-on (the index); a body loads on demand
- * via `loadSkillBody` (skill_manage view). Self-authored skills are validated,
- * written, and committed locally; pushing to a dedicated remote (D-SK8) needs git
- * creds and is deferred to the credentials/security work.
+ * via `loadSkillBody` (skill_manage view). Self-authored skills are validated and
+ * written, then committed and pushed to the canonical skill repo (D-SK8) when one
+ * is configured (`config.skills.repo`); `~/.sunny/skills` is a clone of it, synced
+ * on init. Git access uses the host's own auth (e.g. the gh credential helper).
  */
 
 export type TrustTier = 'authored' | 'installed';
@@ -221,7 +222,7 @@ export function writeSkill(config: SunnyConfig, input: WriteSkillInput): Promise
     const paths = skillsPaths(config.runtimeDir);
     mkdirSync(paths.skillDir(name), { recursive: true });
     writeFileSync(paths.skillFile(name), raw, { mode: 0o644 });
-    await commitSkillChange(config.runtimeDir, `skill: write ${name}`);
+    await commitSkillChange(config, `skill: write ${name}`);
     return `ok: wrote skill "${name}" (${raw.length} chars). Tell ${config.owner.name} you created it.`;
   });
 }
@@ -233,18 +234,50 @@ export function deleteSkill(config: SunnyConfig, name: string): Promise<string> 
     const dir = skillsPaths(config.runtimeDir).skillDir(slug);
     if (!existsSync(dir)) return `(no skill named "${slug}")`;
     rmSync(dir, { recursive: true, force: true });
-    await commitSkillChange(config.runtimeDir, `skill: delete ${slug}`);
+    await commitSkillChange(config, `skill: delete ${slug}`);
     return `ok: deleted skill "${slug}".`;
   });
 }
 
-/** Ensure the skills dir exists and write any missing bundled seed skills (D-SK5).
- *  Seeds are written only if absent, so user edits are preserved; a deleted seed
- *  re-appears next start (same posture as the memory core). The ~/.sunny git repo
- *  is created by initMemory, which runs first. */
+/** Expand a `config.skills.repo` value to a clone URL. Accepts `owner/repo`
+ *  shorthand (→ GitHub HTTPS) or a full `https://`/`git@` URL. */
+export function repoUrl(repo: string): string {
+  return /^(https?:\/\/|git@)/.test(repo) ? repo : `https://github.com/${repo}.git`;
+}
+
+/** Sync the canonical skill repo into `~/.sunny/skills` (D-SK8): clone on a fresh
+ *  host, fast-forward pull otherwise. Best-effort — a failure (offline, no repo,
+ *  diverged) is non-fatal; Sunny falls back to the local working copy. The host's
+ *  git auth (e.g. the gh credential helper) provides access; no `op://` needed. */
+async function syncSkillRepo(config: SunnyConfig): Promise<void> {
+  const repo = config.skills.repo;
+  if (!repo) return;
+  const root = skillsPaths(config.runtimeDir).root;
+  try {
+    if (existsSync(join(root, '.git'))) {
+      await exec('git', ['-C', root, 'pull', '--ff-only', '--quiet']);
+      log.info('pulled skill repo', { repo });
+    } else if (readdirSync(root).length === 0) {
+      await exec('git', ['clone', '--quiet', repoUrl(repo), root]);
+      log.info('cloned skill repo', { repo });
+    } else {
+      log.warn('skills dir has content but is not a clone of the repo — using local copy', {
+        repo,
+      });
+    }
+  } catch (err) {
+    log.warn('skill repo sync failed (non-fatal; using local copy)', { err: String(err) });
+  }
+}
+
+/** Ensure the skills dir exists, sync the canonical repo (D-SK8), then write any
+ *  missing bundled seed skills as a FALLBACK (D-SK5) — the repo's versions win;
+ *  bundled seeds only fill gaps. Seeds/edits are committed (and pushed) so Sunny's
+ *  improvements round-trip to the canonical repo. */
 export async function initSkills(config: SunnyConfig): Promise<void> {
   const paths = skillsPaths(config.runtimeDir);
   mkdirSync(paths.root, { recursive: true });
+  await syncSkillRepo(config);
 
   let seeded = 0;
   for (const seed of SEED_SKILLS) {
@@ -256,19 +289,34 @@ export async function initSkills(config: SunnyConfig): Promise<void> {
   }
   if (seeded > 0) {
     log.info('seeded bundled skills', { count: seeded });
-    await commitSkillChange(config.runtimeDir, 'skill: seed bundled skills');
+    await commitSkillChange(config, 'skill: seed bundled skills');
   }
 }
 
 /** Commit a skill change to the ~/.sunny repo (D-SK8). Local only — pushing to a
  *  dedicated remote needs git creds (deferred to credentials/security). Non-fatal:
  *  a no-op commit (nothing changed) or a missing repo is logged, not thrown. */
-async function commitSkillChange(runtimeDir: string, message: string): Promise<void> {
-  if (!existsSync(join(runtimeDir, '.git'))) return;
+/** Commit a skill change, and push it to the canonical repo when one is configured
+ *  (D-SK8). When `~/.sunny/skills` is its own repo (a clone), commit + push there;
+ *  otherwise fall back to committing under the `~/.sunny` repo (no-repo setups).
+ *  All git steps are best-effort and non-fatal (offline → committed locally). */
+async function commitSkillChange(config: SunnyConfig, message: string): Promise<void> {
+  const root = skillsPaths(config.runtimeDir).root;
+  const ownRepo = existsSync(join(root, '.git'));
+  const cwd = ownRepo ? root : config.runtimeDir;
+  if (!ownRepo && !existsSync(join(config.runtimeDir, '.git'))) return;
   try {
-    await exec('git', ['add', '-A', 'skills'], { cwd: runtimeDir });
-    await exec('git', ['commit', '-q', '-m', message], { cwd: runtimeDir });
+    await exec('git', ['add', '-A', ...(ownRepo ? [] : ['skills'])], { cwd });
+    await exec('git', ['commit', '-q', '-m', message], { cwd });
   } catch (err) {
     log.warn('could not commit skill change (non-fatal)', { err: String(err) });
+    return;
+  }
+  if (ownRepo && config.skills.repo) {
+    try {
+      await exec('git', ['push', '--quiet'], { cwd: root });
+    } catch (err) {
+      log.warn('could not push skill change (committed locally)', { err: String(err) });
+    }
   }
 }

@@ -7,6 +7,7 @@ import {
   loadSkillBody,
   loadSkillIndex,
   loadSkills,
+  repoUrl,
   parseSkill,
   renderSkillIndex,
   sanitizeSkillName,
@@ -131,6 +132,14 @@ describe('write / load / delete round-trip', () => {
     await expect(writeSkill(config, { name: 'x', description: '', body: 'b' })).rejects.toThrow(
       /description is required/,
     );
+  });
+});
+
+describe('repoUrl', () => {
+  it('expands owner/repo to a GitHub HTTPS url and passes full urls through', () => {
+    expect(repoUrl('devontivona/skills')).toBe('https://github.com/devontivona/skills.git');
+    expect(repoUrl('https://github.com/x/y.git')).toBe('https://github.com/x/y.git');
+    expect(repoUrl('git@github.com:x/y.git')).toBe('git@github.com:x/y.git');
   });
 });
 
