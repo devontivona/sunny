@@ -30,6 +30,17 @@ export function isOpReference(ref: string): boolean {
   return OP_REFERENCE_RE.test(ref.trim());
 }
 
+/**
+ * Build a resolvable secret reference from IDs. 1Password references require each
+ * segment to be alphanumeric (`_`, `.`, `-` allowed) — so a reference built from
+ * display titles fails whenever a vault/item/field name has a space or symbol
+ * (e.g. "Katie & Devon" / "Gmail (Sunny)"). Vault/item UUIDs and field ids are
+ * alphanumeric, so an id-based reference always resolves regardless of the names.
+ */
+export function buildReference(vaultId: string, itemId: string, fieldId: string): string {
+  return `op://${vaultId}/${itemId}/${fieldId}`;
+}
+
 /** A field discovered in the vault: its title + the constructed `op://` reference. */
 export interface DiscoveredField {
   field: string;
@@ -93,11 +104,13 @@ export class OnePasswordResolver implements CredentialResolver {
       const overviews = await client.items.list(vault.id);
       for (const overview of overviews) {
         const item = await client.items.get(vault.id, overview.id);
+        // Reference uses IDs (always resolvable); titles are shown only for the
+        // human/Sunny to identify which credential it is.
         const fields = item.fields
           .filter((f) => f.title.trim().length > 0)
           .map((f) => ({
             field: f.title,
-            reference: `op://${vault.title}/${item.title}/${f.title}`,
+            reference: buildReference(vault.id, item.id, f.id),
           }));
         result.push({ vault: vault.title, item: item.title, fields });
       }

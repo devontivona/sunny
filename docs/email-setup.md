@@ -77,11 +77,15 @@ You don't need to copy the `op://` reference (the 1Password **mobile** app has n
 > You: "I added the mailbox password to the Sunny vault — find it and register it as `email`."
 
 Sunny → `credential_manage(action: "discover")` → lists the vault's items + references
-(titles only, never values), e.g. `Sunny / sunny-email:  password → op://Sunny/sunny-email/password`
-→ `credential_manage(action: "register", name: "email", reference: "op://Sunny/sunny-email/password")`
-→ "Registered email → op://Sunny/sunny-email/password and verified it resolves. ✓"
+(titles for identification, values never shown). The reference is **ID-based**, e.g.
+`Katie & Devon / Gmail (Sunny):  password → op://<vault-id>/<item-id>/password` →
+`credential_manage(action: "register", name: "email", reference: "op://<vault-id>/<item-id>/password")`
+→ "Registered email → … and verified it resolves. ✓"
 
-(You can still give it the reference explicitly if you prefer.)
+The reference uses 1Password **IDs**, not the display names — that's required so vaults/items
+whose names contain spaces or symbols ("Katie & Devon", "Gmail (Sunny)") still resolve. So you
+can name things however you like. (You can give the reference explicitly if you prefer, but get
+it from `discover` / desktop "Copy Secret Reference", not by typing display names.)
 
 ## 5. The email skill
 

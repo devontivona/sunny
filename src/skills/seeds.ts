@@ -37,6 +37,12 @@ add the mailbox password to the Sunny vault, then run credential_manage (action 
 find its op:// reference yourself and (action "register") to save it as "email". The owner does
 not need to copy the reference for you.
 
+IMPORTANT — references are ID-based: register the reference EXACTLY as discover returns it
+(e.g. op://<vault-id>/<item-id>/password). It uses 1Password IDs, not the display names, which
+is required so vaults/items with spaces or symbols in their names (e.g. "Katie & Devon",
+"Gmail (Sunny)") still resolve. Never hand-build a reference from display names, and never
+URL-encode it.
+
 ## Reading (safe — no confirmation needed)
 
 - List recent envelopes:  himalaya envelope list -s 20 -o json

@@ -3,6 +3,7 @@ import { makeConfig } from '../../tests/factories.js';
 import { FakeResolver } from '../../tests/fakes/credentials.js';
 import { execCredentialManage } from '../agent/tools/credentialManage.js';
 import {
+  buildReference,
   isOpReference,
   listCredentials,
   loadRegistry,
@@ -21,6 +22,18 @@ describe('isOpReference', () => {
     expect(isOpReference('op://Sunny/email')).toBe(false);
     expect(isOpReference('Sunny/email/password')).toBe(false);
     expect(isOpReference('http://example.com')).toBe(false);
+  });
+
+  it('rejects a reference built from display names with spaces/symbols', () => {
+    expect(isOpReference('op://Katie & Devon/Gmail (Sunny)/password')).toBe(false);
+  });
+});
+
+describe('buildReference (id-based, resolves despite display-name symbols)', () => {
+  it('builds an alphanumeric, resolvable reference from ids', () => {
+    const ref = buildReference('abc123vaultid', 'def456itemid', 'password');
+    expect(ref).toBe('op://abc123vaultid/def456itemid/password');
+    expect(isOpReference(ref)).toBe(true);
   });
 });
 
@@ -133,7 +146,7 @@ describe('credential_manage tool', () => {
       name: 'gmail',
       reference: 'bogus',
     });
-    expect(out).toMatch(/not a valid op:/);
+    expect(out).toMatch(/not a resolvable reference/);
     expect(listCredentials(config.runtimeDir)).toEqual([]);
   });
 });

@@ -33,7 +33,12 @@ export async function execCredentialManage(
         try {
           const items = await resolver.listItems();
           if (items.length === 0) return '(no items found in the accessible vault)';
-          const lines: string[] = [];
+          const lines: string[] = [
+            'Register a reference EXACTLY as shown — it uses 1Password IDs, not the display',
+            'names (the names are just for you to identify the item). Headings show the',
+            'human-readable vault / item.',
+            '',
+          ];
           for (const it of items) {
             lines.push(`${it.vault} / ${it.item}:`);
             for (const f of it.fields) lines.push(`  - ${f.field} → ${f.reference}`);
@@ -50,7 +55,12 @@ export async function execCredentialManage(
         if (!input.name) return 'ERROR: register requires name';
         if (!input.reference) return 'ERROR: register requires reference';
         if (!isOpReference(input.reference)) {
-          return `ERROR: "${input.reference}" is not a valid op://vault/item/field reference`;
+          return (
+            `ERROR: "${input.reference}" is not a resolvable reference. References can't ` +
+            `contain spaces or symbols from display names, and should not be URL-encoded — ` +
+            `run credential_manage (action "discover") and register the exact reference it ` +
+            `returns (it uses 1Password IDs).`
+          );
         }
         await registerCredential(config.runtimeDir, input.name, input.reference, {
           purpose: input.purpose,
