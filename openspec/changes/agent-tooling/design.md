@@ -190,14 +190,41 @@ blast-radius boundary), and the token is a master key to its scoped vault.
   vault holds only what Sunny needs; a `read_items` Service Account scoped to just that
   vault provides access via `OP_SERVICE_ACCOUNT_TOKEN`. Everything else is unreadable by
   construction. Devon curates via the 1Password UI (Copy, not Move).
-- **D-CR2 — The model sees references, never values.** The reasoning model only handles
-  `op://vault/item/field` references; values are resolved by `@1password/sdk` in the
-  **tool-execution layer** at point of use and injected into the HTTP client / browser
-  fill / subprocess env — never in prompts, tool args, responses, or logs.
-- **D-CR3 — Per-tool reference whitelist.** Because there is no per-item scoping and the
-  model could be hijacked, **each tool declares the exact `op://` references it may
-  resolve** (this is the credential half of the D-TA0 contract). The model cannot cause
-  resolution of an arbitrary path. This substitutes for the missing per-item scoping.
+- **D-CR2 — The model handles names/references, never values.** Tools and skills refer to
+  a credential by a **symbolic name** (e.g. `gmail`); the reasoning model never handles a
+  secret value. At point of use the tool layer resolves name → `op://` reference → value
+  via `@1password/sdk` and injects it into the HTTP client / browser fill / subprocess env
+  — never in prompts, tool args, responses, or logs. (References are pointers, not secrets,
+  so they may appear in context; operating on symbolic names keeps skills portable.)
+- **D-CR3 — The vault is the authorization boundary; provisioning *is* the grant.** Because
+  the Service Account is **read-only**, Sunny can never add to the vault — so the vault's
+  contents are exactly the credentials Devon has decided Sunny may use, and only Devon can
+  change that set. **Adding an item to the `Sunny` vault is the authorization**; there is no
+  load-bearing code-level per-tool whitelist, and "who owns the name→reference mapping"
+  stops mattering for grants — Sunny may freely know/store references (pointers) because
+  knowing where a credential is grants nothing it couldn't already reach. *Misuse* of an
+  in-vault credential (right cred at the wrong target, or exfiltration) is contained by
+  **consequence-gated approval on credentialed *actions*** (D-SEC3) + **egress control**,
+  not by sub-vault scoping (which 1Password lacks). *(Optional later: a per-tool/skill scope
+  limiting which named credentials a tool may touch — a lateral-movement control for when
+  the vault holds many high-value items, populated by the provisioning flow (D-CR5), not
+  hardcoded; `scopeResolver` is the mechanism, now a secondary control rather than the
+  boundary.)*
+- **D-CR5 — The name→reference mapping lives in a Sunny credential registry, not SKILL.md.**
+  The mapping from symbolic name → `op://` reference is stored in a dedicated structured
+  **credential registry** (`~/.sunny/credentials.json`) inside the `~/.sunny` git repo —
+  reviewable, reversible, owner-editable like memory and skills. It holds **references +
+  metadata (name, purpose, added-by, added-at), never values.** SKILL.md is deliberately
+  not extended for this: it is the portable agentskills.io *procedure* format, and embedding
+  personal vault paths would break skill portability and conflate concerns. A skill at most
+  invokes a capability ("use the email client"); it never carries a vault reference.
+  The registry is populated by a **request-and-tell flow**: when Sunny needs a credential it
+  lacks, it asks Devon over iMessage ("I need your Gmail password to set up the email client
+  — add it to the Sunny vault and tell me the reference"); Devon adds the item in 1Password
+  and replies with the reference; Sunny records `name → reference` and **test-resolves it to
+  verify** it points at a real value (without surfacing the value). Recording entries is
+  safe because the registry holds only pointers into a vault Devon controls; Devon can
+  audit/edit the file anytime.
 
 > **D-CR4 (token hardening + rotation)** lives in `security-permissions`: the token file
 > on the hard blocklist, scheduled rotation via `scheduling`. This change only needs the
@@ -207,6 +234,13 @@ blast-radius boundary), and the token is a master key to its scoped vault.
 
 - **Ungated capability window:** mitigated by attended-testing-only posture (no
   autonomous runs) until `security-permissions` lands.
-- **The token is a master key to the Sunny vault:** mitigated by a minimal read-only
-  vault and the per-tool whitelist now; full hardening/rotation in `security-permissions`.
-- **Single vault = coarse blast radius:** accepted for simplicity; segmentation documented as future.
+- **The token is a master key to the Sunny vault:** mitigated by a minimal, read-only,
+  Devon-curated vault (the authorization boundary, D-CR3); full hardening/rotation in
+  `security-permissions`.
+- **A hijacked Sunny can *misuse* an in-vault credential without reading it** (route it at
+  a bad target / exfiltrate via an env var): this — not disclosure to the model — is the
+  real credential risk, and it is contained by consequence-gated approval on credentialed
+  *actions* (D-SEC3) + egress, plus keeping the vault minimal. Lateral movement within the
+  vault is the residual; the optional per-tool scope (D-CR3) addresses it if it grows.
+- **Single vault = coarse blast radius:** accepted for simplicity; the vault is kept
+  minimal and per-capability segmentation is documented as future.

@@ -15,7 +15,9 @@
 
 ## Credential plumbing (credentials)
 - [x] 5 `@1password/sdk` resolver in the tool layer (`src/credentials/index.ts`): `OnePasswordResolver` resolves `op://vault/item/field` refs, values never returned to the model or logged (D-CR2); `resolverFromEnv` reads `OP_SERVICE_ACCOUNT_TOKEN`, wired into runtime → loop deps. *(Manual setup for Devon — create the dedicated read-only `Sunny` vault + Service Account; documented in `.env.example`. Token hardening + rotation: security-permissions.)* *(Unit-tested.)*
-- [x] 6 Per-tool `op://` reference whitelist (`scopeResolver`, D-CR3): a scoped resolver refuses any reference not in its declared set, so the model cannot resolve an arbitrary path — the credential half of the D-TA0 contract. Plus `resolveEnv` for `op run`-style subprocess injection (D-TA5). `src/credentials/index.ts` (D-CR3/D-TA0). *(Unit-tested.)*
+- [x] 6 The vault is the authorization boundary (D-CR3): read-only SA → Sunny can't expand what it may use; `scopeResolver` retained as a **secondary** lateral-movement control (not the boundary), plus `resolveEnv` for `op run`-style injection (D-TA5). `src/credentials/index.ts`. *(Unit-tested.)*
+- [ ] 6a Credential registry (`~/.sunny/credentials.json`, in the repo, owner-reviewable): symbolic name → `op://` reference + metadata, **never values**; `resolveByName` (registry → resolver → value in the tool layer); skills/tools refer to credentials by name, not vault path (D-CR2/D-CR5).
+- [ ] 6b Request-a-credential capability: `request_credential` (Sunny asks the owner over iMessage for a credential it lacks, stating its purpose) + `register_credential` (record name→reference, **test-resolve to verify** it points at a real value without surfacing the value) (D-CR5).
 
 ## Tool contract + thin tools (tool-access)
 - [ ] 7 Uniform tool-registration contract: every tool declares risk tier + `op://` references, recorded but **not yet enforced** (the seam security-permissions reads) (D-TA0).
