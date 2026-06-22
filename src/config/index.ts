@@ -33,6 +33,17 @@ export const ConfigSchema = z.object({
       indexMaxChars: z.number().int().positive().default(2000),
     })
     .default({ userMaxChars: 8000, sunnyMaxChars: 6000, indexMaxChars: 2000 }),
+  /** Always-on skills index budget (agent-skills D-SK2) + optional dedicated repo (D-SK8). */
+  skills: z
+    .object({
+      /** Max skills shown in the always-on index (rest are dropped, names retained later). */
+      maxSkills: z.number().int().positive().default(20),
+      /** Max chars per skill description in the index. */
+      descriptionMaxChars: z.number().int().positive().default(280),
+      /** Optional dedicated skill repo (owner/repo or URL) for the unified npx skills install (D-SK8). */
+      repo: z.string().optional(),
+    })
+    .default({ maxSkills: 20, descriptionMaxChars: 280 }),
   server: z
     .object({
       /** HTTP webhook listener port (task 2.2). */
@@ -62,6 +73,10 @@ const DEFAULT_CONFIG_JSON = `{
     "userMaxChars": 8000,
     "sunnyMaxChars": 6000,
     "indexMaxChars": 2000
+  },
+  "skills": {
+    "maxSkills": 20,
+    "descriptionMaxChars": 280
   },
   "server": {
     "port": 8787,

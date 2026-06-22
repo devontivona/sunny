@@ -5,13 +5,13 @@
 > decisions are in this change's `design.md`. Ungated state is attended-testing-only.
 
 ## Foundations
-- [ ] 0 Prefer AI SDK primitives — before building the tool registration, MCP, agent loop, skill, or sandbox plumbing, evaluate what the Vercel AI SDK already provides (tools, MCP client, agents/loops, skills, Vercel Sandbox) and wrap it; hand-roll only where there's no equivalent, and note why (build principle).
+- [x] 0 Prefer AI SDK primitives — evaluated against `ai@6.0.206` (see design "Build principle" table): `tool()` for tools, `Agent`/`ToolLoopAgent` for the loop, `experimental_createMCPClient` for MCP, the `bash-tool` pkg for bash/file, `@vercel/sandbox` (external) for sandboxing. Skills loader is the one hand-rolled piece (no SDK API) — built on `tool()` + the Agent + the agentskills.io format.
 
 ## Skills runtime (agent-skills)
-- [ ] 1 `SKILL.md` loader (agentskills.io format), local working copy at `~/.sunny/skills/` synced from the skill repo; progressive disclosure (metadata index on the cached prefix, body on trigger, scripts/refs on demand) (D-SK1/2/8).
-- [ ] 2 Self-authoring `skill_manage` tool (create/edit/delete), auto+notify, validate before activation, then commit to the skill repo (D-SK4/7/8).
-- [ ] 3 Dedicated git **skill repo** (e.g. `devontivona/skills`) Sunny can commit to (git auth via a declared `op://` ref); **unified install path** — self-authored *and* found skills both flow through `npx skills add` (`devontivona/skills/<name>` for self-authored, `owner/repo` for external); trust-tier marking; seed known-good defaults incl. a **skill-authoring** skill, a **skill-discovery/installation** skill, and `devbox` (D-SK1/5/8). *(Install approval + non-escalation enforcement: security-permissions.)*
-- [ ] 4 (Deferred-ready) `pgvector` retrieval over skill descriptions when the metadata budget is exceeded (D-SK3).
+- [x] 1 `SKILL.md` loader (agentskills.io format) reading `~/.sunny/skills/<name>/SKILL.md`; progressive disclosure — always-on, budget-capped, byte-stable index (`renderSkillIndex`) in the system prompt; body loaded on demand (`loadSkillBody` via `skill_manage view`). `src/skills/index.ts`, wired in `prompt.ts`/`loop.ts`/`runtime.ts` (D-SK1/2). *(Unit-tested.)*
+- [x] 2 Self-authoring `skill_manage` tool (list/view/create/edit/delete), owner-DM-gated, validate-before-write (D-SK7), serialized writer, auto+notify (tool prompts Sunny to tell the owner), local git commit (D-SK8). `src/agent/tools/skillManage.ts` (D-SK4/7/8). *(Unit-tested.)*
+- [~] 3 Skill repo: **done** — trust-tier marking (authored vs installed), local commit to the `~/.sunny` repo, `config.skills.repo`. **Deferred** (blocked on credential plumbing, tasks 5/6 + security): dedicated *remote* `devontivona/skills` repo + `git push` via an `op://` ref, the `npx skills` unified install path, and seeding known-good defaults (skill-authoring, find-skills, devbox) (D-SK1/5/8).
+- [ ] 4 (Deferred by design) `pgvector` retrieval over skill descriptions when the metadata budget is exceeded — not needed at current library size; reuses memory L3 infra when it lands (D-SK3).
 
 ## Credential plumbing (credentials)
 - [ ] 5 1Password setup: dedicated read-only `Sunny` vault + Service Account; `OP_SERVICE_ACCOUNT_TOKEN` from an `EnvironmentFile` (not committed); `@1password/sdk` wrapper resolving `op://` refs **in the tool layer only**, never to the model (D-CR1/2). *(Token hardening + rotation: security-permissions.)*

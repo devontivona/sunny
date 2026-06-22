@@ -8,6 +8,7 @@ import { ConversationStore } from './gateway/store.js';
 import { SendblueGateway } from './gateway/sendblue.js';
 import type { ChannelEvent, Gateway } from './gateway/types.js';
 import { initMemory } from './memory/index.js';
+import { initSkills } from './skills/index.js';
 import { startScheduler } from './scheduler/index.js';
 import { logger } from './logger.js';
 
@@ -58,6 +59,7 @@ async function start(): Promise<Runtime> {
   const { db } = createDb(process.env.DATABASE_URL);
   await runMigrations(db);
   await initMemory(config);
+  initSkills(config);
 
   const store = new ConversationStore(db, config.recentWindowSize);
   const gateway = new SendblueGateway({ config, store });
@@ -93,7 +95,9 @@ async function start(): Promise<Runtime> {
   // the unified dashboard service during the interim where it overlaps the legacy
   // gateway against one DB (avoids double-firing schedules until cutover).
   if (process.env.SUNNY_DISABLE_SCHEDULER === '1') {
-    log.warn('scheduler disabled (SUNNY_DISABLE_SCHEDULER=1) — this instance will not fire schedules');
+    log.warn(
+      'scheduler disabled (SUNNY_DISABLE_SCHEDULER=1) — this instance will not fire schedules',
+    );
   } else {
     startScheduler({
       db,

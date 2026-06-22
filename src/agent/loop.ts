@@ -13,6 +13,7 @@ import type { ChannelEvent, Gateway } from '../gateway/types.js';
 import type { ConversationStore } from '../gateway/store.js';
 import type { Db } from '../db/client.js';
 import { loadCore, memoryPaths } from '../memory/index.js';
+import { loadSkillIndex, skillsPaths } from '../skills/index.js';
 import { logger } from '../logger.js';
 import { ensureConsolidationSchedule } from '../scheduler/index.js';
 import type { SteerHandle } from './dispatcher.js';
@@ -27,6 +28,7 @@ import {
 } from './turn.js';
 import { createMemoryTools } from './tools/memory.js';
 import { createScheduleTools } from './tools/schedule.js';
+import { createSkillTools } from './tools/skillManage.js';
 import { createSendMessageTool, type SendCounter } from './tools/sendMessage.js';
 import { createStartJobTool, type StartJob } from './tools/startJob.js';
 
@@ -64,6 +66,7 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
   const { config, store, gateway, db } = deps;
   const model = deps.model ?? getModel(config);
   const paths = memoryPaths(config.runtimeDir);
+  const skillPaths = skillsPaths(config.runtimeDir);
   const memoryTools = createMemoryTools(config, store);
 
   return async function runTurn(event: ChannelEvent, steer: SteerHandle): Promise<void> {
@@ -90,7 +93,11 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
     // between turns anyway. Verify via cachedIn / cacheWriteIn in the turn log.
     const instructions: SystemModelMessage = {
       role: 'system',
-      content: buildSystemPrompt(config, loadCore(paths)),
+      content: buildSystemPrompt(
+        config,
+        loadCore(paths),
+        loadSkillIndex(skillPaths, config.skills),
+      ),
       providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
     };
     // The prompt must end with a user message (Anthropic rejects ending on an
@@ -113,6 +120,8 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
       ...(event.isOwner && !event.isGroup
         ? createScheduleTools(db, event.threadId, config.timezone)
         : {}),
+      // Self-authoring skills: owner DMs only (privileged, owner-facing; D-SK4).
+      ...(event.isOwner && !event.isGroup ? createSkillTools(config) : {}),
       ...memoryTools,
     };
     const agent = new ToolLoopAgent({

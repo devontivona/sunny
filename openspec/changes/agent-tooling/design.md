@@ -27,6 +27,19 @@ and **sandboxes** (Vercel Sandbox for isolated execution). The registration cont
 rather than reimplement them. Hand-roll only where the AI SDK genuinely has no
 equivalent, and note why.
 
+**Evaluation (verified against `ai@6.0.206`, the installed version):**
+
+| Need | AI SDK provides? | Decision |
+|---|---|---|
+| Tool definitions | `tool()` (core export from `ai`) | **Wrap** — every tool is a `tool()`; the D-TA0 contract (risk tier, `op://` refs) is metadata layered on top |
+| Agents / multi-step loop | `Agent` / `ToolLoopAgent` (core) | **Wrap** — use the ToolLoopAgent pattern for the turn loop (confirm/migrate the current loop in `src/agent/`) |
+| MCP client | `experimental_createMCPClient` + stdio/SSE transports | **Wrap** — use for external MCP tool servers when needed |
+| bash / file tools | the `bash-tool` npm pkg (`bash`/`readFile`/`writeFile`, supports `@vercel/sandbox`) | **Evaluate** for the thin tools (tasks 8) instead of hand-rolling |
+| Skills / progressive disclosure | **No loader API**, but the SDK officially adopts agentskills.io + `npx skills add` and ships a cookbook integration guide | **Hand-roll the loader** (no API exists) following the cookbook pattern; the format is agentskills.io (D-SK1) — feed matched skill bodies into the Agent's system prompt and expose skill scripts via `tool()` |
+| Sandbox | **External**: `@vercel/sandbox` (full VM isolation) | Use `@vercel/sandbox` for the `security-permissions` targeted-sandbox fallback; not a core primitive |
+
+So skills are the one place we genuinely build the runtime ourselves (no SDK equivalent) — but on AI SDK primitives (`tool()`, the Agent) and the open format, not a bespoke stack.
+
 ---
 
 # Agent Skills
