@@ -21,7 +21,7 @@
 
 ## Tool contract + thin tools (tool-access)
 - [ ] 7 Uniform tool-registration contract: every tool declares risk tier + `op://` references, recorded but **not yet enforced** (the seam security-permissions reads) (D-TA0).
-- [ ] 8 Thin tools (minimal surface): `bash` (run host command, return output), `file-read`, memory ops. Web fetching is bash (a fetch CLI) or the browse capability — **not** a dedicated tool; any external content entering context is marked untrusted (D-TA2).
+- [x] 8 Thin host tools (`src/agent/tools/bash.ts`): `bash` (real host shell via `child_process`, timeout + output caps + exit code) and `file_read` (capped); owner-DM only, never in autonomous runs (separate memory-only toolset). Hand-rolled (see build-principle table — `bash-tool` is interpreter/sandbox-oriented). Web fetch = bash (`curl`)/the browse capability, not a dedicated tool (D-TA2). *(Unit-tested.)*
 - [ ] 9 Per-command `op run` credential injection: `op://` → that subprocess's env at exec time, masked in output, never in model context (D-TA5).
 
 ## Capabilities as skills

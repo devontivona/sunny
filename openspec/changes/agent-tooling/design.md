@@ -34,7 +34,7 @@ equivalent, and note why.
 | Tool definitions | `tool()` (core export from `ai`) | **Wrap** — every tool is a `tool()`; the D-TA0 contract (risk tier, `op://` refs) is metadata layered on top |
 | Agents / multi-step loop | `Agent` / `ToolLoopAgent` (core) | **Wrap** — use the ToolLoopAgent pattern for the turn loop (confirm/migrate the current loop in `src/agent/`) |
 | MCP client | `experimental_createMCPClient` + stdio/SSE transports | **Wrap** — use for external MCP tool servers when needed |
-| bash / file tools | the `bash-tool` npm pkg (`bash`/`readFile`/`writeFile`, supports `@vercel/sandbox`) | **Evaluate** for the thin tools (tasks 8) instead of hand-rolling |
+| bash / file tools | the `bash-tool` npm pkg (`bash`/`readFile`/`writeFile`, supports `@vercel/sandbox`) | **Hand-rolled** instead — `bash-tool` is built on `just-bash` (a JS bash *interpreter*) + `@vercel/sandbox`, oriented toward sandboxed/interpreted execution; Sunny needs **real host shell** for self-devops (D-TA2). A thin `child_process` tool fits better and keeps exact control (timeout, output caps, future op-run injection). Revisit `bash-tool`+`@vercel/sandbox` for the security-permissions *sandbox fallback*. |
 | Skills / progressive disclosure | **No loader API**, but the SDK officially adopts agentskills.io + `npx skills add` and ships a cookbook integration guide | **Hand-roll the loader** (no API exists) following the cookbook pattern; the format is agentskills.io (D-SK1) — feed matched skill bodies into the Agent's system prompt and expose skill scripts via `tool()` |
 | Sandbox | **External**: `@vercel/sandbox` (full VM isolation) | Use `@vercel/sandbox` for the `security-permissions` targeted-sandbox fallback; not a core primitive |
 

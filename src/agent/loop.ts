@@ -31,6 +31,7 @@ import { createMemoryTools } from './tools/memory.js';
 import { createScheduleTools } from './tools/schedule.js';
 import { createSkillTools } from './tools/skillManage.js';
 import { createCredentialTools } from './tools/credentialManage.js';
+import { createBashTools } from './tools/bash.js';
 import { createSendMessageTool, type SendCounter } from './tools/sendMessage.js';
 import { createStartJobTool, type StartJob } from './tools/startJob.js';
 
@@ -133,6 +134,9 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
       ...(event.isOwner && !event.isGroup ? createSkillTools(config) : {}),
       // Credential registry: owner DMs only (D-CR5). resolver verifies on register.
       ...(event.isOwner && !event.isGroup ? createCredentialTools(config, deps.credentials) : {}),
+      // Host tools (bash, file_read): owner DMs only — real host access, attended
+      // only until command-permissioning lands (security-permissions; D-TA2).
+      ...(event.isOwner && !event.isGroup ? createBashTools(config) : {}),
       ...memoryTools,
     };
     const agent = new ToolLoopAgent({
