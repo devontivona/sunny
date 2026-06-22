@@ -9,13 +9,13 @@ export const CREDENTIAL_MANAGE_SPEC = {
     'Manage the credentials you can use — a registry mapping a symbolic name (e.g. ' +
     '"gmail") to a 1Password reference. The secret value lives in 1Password and never ' +
     'reaches you; you only ever handle the name. Actions: "list" the credentials you have ' +
-    '(names + purposes); "register" a new one after the owner adds it to the Sunny vault ' +
-    'and gives you its op:// reference (this records name→reference and verifies it ' +
-    'resolves). If a task needs a credential you do NOT have, do not invent a reference — ' +
-    'ask the owner (via send_message) to add it to the Sunny vault and send you the ' +
-    'reference, then register it.',
+    '(names + purposes); "discover" the items in the Sunny vault and their op:// references ' +
+    '(so you can find a reference yourself — the owner does not need to copy it); "register" ' +
+    'a name→reference mapping (records it and verifies it resolves). If a task needs a ' +
+    'credential you do NOT have, ask the owner (via send_message) to add it to the Sunny ' +
+    'vault, then "discover" the reference and "register" it — never invent a reference.',
   inputSchema: z.object({
-    action: z.enum(['list', 'register']),
+    action: z.enum(['list', 'discover', 'register']),
     name: z.string().optional().describe('Symbolic credential name, e.g. "gmail" (register).'),
     reference: z
       .string()

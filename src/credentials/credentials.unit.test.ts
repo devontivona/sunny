@@ -60,6 +60,30 @@ describe('credential registry (D-CR5)', () => {
 describe('credential_manage tool', () => {
   const REF = 'op://Sunny/gmail/password';
 
+  it('discovers op:// references from the vault (titles only, no values)', async () => {
+    const config = makeConfig();
+    const resolver = new FakeResolver({}, [
+      {
+        vault: 'Sunny',
+        item: 'gmail',
+        fields: [
+          { field: 'username', reference: 'op://Sunny/gmail/username' },
+          { field: 'password', reference: 'op://Sunny/gmail/password' },
+        ],
+      },
+    ]);
+    const out = await execCredentialManage(config, resolver, { action: 'discover' });
+    expect(out).toContain('Sunny / gmail:');
+    expect(out).toContain('password → op://Sunny/gmail/password');
+  });
+
+  it('discover errors without a resolver', async () => {
+    const config = makeConfig();
+    expect(await execCredentialManage(config, undefined, { action: 'discover' })).toMatch(
+      /no 1Password token/,
+    );
+  });
+
   it('lists empty, registers, and verifies via the resolver', async () => {
     const config = makeConfig();
     const resolver = new FakeResolver({ [REF]: 'pw' });

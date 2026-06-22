@@ -226,7 +226,9 @@ blast-radius boundary), and the token is a master key to its scoped vault.
   and replies with the reference; Sunny records `name → reference` and **test-resolves it to
   verify** it points at a real value (without surfacing the value). Recording entries is
   safe because the registry holds only pointers into a vault Devon controls; Devon can
-  audit/edit the file anytime.
+  audit/edit the file anytime. Sunny can also **discover** references itself (list the
+  vault's item + field titles via the SDK, never values) so Devon needn't copy the
+  `op://` path — the 1Password *mobile* app has no "Copy Secret Reference".
 
 > **D-CR4 (token hardening + rotation)** lives in `security-permissions`: the token file
 > on the hard blocklist, scheduled rotation via `scheduling`. This change only needs the

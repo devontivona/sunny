@@ -30,10 +30,30 @@ export function isOpReference(ref: string): boolean {
   return OP_REFERENCE_RE.test(ref.trim());
 }
 
+/** A field discovered in the vault: its title + the constructed `op://` reference. */
+export interface DiscoveredField {
+  field: string;
+  reference: string;
+}
+
+/** An item discovered in an accessible vault. Titles + references only — no values. */
+export interface DiscoveredItem {
+  vault: string;
+  item: string;
+  fields: DiscoveredField[];
+}
+
 /** Resolves `op://` references to values in the tool layer (D-CR2). Production
  *  uses {@link OnePasswordResolver}; tests inject a fake. */
 export interface CredentialResolver {
   resolve(reference: string): Promise<string>;
+  /**
+   * Discover `op://` references by listing the accessible vault(s) — so Sunny can
+   * find a reference itself instead of the owner copying it from the 1Password app
+   * (mobile has no "Copy Secret Reference"). Returns item/field TITLES and the
+   * constructed references only; field values are NEVER included. Optional.
+   */
+  listItems?(): Promise<DiscoveredItem[]>;
 }
 
 /** Real resolver backed by a 1Password Service Account (D-CR1). The client is
@@ -60,6 +80,29 @@ export class OnePasswordResolver implements CredentialResolver {
     }
     const client = await this.client();
     return client.secrets.resolve(ref);
+  }
+
+  /** List items + field references across the accessible vault(s). Reads each item
+   *  to learn its field titles, but exposes only titles + constructed references —
+   *  never the resolved values. */
+  async listItems(): Promise<DiscoveredItem[]> {
+    const client = await this.client();
+    const vaults = await client.vaults.list();
+    const result: DiscoveredItem[] = [];
+    for (const vault of vaults) {
+      const overviews = await client.items.list(vault.id);
+      for (const overview of overviews) {
+        const item = await client.items.get(vault.id, overview.id);
+        const fields = item.fields
+          .filter((f) => f.title.trim().length > 0)
+          .map((f) => ({
+            field: f.title,
+            reference: `op://${vault.title}/${item.title}/${f.title}`,
+          }));
+        result.push({ vault: vault.title, item: item.title, fields });
+      }
+    }
+    return result;
   }
 }
 

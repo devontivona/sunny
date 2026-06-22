@@ -27,6 +27,25 @@ export async function execCredentialManage(
           .map((c) => `- ${c.name}${c.purpose ? ` (${c.purpose})` : ''} → ${c.reference}`)
           .join('\n');
       }
+      case 'discover': {
+        if (!resolver) return 'ERROR: no 1Password token configured — cannot list the vault.';
+        if (!resolver.listItems) return 'ERROR: credential discovery is not available.';
+        try {
+          const items = await resolver.listItems();
+          if (items.length === 0) return '(no items found in the accessible vault)';
+          const lines: string[] = [];
+          for (const it of items) {
+            lines.push(`${it.vault} / ${it.item}:`);
+            for (const f of it.fields) lines.push(`  - ${f.field} → ${f.reference}`);
+          }
+          return lines.join('\n');
+        } catch (err) {
+          return (
+            `ERROR listing the vault: ${err instanceof Error ? err.message : String(err)} ` +
+            `(the Service Account may need list/read permission on the vault).`
+          );
+        }
+      }
       case 'register': {
         if (!input.name) return 'ERROR: register requires name';
         if (!input.reference) return 'ERROR: register requires reference';

@@ -33,8 +33,9 @@ Pass it with the bash tool's "credentials" argument, e.g.:
 
 Here "email" is the credential name registered with credential_manage. Run credential_manage
 (action "list") to find it. If it is missing, do NOT guess — ask the owner (send_message) to
-add the mailbox password to the Sunny vault and give you the reference, then register it with
-credential_manage.
+add the mailbox password to the Sunny vault, then run credential_manage (action "discover") to
+find its op:// reference yourself and (action "register") to save it as "email". The owner does
+not need to copy the reference for you.
 
 ## Reading (safe — no confirmation needed)
 

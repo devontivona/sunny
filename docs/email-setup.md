@@ -70,13 +70,18 @@ Sunny vault — the Service Account can't read anything else). Note its referenc
 
 ## 4. Register the credential with Sunny
 
-Over iMessage, tell Sunny the reference. Sunny records it (and verifies it resolves
-without revealing the value):
+You don't need to copy the `op://` reference (the 1Password **mobile** app has no
+"Copy Secret Reference" — only desktop). Just tell Sunny the item is there and let it
+**discover** the reference:
 
-> You: "The Sunny mailbox password is at op://Sunny/sunny-email/password — register it as `email`."
+> You: "I added the mailbox password to the Sunny vault — find it and register it as `email`."
 
-Sunny → `credential_manage(action: "register", name: "email", reference: "op://Sunny/sunny-email/password", purpose: "mailbox login")`
+Sunny → `credential_manage(action: "discover")` → lists the vault's items + references
+(titles only, never values), e.g. `Sunny / sunny-email:  password → op://Sunny/sunny-email/password`
+→ `credential_manage(action: "register", name: "email", reference: "op://Sunny/sunny-email/password")`
 → "Registered email → op://Sunny/sunny-email/password and verified it resolves. ✓"
+
+(You can still give it the reference explicitly if you prefer.)
 
 ## 5. The email skill
 
