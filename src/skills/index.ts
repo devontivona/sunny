@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import type { SunnyConfig } from '../config/index.js';
 import { logger } from '../logger.js';
+import { SEED_SKILLS } from './seeds.js';
 
 const log = logger('skills');
 const exec = promisify(execFile);
@@ -237,9 +238,26 @@ export function deleteSkill(config: SunnyConfig, name: string): Promise<string> 
   });
 }
 
-/** Ensure the skills dir exists (the ~/.sunny git repo is created by initMemory). */
-export function initSkills(config: SunnyConfig): void {
-  mkdirSync(skillsPaths(config.runtimeDir).root, { recursive: true });
+/** Ensure the skills dir exists and write any missing bundled seed skills (D-SK5).
+ *  Seeds are written only if absent, so user edits are preserved; a deleted seed
+ *  re-appears next start (same posture as the memory core). The ~/.sunny git repo
+ *  is created by initMemory, which runs first. */
+export async function initSkills(config: SunnyConfig): Promise<void> {
+  const paths = skillsPaths(config.runtimeDir);
+  mkdirSync(paths.root, { recursive: true });
+
+  let seeded = 0;
+  for (const seed of SEED_SKILLS) {
+    const file = paths.skillFile(seed.name);
+    if (existsSync(file)) continue;
+    mkdirSync(paths.skillDir(seed.name), { recursive: true });
+    writeFileSync(file, seed.content, { mode: 0o644 });
+    seeded += 1;
+  }
+  if (seeded > 0) {
+    log.info('seeded bundled skills', { count: seeded });
+    await commitSkillChange(config.runtimeDir, 'skill: seed bundled skills');
+  }
 }
 
 /** Commit a skill change to the ~/.sunny repo (D-SK8). Local only — pushing to a

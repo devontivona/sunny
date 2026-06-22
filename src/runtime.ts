@@ -60,7 +60,7 @@ async function start(): Promise<Runtime> {
   const { db } = createDb(process.env.DATABASE_URL);
   await runMigrations(db);
   await initMemory(config);
-  initSkills(config);
+  await initSkills(config);
 
   const store = new ConversationStore(db, config.recentWindowSize);
   const gateway = new SendblueGateway({ config, store });

@@ -3,6 +3,7 @@ import { makeConfig } from '../../tests/factories.js';
 import {
   composeSkill,
   deleteSkill,
+  initSkills,
   loadSkillBody,
   loadSkillIndex,
   loadSkills,
@@ -130,5 +131,30 @@ describe('write / load / delete round-trip', () => {
     await expect(writeSkill(config, { name: 'x', description: '', body: 'b' })).rejects.toThrow(
       /description is required/,
     );
+  });
+});
+
+describe('initSkills seeding', () => {
+  it('seeds bundled skills on a fresh runtime, idempotently', async () => {
+    const config = makeConfig();
+    const paths = skillsPaths(config.runtimeDir);
+
+    await initSkills(config);
+    expect(loadSkills(paths).map((s) => s.name)).toContain('email');
+    const after = loadSkills(paths).length;
+
+    await initSkills(config); // running again seeds nothing new
+    expect(loadSkills(paths).length).toBe(after);
+  });
+
+  it('does not overwrite a user-edited seed', async () => {
+    const config = makeConfig();
+    const paths = skillsPaths(config.runtimeDir);
+    await initSkills(config);
+
+    await writeSkill(config, { name: 'email', description: 'my edit', body: 'custom' });
+    await initSkills(config); // seed is present → left alone
+
+    expect(loadSkillBody(paths, 'email')).toBe('custom');
   });
 });

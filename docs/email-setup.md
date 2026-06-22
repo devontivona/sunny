@@ -78,16 +78,12 @@ without revealing the value):
 Sunny → `credential_manage(action: "register", name: "email", reference: "op://Sunny/sunny-email/password", purpose: "mailbox login")`
 → "Registered email → op://Sunny/sunny-email/password and verified it resolves. ✓"
 
-## 5. Deploy the email skill
+## 5. The email skill
 
-Copy the seed skill into Sunny's skills dir:
-
-```bash
-mkdir -p ~/.sunny/skills/email
-cp docs/seed-skills/email/SKILL.md ~/.sunny/skills/email/SKILL.md
-```
-
-It will appear in Sunny's always-on SKILL index on the next turn.
+Nothing to deploy — the `email` skill is a **bundled seed** (`src/skills/seeds.ts`) and is
+written into `~/.sunny/skills/email/SKILL.md` automatically on startup (if absent), the same
+way the memory core is seeded. It's in Sunny's always-on SKILL index from the first turn. You
+can edit it in place afterward; your edits are preserved across restarts.
 
 ## 6. Test end-to-end
 

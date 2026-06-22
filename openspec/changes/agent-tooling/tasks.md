@@ -25,7 +25,7 @@
 - [x] 9 Per-command credential injection (`execBash`, D-TA5): the `bash` tool takes `credentials` (ENV var → credential name), resolves each via the registry into that subprocess's env, and **masks the values out of the output**; never in model context. Also strips Sunny's own secrets (OP token, API keys, …) from every bash env. *(Unit-tested.)*
 
 ## Capabilities as skills
-- [~] 10 **Email** skill over the `himalaya` CLI: skill authored (`docs/seed-skills/email/SKILL.md`) — read/search/triage/send via bash with `HIMALAYA_PASSWORD` injected per-command; bodies treated as untrusted; send self-confirmed with the owner (D-TA2). End-to-end runbook in `docs/email-setup.md`. **Remaining (Devon's host):** install himalaya, write `~/.config/himalaya/config.toml`, add the mailbox password to the Sunny vault + register it. *(himalaya `send` hard-gated later: security-permissions.)*
+- [~] 10 **Email** skill over the `himalaya` CLI: skill is a **bundled seed** (`src/skills/seeds.ts`), auto-written into `~/.sunny/skills` at init (no manual deploy) — read/search/triage/send via bash with `HIMALAYA_PASSWORD` injected per-command; bodies untrusted; send self-confirmed with the owner (D-TA2). Runbook: `docs/email-setup.md`. **Remaining (Devon's host):** write `~/.config/himalaya/config.toml`, add the mailbox password to the Sunny vault + register it. *(himalaya `send` hard-gated later: security-permissions.)*
 - [ ] 11 **Website-builder** skill: single-page HTML for explainers/presentations/reports; bundles a small library of design styles in the skill's `assets/` (accept a style or recommend one); uses the `devbox` skill to build/run/host (D-TA2).
 
 ## Credentialed browse capability

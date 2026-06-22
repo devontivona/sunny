@@ -81,7 +81,10 @@ Because installed skills are untrusted third-party code, they are gated at insta
   (*gating enforced in `security-permissions`*). Seed `anthropics/skills`,
   `vercel-labs/agent-skills`, and `devbox` as known-good defaults — including a
   **skill-authoring** skill and a **skill-discovery/installation** skill so Sunny can
-  uplevel itself (the "skills that get more skills" flywheel).
+  uplevel itself (the "skills that get more skills" flywheel). **Bundled first-party seeds**
+  (e.g. the `email` skill, `src/skills/seeds.ts`) ship with the app and are written into
+  `~/.sunny/skills` at init if absent — like the memory core, no manual deploy; external
+  seeds come via `npx skills`.
 - **D-SK6 — Skills cannot escalate privilege.** A skill body is instructions; its
   scripts/tools route through the normal tool surface so the same gating, approval
   tiers, and blocklist apply (enforced in `security-permissions`). `allowed-tools`
