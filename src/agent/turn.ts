@@ -75,6 +75,17 @@ export function sendMessagePart(text: string, toolCallId: string): UIMessage['pa
   } as UIMessage['parts'][number];
 }
 
+/**
+ * Split a reply into iMessage bubbles on blank lines (text delivery mode). A reply
+ * with no blank line is one bubble; empty/whitespace yields no bubbles.
+ */
+export function splitBubbles(text: string): string[] {
+  return text
+    .split(/\n\s*\n/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 /** The delivered messages of a turn: the `text` input of each `send_message` call. */
 export function extractSends(parts: UIMessage['parts']): string[] {
   return parts

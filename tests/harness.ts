@@ -34,6 +34,8 @@ export interface TestRuntimeOptions {
   recoveryModel?: LanguageModel;
   /** Defaults to `makeConfig()` (owner = Devon, fresh temp runtime dir). */
   config?: SunnyConfig;
+  /** Output design: `tool` (default, send_message) or `text` (reply text delivered). */
+  deliveryMode?: 'tool' | 'text';
 }
 
 export interface TestRuntime {
@@ -59,6 +61,7 @@ export function createTestRuntime(opts: TestRuntimeOptions): TestRuntime {
     model: opts.model,
     recoveryModel: opts.recoveryModel ?? recoveryNotExpected(),
     start: fakeStart.start,
+    deliveryMode: opts.deliveryMode,
   });
   const dispatcher = new TurnDispatcher(runTurn, store);
   gateway.onInbound((event) => Promise.resolve(dispatcher.enqueue(event)));

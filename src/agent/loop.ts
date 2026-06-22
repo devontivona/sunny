@@ -17,15 +17,17 @@ import { logger } from '../logger.js';
 import { ensureConsolidationSchedule } from '../scheduler/index.js';
 import type { SteerHandle } from './dispatcher.js';
 import { getModel, getRecoveryModel, anthropicProviderOptions } from './model.js';
-import { buildSystemPrompt } from './prompt.js';
+import { buildSystemPrompt, type DeliveryMode } from './prompt.js';
 import { runRecoveryPass } from './recovery.js';
 import {
   classifyDelivery,
   extractScratch,
   extractSends,
   sendMessagePart,
+  splitBubbles,
   toModelMessages,
   trimTrailingNonUser,
+  type Delivery,
 } from './turn.js';
 import { createMemoryTools } from './tools/memory.js';
 import { createScheduleTools } from './tools/schedule.js';
@@ -55,6 +57,12 @@ export interface AgentRunnerDeps {
    * (D-MG8). Production omits it and uses `getRecoveryModel(config)` (Haiku).
    */
   recoveryModel?: LanguageModel;
+  /**
+   * Output design (experimental). `tool` (default, current D-MG8): the model speaks
+   * only via `send_message`. `text`: the model's reply text is delivered directly
+   * (no `send_message` tool), `stay_silent` chooses silence, no recovery pass.
+   */
+  deliveryMode?: DeliveryMode;
 }
 
 /**
@@ -72,6 +80,7 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
   const { config, store, gateway, db } = deps;
   const model = deps.model ?? getModel(config);
   const recoveryModel = deps.recoveryModel ?? getRecoveryModel(config);
+  const deliveryMode: DeliveryMode = deps.deliveryMode ?? 'tool';
   const paths = memoryPaths(config.runtimeDir);
   const memoryTools = createMemoryTools(config, store);
 
@@ -99,7 +108,7 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
     // between turns anyway. Verify via cachedIn / cacheWriteIn in the turn log.
     const instructions: SystemModelMessage = {
       role: 'system',
-      content: buildSystemPrompt(config, loadCore(paths)),
+      content: buildSystemPrompt(config, loadCore(paths), deliveryMode),
       providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
     };
     // The prompt must end with a user message (Anthropic rejects ending on an
@@ -115,9 +124,12 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
     }
     const counter: SendCounter = { count: 0 };
     const silence: SilenceFlag = { silent: false };
+    const sendMessageTool = createSendMessageTool(gateway, event.threadId, counter);
+    const staySilentTool = createStaySilentTool(silence);
     const tools = {
-      send_message: createSendMessageTool(gateway, event.threadId, counter),
-      stay_silent: createStaySilentTool(silence),
+      // Text mode delivers the reply text directly, so there is no send_message tool.
+      ...(deliveryMode === 'tool' ? { send_message: sendMessageTool } : {}),
+      stay_silent: staySilentTool,
       start_job: createStartJobTool(event.threadId, config.owner.name, deps.start),
       // Self-scheduling only on owner DMs (anti-recursion: scheduled runs never
       // get these tools; D-SC4). Non-owner/group turns can't schedule.
@@ -169,46 +181,60 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
       let parts = assistant?.parts ?? [];
       const scratch = extractScratch(parts);
 
-      let delivered = classifyDelivery(counter.count, scratch, silence.silent);
+      let delivered: Delivery;
       let recovered = false;
-      if (delivered === 'fallback_text') {
-        // Elicitation miss: the model wrote text but called NEITHER send_message
-        // nor stay_silent. Run a cheap forced recovery pass (D-MG8) that composes
-        // a concise message from the private notes, or affirmatively chooses
-        // silence — so the reply isn't ghosted and raw scratch is never leaked.
-        log.warn('elicitation miss; running delivery recovery', {
-          threadId: event.threadId,
-          scratchLen: scratch.length,
-        });
-        try {
-          const recoverySends = await runRecoveryPass({
-            model: recoveryModel,
-            ownerName: config.owner.name,
-            messages,
-            scratch,
-            tools: { send_message: tools.send_message, stay_silent: tools.stay_silent },
-          });
-          recovered = true;
-          // Record recovery sends in history as send_message tool calls (the same
-          // shape the main loop persists), so the next turn's context reinforces
-          // "speaking == send_message".
-          parts = [
-            ...parts,
-            ...recoverySends.map((text, i) => sendMessagePart(text, `recovery-${i}`)),
-          ];
-          delivered = classifyDelivery(counter.count, scratch, silence.silent);
-        } catch (err) {
-          log.error('recovery pass failed', { threadId: event.threadId, err: String(err) });
-        }
-      }
+      let projection: string;
 
-      const sent = extractSends(parts);
+      if (deliveryMode === 'text') {
+        // Text mode: the assistant's reply text IS the message. Deliver it as
+        // iMessage bubbles (split on blank lines), unless the model affirmatively
+        // chose silence (stay_silent) or produced no text. No recovery pass — text
+        // is always delivered, so there is no missed-send to recover from.
+        const bubbles = silence.silent ? [] : splitBubbles(scratch);
+        for (const text of bubbles) {
+          await gateway.send(event.threadId, { text }, { persist: false });
+        }
+        delivered = bubbles.length > 0 ? 'send_message' : 'silence';
+        projection = bubbles.join('\n');
+      } else {
+        delivered = classifyDelivery(counter.count, scratch, silence.silent);
+        if (delivered === 'fallback_text') {
+          // Elicitation miss: the model wrote text but called NEITHER send_message
+          // nor stay_silent. Run a cheap forced recovery pass (D-MG8) that composes
+          // a concise message from the private notes, or affirmatively chooses
+          // silence — so the reply isn't ghosted and raw scratch is never leaked.
+          log.warn('elicitation miss; running delivery recovery', {
+            threadId: event.threadId,
+            scratchLen: scratch.length,
+          });
+          try {
+            const recoverySends = await runRecoveryPass({
+              model: recoveryModel,
+              ownerName: config.owner.name,
+              messages,
+              scratch,
+              tools: { send_message: sendMessageTool, stay_silent: staySilentTool },
+            });
+            recovered = true;
+            // Record recovery sends in history as send_message tool calls (the same
+            // shape the main loop persists), so the next turn's context reinforces
+            // "speaking == send_message".
+            parts = [
+              ...parts,
+              ...recoverySends.map((text, i) => sendMessagePart(text, `recovery-${i}`)),
+            ];
+            delivered = classifyDelivery(counter.count, scratch, silence.silent);
+          } catch (err) {
+            log.error('recovery pass failed', { threadId: event.threadId, err: String(err) });
+          }
+        }
+        projection = [scratch, ...extractSends(parts)].filter(Boolean).join('\n');
+      }
 
       // One row per turn (D-MG9): persist the assembled UIMessage payload (rich,
       // for replay) + a flattened text projection (scratch + delivered sends, for
       // recall), with usage/delivery metadata. Skip a wholly empty turn.
       if (assistant && parts.length > 0) {
-        const projection = [scratch, ...sent].filter(Boolean).join('\n');
         const enriched: UIMessage = {
           ...assistant,
           parts,

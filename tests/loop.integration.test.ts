@@ -142,4 +142,39 @@ describe('agent loop end-to-end', () => {
     await runOnce(rt2, ev2);
     expect(rt2.gateway.texts()).toEqual(['recovered']);
   });
+
+  describe('text delivery mode (candidate design)', () => {
+    it("delivers the model's reply text directly, split into bubbles on blank lines", async () => {
+      const rt = createTestRuntime({
+        db: tdb.db,
+        deliveryMode: 'text',
+        model: modelThatOnlyScratches('Paris 🇫🇷\n\nAnything else?'),
+      });
+      const ev = makeChannelEvent({ text: 'capital of France?' });
+      await runOnce(rt, ev);
+
+      expect(rt.gateway.texts()).toEqual(['Paris 🇫🇷', 'Anything else?']); // two bubbles
+      const turn = (await lastTurn(rt, ev.threadId)).find((m) => m.role === 'assistant');
+      const meta = (turn!.payload as { metadata?: { delivered?: string } }).metadata;
+      expect(meta?.delivered).toBe('send_message');
+    });
+
+    it('stay_silent → nothing delivered, delivered=silence (no send_message tool exists)', async () => {
+      const rt = createTestRuntime({
+        db: tdb.db,
+        deliveryMode: 'text',
+        model: scriptModel([
+          { toolCalls: [{ toolName: 'stay_silent', input: {} }] },
+          { finishReason: 'stop' },
+        ]),
+      });
+      const ev = makeChannelEvent({ text: '👍' });
+      await runOnce(rt, ev);
+
+      expect(rt.gateway.texts()).toEqual([]);
+      const turn = (await lastTurn(rt, ev.threadId)).find((m) => m.role === 'assistant');
+      const meta = (turn!.payload as { metadata?: { delivered?: string } }).metadata;
+      expect(meta?.delivered).toBe('silence');
+    });
+  });
 });

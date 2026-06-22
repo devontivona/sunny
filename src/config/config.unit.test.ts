@@ -8,6 +8,7 @@ describe('ConfigSchema defaults', () => {
     const c = ConfigSchema.parse({});
     expect(c.modelId).toBe('claude-opus-4-8');
     expect(c.recoveryModelId).toBe('claude-haiku-4-5');
+    expect(c.thinking).toBe('adaptive');
     expect(c.effort).toBe('high');
     expect(c.timezone).toBe('America/New_York');
     expect(c.owner).toEqual({ name: 'Devon', identities: [] });

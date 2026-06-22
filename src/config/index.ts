@@ -12,7 +12,9 @@ export const ConfigSchema = z.object({
   modelId: z.string().default('claude-opus-4-8'),
   /** Cheap model for the delivery-recovery pass (D-MG8). Defaults to Haiku. */
   recoveryModelId: z.string().default('claude-haiku-4-5'),
-  /** Reasoning effort for agentic turns (D-PS3). */
+  /** Extended thinking for conversational turns: `adaptive` (default) or `off`. */
+  thinking: z.enum(['adaptive', 'off']).default('adaptive'),
+  /** Reasoning effort for agentic turns when thinking is on (D-PS3). */
   effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).default('high'),
   /** Devon's timezone (used by scheduling later). */
   timezone: z.string().default('America/New_York'),
