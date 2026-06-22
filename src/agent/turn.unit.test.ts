@@ -16,11 +16,17 @@ describe('classifyDelivery', () => {
     expect(classifyDelivery(3, 'some scratch')).toBe('send_message');
   });
 
-  it('fallback_text when nothing was sent but scratch exists', () => {
-    expect(classifyDelivery(0, 'private reply leaked into scratch')).toBe('fallback_text');
+  it('silence when stay_silent was called — even if scratch exists', () => {
+    expect(classifyDelivery(0, '', true)).toBe('silence');
+    expect(classifyDelivery(0, 'a private note', true)).toBe('silence');
   });
 
-  it('silence when nothing was sent and there is no scratch', () => {
+  it('fallback_text (a miss) when scratch exists but neither tool was called', () => {
+    expect(classifyDelivery(0, 'private reply leaked into scratch')).toBe('fallback_text');
+    expect(classifyDelivery(0, 'private reply', false)).toBe('fallback_text');
+  });
+
+  it('silence when nothing was sent, no scratch, no stay_silent', () => {
     expect(classifyDelivery(0, '')).toBe('silence');
   });
 });

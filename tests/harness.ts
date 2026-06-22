@@ -6,6 +6,7 @@ import type { Db } from '../src/db/client.js';
 import { ConversationStore } from '../src/gateway/store.js';
 import { FakeGateway } from './fakes/gateway.js';
 import { FakeDurableStart } from './fakes/start.js';
+import { recoveryNotExpected } from './fakes/model.js';
 import { makeConfig } from './factories.js';
 
 /**
@@ -25,8 +26,16 @@ export interface TestRuntimeOptions {
   db: Db;
   /** The model under test — a mock for tests, a real model for evals. */
   model: LanguageModel;
+  /**
+   * The delivery-recovery model (D-MG8). Defaults to one that throws if invoked,
+   * so a test that unexpectedly triggers recovery fails loudly instead of hitting
+   * the network; miss tests inject a `generateToolCall(...)` mock.
+   */
+  recoveryModel?: LanguageModel;
   /** Defaults to `makeConfig()` (owner = Devon, fresh temp runtime dir). */
   config?: SunnyConfig;
+  /** Output design: `tool` (default, send_message) or `text` (reply text delivered). */
+  deliveryMode?: 'tool' | 'text';
 }
 
 export interface TestRuntime {
@@ -50,7 +59,9 @@ export function createTestRuntime(opts: TestRuntimeOptions): TestRuntime {
     gateway,
     db: opts.db,
     model: opts.model,
+    recoveryModel: opts.recoveryModel ?? recoveryNotExpected(),
     start: fakeStart.start,
+    deliveryMode: opts.deliveryMode,
   });
   const dispatcher = new TurnDispatcher(runTurn, store);
   gateway.onInbound((event) => Promise.resolve(dispatcher.enqueue(event)));
