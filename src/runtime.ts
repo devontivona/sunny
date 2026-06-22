@@ -80,6 +80,7 @@ async function start(): Promise<Runtime> {
       gateway,
       db,
       credentials: resolverFromEnv() ?? undefined,
+      deliveryMode: config.deliveryMode,
     });
     dispatcher = new TurnDispatcher(runTurn, store);
     gateway.onInbound(async (event: ChannelEvent) => dispatcher!.enqueue(event));

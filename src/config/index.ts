@@ -16,6 +16,14 @@ export const ConfigSchema = z.object({
   thinking: z.enum(['adaptive', 'off']).default('adaptive'),
   /** Reasoning effort for agentic turns when thinking is on (D-PS3). */
   effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).default('high'),
+  /**
+   * How replies are delivered (D-MG8): `tool` — the model speaks only via the
+   * `send_message` tool (a missed call is recovered by the recovery pass); `text` —
+   * the model's reply text IS the message (delivered directly as bubbles), and it
+   * calls `stay_silent` to say nothing. `text` removes the send_message friction
+   * that makes the model over-choose silence.
+   */
+  deliveryMode: z.enum(['tool', 'text']).default('tool'),
   /** Devon's timezone (used by scheduling later). */
   timezone: z.string().default('America/New_York'),
   /** Owner identity allowlist — phone numbers / emails (messaging-gateway D-MG6, task 2.4). */
@@ -67,6 +75,7 @@ const DEFAULT_CONFIG_JSON = `{
   "modelId": "claude-opus-4-8",
   "recoveryModelId": "claude-haiku-4-5",
   "effort": "high",
+  "deliveryMode": "tool",
   "timezone": "America/New_York",
   "owner": {
     "name": "Devon",
