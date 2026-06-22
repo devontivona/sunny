@@ -30,6 +30,7 @@ import {
 import { createMemoryTools } from './tools/memory.js';
 import { createScheduleTools } from './tools/schedule.js';
 import { createSkillTools } from './tools/skillManage.js';
+import { createCredentialTools } from './tools/credentialManage.js';
 import { createSendMessageTool, type SendCounter } from './tools/sendMessage.js';
 import { createStartJobTool, type StartJob } from './tools/startJob.js';
 
@@ -52,10 +53,9 @@ export interface AgentRunnerDeps {
   start?: StartJob;
   /**
    * Credential resolver (credentials D-CR2). Production builds it from
-   * `OP_SERVICE_ACCOUNT_TOKEN`; credentialed tools scope it to their declared
-   * references per-tool (D-CR3, `scopeResolver`). Absent when no token is
-   * configured — credentialed tools are then unavailable. (Consumed by the
-   * credentialed tools/skills added in later tasks: browse, email, bash op-run.)
+   * `OP_SERVICE_ACCOUNT_TOKEN`; tools resolve a credential by name via the registry
+   * (`resolveByName`, D-CR5). Absent when no token is configured — `credential_manage`
+   * register then records without verifying, and credentialed tools are unavailable.
    */
   credentials?: CredentialResolver;
 }
@@ -131,6 +131,8 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
         : {}),
       // Self-authoring skills: owner DMs only (privileged, owner-facing; D-SK4).
       ...(event.isOwner && !event.isGroup ? createSkillTools(config) : {}),
+      // Credential registry: owner DMs only (D-CR5). resolver verifies on register.
+      ...(event.isOwner && !event.isGroup ? createCredentialTools(config, deps.credentials) : {}),
       ...memoryTools,
     };
     const agent = new ToolLoopAgent({

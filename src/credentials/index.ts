@@ -1,3 +1,5 @@
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { createClient, type Client } from '@1password/sdk';
 import { logger } from '../logger.js';
 
@@ -13,10 +15,12 @@ const INTEGRATION_VERSION = '0.1.0';
  * results, or logged. The model only ever handles `op://` references.
  *
  * A `op://` reference (op://vault/item/field, optionally /section/field) is a
- * pointer, not a secret — only the resolved value is sensitive. The most important
- * guardrail is `scopeResolver` (D-CR3): because 1Password has no per-item scoping
- * and the model can be hijacked, each tool may only resolve the exact references
- * it declares.
+ * pointer, not a secret — only the resolved value is sensitive. The authorization
+ * boundary is the vault itself (D-CR3): the Service Account is read-only, so Sunny
+ * can never expand what it may use; the owner adding an item to the vault is the
+ * grant. The name→reference mapping lives in the registry below (D-CR5), not in
+ * code or skills. (No per-tool reference whitelist in the MVP — the vault boundary
+ * plus action-gating suffice.)
  */
 
 /** A 1Password secret reference: op://vault/item/field (3+ segments). */
@@ -74,42 +78,104 @@ export function resolverFromEnv(): CredentialResolver | null {
   return new OnePasswordResolver(token);
 }
 
-/**
- * Scope a resolver to an explicit reference whitelist (D-CR3 / tool-access task 6).
- * A scoped resolver refuses any reference not in its declared set, so the model —
- * even if hijacked — cannot cause resolution of an arbitrary `op://` path. This is
- * the per-tool whitelist that substitutes for 1Password's missing per-item scoping
- * and forms the credential half of the tool-registration contract (D-TA0).
- */
-export function scopeResolver(
-  resolver: CredentialResolver,
-  allowed: readonly string[],
-): CredentialResolver {
-  const whitelist = new Set(allowed.map((r) => r.trim()));
-  return {
-    async resolve(reference: string): Promise<string> {
-      const ref = reference.trim();
-      if (!whitelist.has(ref)) {
-        throw new Error(`reference not permitted for this tool: ${ref}`);
-      }
-      return resolver.resolve(ref);
-    },
-  };
+// --- credential registry (D-CR5) -------------------------------------------
+// The symbolic name → `op://` reference mapping. References + metadata only,
+// NEVER values. Lives in `~/.sunny/credentials.json` (in the `~/.sunny` git repo),
+// owner-reviewable and editable. Tools/skills refer to a credential by name; the
+// value is resolved in the tool layer at point of use.
+
+export interface CredentialEntry {
+  reference: string;
+  purpose?: string;
+  addedBy?: string;
 }
 
-/**
- * Resolve a map of `ENV_VAR -> op:// reference` into a plain env object for a
- * subprocess — the `op run`-style per-command injection pattern (D-TA5). Every
- * reference passes through the (typically scoped) resolver, so values reach only
- * that subprocess's environment, never the model.
- */
-export async function resolveEnv(
-  resolver: CredentialResolver,
-  refs: Record<string, string>,
-): Promise<Record<string, string>> {
-  const out: Record<string, string> = {};
-  for (const [key, ref] of Object.entries(refs)) {
-    out[key] = await resolver.resolve(ref);
+export type CredentialRegistry = Record<string, CredentialEntry>;
+
+export function credentialsPath(runtimeDir: string): string {
+  return join(runtimeDir, 'credentials.json');
+}
+
+/** Normalize a symbolic credential name to a stable registry key. */
+export function normalizeCredentialName(name: string): string {
+  const slug = name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  if (!slug) throw new Error(`invalid credential name: ${name}`);
+  return slug;
+}
+
+export function loadRegistry(runtimeDir: string): CredentialRegistry {
+  const file = credentialsPath(runtimeDir);
+  if (!existsSync(file)) return {};
+  try {
+    const raw: unknown = JSON.parse(readFileSync(file, 'utf8'));
+    return raw && typeof raw === 'object' ? (raw as CredentialRegistry) : {};
+  } catch (err) {
+    log.warn('could not parse credentials registry (treating as empty)', { err: String(err) });
+    return {};
   }
-  return out;
+}
+
+/** List registered credentials (names + references + purposes — no values). */
+export function listCredentials(runtimeDir: string): Array<{ name: string } & CredentialEntry> {
+  return Object.entries(loadRegistry(runtimeDir))
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([name, entry]) => ({ name, ...entry }));
+}
+
+// Serialized registry writes (mirrors memory/skills R7) so concurrent turns/jobs
+// cannot corrupt the JSON.
+let registryChain: Promise<unknown> = Promise.resolve();
+function serializeRegistry<T>(fn: () => T | Promise<T>): Promise<T> {
+  const next = registryChain.then(fn, fn);
+  registryChain = next.then(
+    () => undefined,
+    () => undefined,
+  );
+  return next;
+}
+
+/** Record a name → reference mapping (D-CR5). Validates the reference shape and
+ *  stores no value. The owner provisions the item in the vault; this just records
+ *  where it is. */
+export function registerCredential(
+  runtimeDir: string,
+  name: string,
+  reference: string,
+  meta: { purpose?: string; addedBy?: string } = {},
+): Promise<CredentialEntry> {
+  return serializeRegistry(() => {
+    const key = normalizeCredentialName(name);
+    const ref = reference.trim();
+    if (!isOpReference(ref)) throw new Error(`not a valid op:// reference: ${ref}`);
+    const registry = loadRegistry(runtimeDir);
+    const entry: CredentialEntry = {
+      reference: ref,
+      ...(meta.purpose ? { purpose: meta.purpose } : {}),
+      ...(meta.addedBy ? { addedBy: meta.addedBy } : {}),
+    };
+    registry[key] = entry;
+    writeFileSync(credentialsPath(runtimeDir), `${JSON.stringify(registry, null, 2)}\n`, {
+      mode: 0o644,
+    });
+    return entry;
+  });
+}
+
+/** Resolve a credential by its symbolic name: registry → reference → value. The
+ *  value is returned to the tool layer only, never to the model (D-CR2). */
+export async function resolveByName(
+  resolver: CredentialResolver,
+  runtimeDir: string,
+  name: string,
+): Promise<string> {
+  const key = normalizeCredentialName(name);
+  const entry = loadRegistry(runtimeDir)[key];
+  if (!entry) {
+    throw new Error(`no credential named "${key}" — ask the owner to add it to the vault`);
+  }
+  return resolver.resolve(entry.reference);
 }

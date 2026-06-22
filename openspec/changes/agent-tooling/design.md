@@ -205,11 +205,10 @@ blast-radius boundary), and the token is a master key to its scoped vault.
   knowing where a credential is grants nothing it couldn't already reach. *Misuse* of an
   in-vault credential (right cred at the wrong target, or exfiltration) is contained by
   **consequence-gated approval on credentialed *actions*** (D-SEC3) + **egress control**,
-  not by sub-vault scoping (which 1Password lacks). *(Optional later: a per-tool/skill scope
-  limiting which named credentials a tool may touch — a lateral-movement control for when
-  the vault holds many high-value items, populated by the provisioning flow (D-CR5), not
-  hardcoded; `scopeResolver` is the mechanism, now a secondary control rather than the
-  boundary.)*
+  not by sub-vault scoping (which 1Password lacks). *(A per-tool/skill scope limiting which
+  named credentials a tool may touch is intentionally **not in the MVP** — too heavy for the
+  value at a minimal vault size; revisit as a lateral-movement control if the vault grows to
+  hold many high-value items.)*
 - **D-CR5 — The name→reference mapping lives in a Sunny credential registry, not SKILL.md.**
   The mapping from symbolic name → `op://` reference is stored in a dedicated structured
   **credential registry** (`~/.sunny/credentials.json`) inside the `~/.sunny` git repo —

@@ -1,6 +1,14 @@
 import { describe, it, expect } from 'vitest';
+import { makeConfig } from '../../tests/factories.js';
 import { FakeResolver } from '../../tests/fakes/credentials.js';
-import { isOpReference, resolveEnv, scopeResolver } from './index.js';
+import { execCredentialManage } from '../agent/tools/credentialManage.js';
+import {
+  isOpReference,
+  listCredentials,
+  loadRegistry,
+  registerCredential,
+  resolveByName,
+} from './index.js';
 
 describe('isOpReference', () => {
   it('accepts op://vault/item/field and section forms', () => {
@@ -10,49 +18,98 @@ describe('isOpReference', () => {
   });
 
   it('rejects non-references and short paths', () => {
-    expect(isOpReference('op://Sunny/email')).toBe(false); // missing field
-    expect(isOpReference('Sunny/email/password')).toBe(false); // no scheme
+    expect(isOpReference('op://Sunny/email')).toBe(false);
+    expect(isOpReference('Sunny/email/password')).toBe(false);
     expect(isOpReference('http://example.com')).toBe(false);
-    expect(isOpReference('not a ref')).toBe(false);
   });
 });
 
-describe('scopeResolver (per-tool whitelist, D-CR3)', () => {
-  const REF = 'op://Sunny/email/password';
+describe('credential registry (D-CR5)', () => {
+  const REF = 'op://Sunny/gmail/password';
 
-  it('resolves a whitelisted reference', async () => {
-    const base = new FakeResolver({ [REF]: 's3cret' });
-    const scoped = scopeResolver(base, [REF]);
-    expect(await scoped.resolve(REF)).toBe('s3cret');
-    expect(base.seen).toEqual([REF]);
+  it('records name→reference (no value) and resolves by name', async () => {
+    const { runtimeDir } = makeConfig();
+    expect(listCredentials(runtimeDir)).toEqual([]);
+
+    await registerCredential(runtimeDir, 'Gmail', REF, {
+      purpose: 'email login',
+      addedBy: 'Devon',
+    });
+
+    const reg = loadRegistry(runtimeDir);
+    expect(reg.gmail).toEqual({ reference: REF, purpose: 'email login', addedBy: 'Devon' });
+    expect(JSON.stringify(reg)).not.toContain('password-value'); // only the pointer is stored
+
+    const resolver = new FakeResolver({ [REF]: 'the-secret' });
+    expect(await resolveByName(resolver, runtimeDir, 'gmail')).toBe('the-secret');
+    expect(resolver.seen).toEqual([REF]);
   });
 
-  it('refuses an undeclared reference without touching the underlying resolver', async () => {
-    const base = new FakeResolver({ 'op://Sunny/other/token': 'nope' });
-    const scoped = scopeResolver(base, [REF]);
-    await expect(scoped.resolve('op://Sunny/other/token')).rejects.toThrow(/not permitted/);
-    expect(base.seen).toEqual([]); // never reached the real resolver
+  it('rejects an invalid reference', async () => {
+    const { runtimeDir } = makeConfig();
+    await expect(registerCredential(runtimeDir, 'x', 'not-a-ref')).rejects.toThrow(/valid op:/);
   });
 
-  it('refuses an arbitrary path the model might inject', async () => {
-    const base = new FakeResolver({ 'op://Private/anything/field': 'leak' });
-    const scoped = scopeResolver(base, [REF]);
-    await expect(scoped.resolve('op://Private/anything/field')).rejects.toThrow(/not permitted/);
-    expect(base.seen).toEqual([]);
+  it('throws for an unknown name (prompting the owner to add it)', async () => {
+    const { runtimeDir } = makeConfig();
+    const resolver = new FakeResolver({});
+    await expect(resolveByName(resolver, runtimeDir, 'missing')).rejects.toThrow(/ask the owner/);
   });
 });
 
-describe('resolveEnv (op-run injection, D-TA5)', () => {
-  it('maps env vars to resolved values through a scoped resolver', async () => {
-    const REF = 'op://Sunny/email/password';
-    const base = new FakeResolver({ [REF]: 'pw' });
-    const scoped = scopeResolver(base, [REF]);
-    expect(await resolveEnv(scoped, { EMAIL_PASSWORD: REF })).toEqual({ EMAIL_PASSWORD: 'pw' });
+describe('credential_manage tool', () => {
+  const REF = 'op://Sunny/gmail/password';
+
+  it('lists empty, registers, and verifies via the resolver', async () => {
+    const config = makeConfig();
+    const resolver = new FakeResolver({ [REF]: 'pw' });
+
+    expect(await execCredentialManage(config, resolver, { action: 'list' })).toBe(
+      '(no credentials registered yet)',
+    );
+
+    const reg = await execCredentialManage(config, resolver, {
+      action: 'register',
+      name: 'gmail',
+      reference: REF,
+      purpose: 'email login',
+    });
+    expect(reg).toMatch(/verified it resolves/);
+
+    expect(await execCredentialManage(config, resolver, { action: 'list' })).toContain(
+      'gmail (email login) → op://Sunny/gmail/password',
+    );
   });
 
-  it('propagates a whitelist refusal', async () => {
-    const base = new FakeResolver({});
-    const scoped = scopeResolver(base, []);
-    await expect(resolveEnv(scoped, { X: 'op://Sunny/x/y' })).rejects.toThrow(/not permitted/);
+  it('registers without verifying when no resolver is configured', async () => {
+    const config = makeConfig();
+    const out = await execCredentialManage(config, undefined, {
+      action: 'register',
+      name: 'gmail',
+      reference: REF,
+    });
+    expect(out).toMatch(/not verified/);
+  });
+
+  it('flags a reference that does not resolve', async () => {
+    const config = makeConfig();
+    const resolver = new FakeResolver({}); // REF not present → rejects
+    const out = await execCredentialManage(config, resolver, {
+      action: 'register',
+      name: 'gmail',
+      reference: REF,
+    });
+    expect(out).toMatch(/did NOT resolve/);
+  });
+
+  it('rejects a malformed reference before writing', async () => {
+    const config = makeConfig();
+    const out = await execCredentialManage(config, new FakeResolver({}), {
+      action: 'register',
+      name: 'gmail',
+      reference: 'bogus',
+    });
+    expect(out).toMatch(/not a valid op:/);
+    expect(listCredentials(config.runtimeDir)).toEqual([]);
   });
 });
