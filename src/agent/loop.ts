@@ -163,6 +163,7 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
       ...(event.isOwner && !event.isGroup ? createBashTools(config, deps.credentials) : {}),
       ...memoryTools,
     };
+    let stepNo = 0;
     const agent = new ToolLoopAgent({
       model,
       instructions,
@@ -183,6 +184,26 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
           content: event.isGroup && e.senderName ? `${e.senderName}: ${e.text}` : e.text,
         }));
         return { messages: [...stepMessages, ...extra] };
+      },
+      // Live per-step trace — see the loop as it runs (each model step + its tool
+      // calls/results), not just the end-of-turn summary. Credential values are
+      // already masked by the tools; tool inputs carry only references/names.
+      onStepFinish: (step) => {
+        stepNo += 1;
+        const calls = step.toolCalls.flatMap((c) =>
+          c ? [`${c.toolName}(${previewArg(c.input)})`] : [],
+        );
+        const results = step.toolResults.flatMap((r) =>
+          r ? [`${r.toolName} → ${previewArg((r as { output?: unknown }).output)}`] : [],
+        );
+        log.info('turn step', {
+          threadId: event.threadId,
+          step: stepNo,
+          finish: step.finishReason,
+          ...(calls.length ? { calls } : {}),
+          ...(results.length ? { results } : {}),
+          ...(step.text.trim() ? { text: previewArg(step.text) } : {}),
+        });
       },
     });
 
@@ -300,6 +321,21 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
       });
     }
   };
+}
+
+/** Compact one-line preview of a tool input/result/text for the live step trace. */
+function previewArg(v: unknown, max = 140): string {
+  let s: string;
+  if (typeof v === 'string') s = v;
+  else {
+    try {
+      s = JSON.stringify(v) ?? String(v);
+    } catch {
+      s = String(v);
+    }
+  }
+  s = s.replace(/\s+/g, ' ').trim();
+  return s.length > max ? `${s.slice(0, max)}…` : s;
 }
 
 /** Per-turn observability: tools used, delivery path, tokens, latency. */
