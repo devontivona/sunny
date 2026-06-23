@@ -30,9 +30,36 @@ export const deliveredViaSendMessage: Grader = (t) =>
 export const isSilent: Grader = (t) =>
   pass('is-silent', t.sends.length === 0, `delivered=${t.delivered} sends=${t.sends.length}`);
 
+/**
+ * The (final) turn deliberately chose silence — read from the `delivered`
+ * classification, not from outbound count. Use this for MULTI-TURN cases: `sends`
+ * accumulates across every turn of the case, so `isSilent`'s zero-outbound check
+ * would wrongly fail whenever an earlier turn legitimately spoke. `delivered` is
+ * the last turn's outcome, which is what these cases grade.
+ */
+export const finalTurnSilent: Grader = (t) =>
+  pass('final-turn-silent', t.delivered === 'silence', `delivered=${t.delivered}`);
+
 /** The fallback path never fired (elicitation held). */
 export const noFallback: Grader = (t) =>
   pass('no-fallback', t.delivered !== 'fallback_text', `delivered=${t.delivered}`);
+
+/** The backstop did NOT fire — the primary model elicited on its own (D-MG8). */
+export const noRecovery: Grader = (t) =>
+  pass('no-recovery', !t.recovered, `recovered=${t.recovered}`);
+
+/**
+ * Pre-recovery (primary) elicitation: the reply was delivered AND the backstop did
+ * not have to rescue it. This is the metric that the old, masking backstop hid — a
+ * green `delivered=send_message` could still be a primary miss that recovery saved.
+ * Grading it makes "backstop fired" a tracked regression, not an invisible save.
+ */
+export const elicitedWithoutRecovery: Grader = (t) =>
+  pass(
+    'elicited-without-recovery',
+    t.delivered === 'send_message' && !t.recovered,
+    `delivered=${t.delivered} recovered=${t.recovered}`,
+  );
 
 /** Exactly `n` user-facing bubbles were sent. */
 export function sendCount(n: number): Grader {

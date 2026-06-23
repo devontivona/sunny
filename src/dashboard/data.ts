@@ -178,6 +178,10 @@ export class DashboardData {
           timestamp: r.timestamp.toISOString(),
           model: typeof meta.model === 'string' ? meta.model : null,
           delivery: typeof meta.delivered === 'string' ? meta.delivered : null,
+          // Whether the delivery-recovery backstop fired this turn (D-MG8). A
+          // healthy system trends this toward zero; track it to catch elicitation
+          // regressions early.
+          recovered: meta.recovered === true,
           steps: typeof meta.steps === 'number' ? meta.steps : null,
           usage: normalizeUsage(meta.usage),
         };

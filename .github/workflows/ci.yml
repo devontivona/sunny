@@ -1,9 +1,12 @@
 name: CI
 
 # The merge gate (design D9/D11): typecheck + unit + integration on every change.
-# Deterministic, free, secret-free. No service container and no Docker —
-# integration uses in-process PGlite (D4) and the mock model, so this runs safely
-# on fork PRs at zero API cost. Evals are NOT here (they are paid + non-deterministic).
+# No service container and no Docker — integration uses in-process PGlite (D4).
+# Mostly mock-model and free, with ONE deliberate exception: the real-model
+# recovery regression test (tests/recovery.realmodel.integration.test.ts) calls
+# Haiku, so the integration step needs ANTHROPIC_API_KEY (a few cents/run). Fork
+# PRs without the secret will fail that one test. Evals (paid Opus, N-run,
+# non-deterministic) remain out of this gate — see evals.yml.
 on:
   pull_request:
   push:
@@ -36,6 +39,10 @@ jobs:
       # (surfaced below); it does NOT gate merge (D12 — judgment over a number).
       - name: Unit + integration (with coverage)
         run: npm run coverage
+        env:
+          # Used only by the real-model recovery regression test; the rest of the
+          # lane is mock-only and ignores it.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
       - name: Coverage summary (informational)
         if: always()

@@ -14,6 +14,7 @@ function trajectory(overrides: Partial<Trajectory> = {}): Trajectory {
     toolCalls: [],
     sends: [],
     delivered: 'silence',
+    recovered: false,
     startJobs: [],
     finalText: '',
     scratch: '',
