@@ -246,29 +246,97 @@ export function repoUrl(repo: string): string {
   return /^(https?:\/\/|git@)/.test(repo) ? repo : `https://github.com/${repo}.git`;
 }
 
-/** Sync the canonical skill repo into `~/.sunny/skills` (D-SK8): clone on a fresh
- *  host, fast-forward pull otherwise. Best-effort — a failure (offline, no repo,
- *  diverged) is non-fatal; Sunny falls back to the local working copy. The host's
- *  git auth (e.g. the gh credential helper) provides access; no `op://` needed. */
-async function syncSkillRepo(config: SunnyConfig): Promise<void> {
+/** Outcome of a skill-repo sync, so callers (startup, the periodic syncer) can act
+ *  — e.g. notify the owner on divergence. */
+export type SkillSyncResult =
+  | { status: 'cloned' }
+  | { status: 'pulled'; commits: number }
+  | { status: 'up-to-date'; aheadUnpushed: number }
+  | { status: 'diverged'; ahead: number; behind: number }
+  | { status: 'skipped'; reason: string }
+  | { status: 'error'; detail: string };
+
+async function git(root: string, args: string[]): Promise<string> {
+  const { stdout } = await exec('git', ['-C', root, ...args]);
+  return stdout.trim();
+}
+
+/**
+ * Sync the canonical skill repo into `~/.sunny/skills` (D-SK8): clone on a fresh
+ * host; otherwise `fetch` + **fast-forward only**. We never auto-merge or rebase —
+ * if local self-authored commits and remote have diverged, we report `diverged`
+ * and leave the working copy untouched (the owner resolves it), rather than have an
+ * agent reconcile untrusted history. Best-effort: offline/no-repo is non-fatal and
+ * Sunny falls back to the local copy. Host git auth provides access; no `op://`.
+ */
+async function syncSkillRepo(config: SunnyConfig): Promise<SkillSyncResult> {
   const repo = config.skills.repo;
-  if (!repo) return;
+  if (!repo) return { status: 'skipped', reason: 'no skills.repo configured' };
   const root = skillsPaths(config.runtimeDir).root;
   try {
-    if (existsSync(join(root, '.git'))) {
-      await exec('git', ['-C', root, 'pull', '--ff-only', '--quiet']);
-      log.info('pulled skill repo', { repo });
-    } else if (readdirSync(root).length === 0) {
+    if (!existsSync(join(root, '.git'))) {
+      if (readdirSync(root).length > 0) {
+        return { status: 'skipped', reason: 'skills dir has content but is not a clone' };
+      }
       await exec('git', ['clone', '--quiet', repoUrl(repo), root]);
       log.info('cloned skill repo', { repo });
-    } else {
-      log.warn('skills dir has content but is not a clone of the repo — using local copy', {
-        repo,
-      });
+      return { status: 'cloned' };
     }
+    await git(root, ['fetch', '--quiet']);
+    let upstream: string;
+    try {
+      upstream = await git(root, ['rev-parse', '--abbrev-ref', '@{u}']);
+    } catch {
+      return { status: 'skipped', reason: 'no upstream tracking branch' };
+    }
+    const behind = Number(await git(root, ['rev-list', '--count', '@..@{u}']));
+    const ahead = Number(await git(root, ['rev-list', '--count', '@{u}..@']));
+    if (behind === 0) return { status: 'up-to-date', aheadUnpushed: ahead };
+    if (ahead > 0) {
+      log.warn('skill repo diverged — leaving local copy untouched', { repo, ahead, behind });
+      return { status: 'diverged', ahead, behind };
+    }
+    await git(root, ['merge', '--ff-only', '--quiet', upstream]);
+    log.info('pulled skill repo', { repo, commits: behind });
+    return { status: 'pulled', commits: behind };
   } catch (err) {
     log.warn('skill repo sync failed (non-fatal; using local copy)', { err: String(err) });
+    return { status: 'error', detail: String(err) };
   }
+}
+
+/** How often the background syncer pulls the canonical skill repo. */
+const SKILL_SYNC_MS = 60 * 60_000; // hourly — single user; reads are live so the next turn sees updates
+
+/**
+ * Start a periodic skill-repo sync (option #1). `initSkills` already synced once at
+ * startup, so this is the ongoing cadence. ff-only; on `diverged` it calls
+ * `onDiverged` ONCE per divergence episode (reset when it clears) so the owner is
+ * told but not spammed hourly. Reads are live, so a successful pull is picked up by
+ * the next turn without a restart.
+ */
+export function startSkillSync(deps: {
+  config: SunnyConfig;
+  onDiverged?: (detail: string) => void;
+}): void {
+  let warnedDiverged = false;
+  async function tick(): Promise<void> {
+    const r = await syncSkillRepo(deps.config);
+    if (r.status === 'diverged') {
+      if (!warnedDiverged) {
+        warnedDiverged = true;
+        deps.onDiverged?.(
+          `Heads up — your skills repo and my local copy have diverged ` +
+            `(${r.ahead} local, ${r.behind} remote commit(s)), so I've stopped auto-pulling skills ` +
+            `until it's reconciled. Local skills still work; new repo changes won't land until you fix it.`,
+        );
+      }
+    } else if (r.status !== 'error') {
+      warnedDiverged = false;
+    }
+  }
+  setInterval(() => void tick(), SKILL_SYNC_MS);
+  log.info('skill sync started', { everyMs: SKILL_SYNC_MS });
 }
 
 /** Ensure the skills dir exists, sync the canonical repo (D-SK8), then write any

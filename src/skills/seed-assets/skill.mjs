@@ -195,12 +195,50 @@ function cmdRm(name) {
   done(`deleted "${slug}"${persistSuffix(r)}.`);
 }
 
+function gitErrMsg(err) {
+  return String(err?.stderr || err?.stdout || err?.message || err).trim().split('\n')[0];
+}
+
+/** Pull the latest skills from the canonical repo, fast-forward only. Mirrors
+ *  `syncSkillRepo` in src/skills/index.ts — never auto-merges; reports divergence
+ *  for the owner to reconcile. On-demand counterpart of the hourly background sync. */
+function cmdSync() {
+  const root = join(runtimeDir(), 'skills');
+  if (!existsSync(join(root, '.git'))) fail('skills dir is not a git clone — nothing to sync');
+  try {
+    git(['fetch', '--quiet'], root);
+  } catch (err) {
+    fail(`fetch failed (offline?): ${gitErrMsg(err)}`);
+  }
+  let upstream;
+  try {
+    upstream = git(['rev-parse', '--abbrev-ref', '@{u}'], root).trim();
+  } catch {
+    fail('no upstream tracking branch configured for the skills clone');
+  }
+  const behind = Number(git(['rev-list', '--count', '@..@{u}'], root).trim());
+  const ahead = Number(git(['rev-list', '--count', '@{u}..@'], root).trim());
+  if (behind === 0) {
+    done(ahead > 0 ? `up to date (${ahead} local commit(s) not yet pushed)` : 'up to date — no new skills');
+    return;
+  }
+  if (ahead > 0) {
+    fail(
+      `diverged: ${ahead} local + ${behind} remote commit(s). Reconcile manually in ${root} ` +
+        `(e.g. git pull --rebase), then save again — not auto-merging.`,
+    );
+  }
+  git(['merge', '--ff-only', '--quiet', upstream], root);
+  done(`pulled ${behind} update(s) from ${upstream}.`);
+}
+
 const USAGE = `skill — author Sunny's own skills (a skill is a directory: SKILL.md + optional scripts/ references/ assets/)
 
 usage:
   skill new <name> -d "trigger description"   scaffold a draft skill directory
   skill save <name>                           validate, commit, and push the skill
   skill rm <name>                             delete the skill, commit, and push
+  skill sync                                  pull the latest skills from the repo (fast-forward only)
 
 write/edit the skill's files with your normal file tools, then 'skill save <name>'.`;
 
@@ -224,6 +262,8 @@ export function main(argv) {
     case 'delete':
       if (!args[0]) fail('`rm` requires a name');
       return cmdRm(args[0]);
+    case 'sync':
+      return cmdSync();
     case 'help':
     case '--help':
     case '-h':

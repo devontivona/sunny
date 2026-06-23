@@ -140,6 +140,14 @@ Because installed skills are untrusted third-party code, they are gated at insta
   `index.lock` (fails loud, never corrupts) plus per-thread turn serialization; a `flock` in
   the helper is the escalation if a single-user host ever contends.
 
+  Keeping the clone fresh: `initSkills` syncs once at startup, and a background syncer
+  (`startSkillSync`, hourly) pulls thereafter — **fast-forward only**, never an auto-merge.
+  Because skill reads are live (the loader re-reads `~/.sunny/skills` each turn), a pull is
+  picked up by the next turn with no restart. If local self-authored commits and the remote
+  diverge, the sync reports `diverged`, leaves the working copy untouched, and Sunny tells the
+  owner once (the owner reconciles). An on-demand `skill sync` (helper subcommand) does the
+  same pull immediately when the owner knows the repo changed.
+
 ---
 
 # Tool Access (contract + concrete tools)

@@ -1,14 +1,16 @@
 import { start as startWorkflow } from 'workflow/api';
+import { and, desc, eq } from 'drizzle-orm';
 import { runScheduledJob } from '../workflows/scheduledJob.js';
 import { TurnDispatcher } from './agent/dispatcher.js';
 import { createAgentRunner } from './agent/loop.js';
 import { loadConfig, type SunnyConfig } from './config/index.js';
 import { createDb, runMigrations, type Db } from './db/client.js';
+import { messages } from './db/schema.js';
 import { ConversationStore } from './gateway/store.js';
 import { SendblueGateway } from './gateway/sendblue.js';
 import type { ChannelEvent, Gateway } from './gateway/types.js';
 import { initMemory } from './memory/index.js';
-import { initSkills } from './skills/index.js';
+import { initSkills, startSkillSync } from './skills/index.js';
 import { resolverFromEnv } from './credentials/index.js';
 import { startScheduler } from './scheduler/index.js';
 import { logger } from './logger.js';
@@ -123,6 +125,37 @@ async function start(): Promise<Runtime> {
     });
   }
 
+  // Periodic skill-repo sync (D-SK8): keep the local clone fresh from the canonical
+  // repo without a restart. initSkills synced once already; this is the ongoing
+  // hourly cadence (ff-only). Reads are live, so a pull lands for the next turn.
+  // On divergence Sunny tells the owner once (via the owner's DM thread, if known).
+  startSkillSync({
+    config,
+    onDiverged: (text) => void notifyOwner(db, gateway, text),
+  });
+
   log.info('runtime started');
   return { config, gateway, store, db };
+}
+
+/** Send an owner-only maintenance notice to the owner's most recent DM thread (not a
+ *  group). Best-effort: if no owner DM is known yet, just log. Mirrors the dashboard's
+ *  in-process owner notify (a fixed template; not persisted to history). */
+async function notifyOwner(db: Db, gateway: Gateway, text: string): Promise<void> {
+  try {
+    const recent = await db
+      .select()
+      .from(messages)
+      .where(and(eq(messages.isOwner, true), eq(messages.role, 'user')))
+      .orderBy(desc(messages.timestamp))
+      .limit(25);
+    const thread = recent.find((m) => m.threadId.split(':')[2] !== 'g')?.threadId;
+    if (!thread) {
+      log.warn('skill-sync notice skipped — no owner DM thread known yet', { text });
+      return;
+    }
+    await gateway.send(thread, { text }, { persist: false });
+  } catch (err) {
+    log.warn('could not send skill-sync notice to owner', { err: String(err) });
+  }
 }

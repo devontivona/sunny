@@ -141,6 +141,16 @@ Edit any of its files, then run 'skill save' again:
 
     node skills/skill-authoring/scripts/skill.mjs rm my-skill
 
+## Pulling the latest skills from the repo
+
+Skills auto-sync from the canonical repo hourly, so this is rarely needed — but if you know
+the repo just changed and want the update now:
+
+    node skills/skill-authoring/scripts/skill.mjs sync
+
+It fast-forwards only. If it reports the repo has "diverged", tell the owner — do NOT try to
+merge or force it yourself.
+
 ## Rules
 
 - 'save' is the ONLY thing that makes a skill durable — without it your files sit uncommitted.
