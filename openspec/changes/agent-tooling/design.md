@@ -141,7 +141,7 @@ Because installed skills are untrusted third-party code, they are gated at insta
   the helper is the escalation if a single-user host ever contends.
 
   Keeping the clone fresh: `initSkills` syncs once at startup, and a background syncer
-  (`startSkillSync`, hourly) pulls thereafter — **fast-forward only**, never an auto-merge.
+  (`startSkillSync`, every 10 min) pulls thereafter — **fast-forward only**, never an auto-merge.
   Because skill reads are live (the loader re-reads `~/.sunny/skills` each turn), a pull is
   picked up by the next turn with no restart. If local self-authored commits and the remote
   diverge, the sync reports `diverged`, leaves the working copy untouched, and Sunny tells the

@@ -306,11 +306,11 @@ async function syncSkillRepo(config: SunnyConfig): Promise<SkillSyncResult> {
 }
 
 /** How often the background syncer pulls the canonical skill repo. */
-const SKILL_SYNC_MS = 60 * 60_000; // hourly — single user; reads are live so the next turn sees updates
+const SKILL_SYNC_MS = 10 * 60_000; // every 10 min — reads are live so the next turn sees updates
 
 /**
  * Start a periodic skill-repo sync (option #1). `initSkills` already synced once at
- * startup, so this is the ongoing cadence. ff-only; on `diverged` it calls
+ * startup, so this is the ongoing cadence (every 10 min). ff-only; on `diverged` it calls
  * `onDiverged` ONCE per divergence episode (reset when it clears) so the owner is
  * told but not spammed hourly. Reads are live, so a successful pull is picked up by
  * the next turn without a restart.

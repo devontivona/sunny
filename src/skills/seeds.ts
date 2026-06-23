@@ -143,8 +143,8 @@ Edit any of its files, then run 'skill save' again:
 
 ## Pulling the latest skills from the repo
 
-Skills auto-sync from the canonical repo hourly, so this is rarely needed — but if you know
-the repo just changed and want the update now:
+Skills auto-sync from the canonical repo every 10 minutes, so this is rarely needed — but if
+you know the repo just changed and want the update now:
 
     node skills/skill-authoring/scripts/skill.mjs sync
 

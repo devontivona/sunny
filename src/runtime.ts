@@ -127,7 +127,7 @@ async function start(): Promise<Runtime> {
 
   // Periodic skill-repo sync (D-SK8): keep the local clone fresh from the canonical
   // repo without a restart. initSkills synced once already; this is the ongoing
-  // hourly cadence (ff-only). Reads are live, so a pull lands for the next turn.
+  // cadence (every 10 min, ff-only). Reads are live, so a pull lands for the next turn.
   // On divergence Sunny tells the owner once (via the owner's DM thread, if known).
   startSkillSync({
     config,
