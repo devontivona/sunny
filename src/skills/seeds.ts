@@ -242,10 +242,7 @@ export const SEED_SKILLS: SeedSkill[] = [
     assets: [
       { dest: 'assets/styles/INDEX.md', src: 'website-builder/assets/styles/INDEX.md' },
       { dest: 'assets/styles/sunglow.md', src: 'website-builder/assets/styles/sunglow.md' },
-      {
-        dest: 'assets/styles/sunny-terminal.md',
-        src: 'website-builder/assets/styles/sunny-terminal.md',
-      },
+      { dest: 'assets/styles/terminal.md', src: 'website-builder/assets/styles/terminal.md' },
     ],
   },
 ];

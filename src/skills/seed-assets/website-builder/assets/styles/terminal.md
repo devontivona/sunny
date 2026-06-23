@@ -1,11 +1,11 @@
-# Sunny Terminal -- Style Reference
+# Terminal -- Style Reference
 > A TUI rendered in the browser: GitHub Dark palette, one monospace size on a fixed vertical rhythm, hierarchy from weight / case / color / spacing -- links, not buttons.
 
 **Theme:** dark
 
 **Source:** Sunny's own dashboard design language (`DESIGN.md` in this repo) -- the サニー Terminal identity, GitHub Dark (Primer).
 
-Sunny Terminal should read as an actual terminal UI -- like `lazygit`, `htop`, or a well-kept `tmux` session -- not merely "dark and monospace." A single type size on a fixed character grid, regions separated by blank rows rather than floating cards, hierarchy carried by weight/case/color/spacing, and a strict vertical rhythm so the page looks printed line by line. Precise, dense, quietly technical.
+This style should read as an actual terminal UI -- like `lazygit`, `htop`, or a well-kept `tmux` session -- not merely "dark and monospace." A single type size on a fixed character grid, regions separated by blank rows rather than floating cards, hierarchy carried by weight/case/color/spacing, and a strict vertical rhythm so the page looks printed line by line. Precise, dense, quietly technical.
 
 ## Fonts (self-contained HTML)
 
