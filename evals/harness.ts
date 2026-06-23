@@ -94,6 +94,7 @@ async function buildTrajectory(
     parts: Array<{ type: string; input?: unknown; text?: string }>;
     metadata?: {
       delivered?: Trajectory['delivered'];
+      recovered?: boolean;
       usage?: { in?: number | null; out?: number | null; cached?: number | null };
     };
   };
@@ -115,6 +116,7 @@ async function buildTrajectory(
     toolCalls,
     sends,
     delivered,
+    recovered: payload.metadata?.recovered === true,
     startJobs: rt.fakeStart.calls,
     finalText: sends.join('\n'),
     scratch,

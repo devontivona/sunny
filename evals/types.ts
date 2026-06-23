@@ -25,6 +25,8 @@ export interface Trajectory {
   sends: string[];
   /** How the reply reached the user (D-MG8). */
   delivered: Delivery;
+  /** Whether the delivery-recovery backstop fired to rescue a missed send (D-MG8). */
+  recovered: boolean;
   /** Durable jobs the model elected to start (recorded, not launched). */
   startJobs: RecordedStart[];
   /** The user-facing reply text (sends joined) — the judge's `output`. */
