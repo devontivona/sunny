@@ -26,9 +26,11 @@ agent. The agent core speaks only the normalized `Gateway` seam, with the iMessa
   D-DE4. App migrations auto-apply at startup; WDK world tables are created once with
   `npx workflow-postgres-setup`.
 - **Observability** — a self-hosted **Langfuse** stack (`deploy/langfuse/docker-compose.yml`),
-  Sunny's OTLP trace backend + trace/trajectory store + cost/usage dashboards (D-OB7). All
-  services bind to `127.0.0.1`; only the web UI/API is published (`127.0.0.1:3010`). It runs
-  alongside `sunny-postgres` with its own Postgres/Clickhouse/Redis/minio. No egress.
+  Sunny's OTLP trace backend + trace/trajectory store + cost/usage dashboards (D-OB7). The
+  backing stores (Postgres/Clickhouse/Redis/minio) bind to `127.0.0.1`; the web UI/API is
+  published on the LAN (`:3010`, gated by Langfuse's own login) so it's reachable from a
+  headless host. It runs alongside `sunny-postgres` with its own stores. No third-party egress
+  (no Langfuse Cloud, no tunnel) — lock the UI to loopback + SSH tunnel for a stricter posture.
 - **Supervisor (home server)** — **`devbox`** runs the unified app as the **`sunny`** systemd
   *user* service (`Restart=always`, linger enabled → starts at boot, survives reboot) and
   publishes it over HTTPS via a Cloudflare tunnel at **`https://sunny.waywardlane.com`**.
@@ -63,7 +65,9 @@ cp deploy/langfuse/.env.example deploy/langfuse/.env   # fill generated secrets 
 cd deploy/langfuse && docker compose up -d && cd -     # run from the dir so override.yml auto-merges
 #  → the LANGFUSE_INIT_* keys provision the project headlessly on first boot. Copy that same
 #    public/secret pair into the repo-root .env as LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY,
-#    and set LANGFUSE_BASE_URL=http://localhost:3010. UI/login: http://localhost:3010.
+#    and set LANGFUSE_BASE_URL=http://localhost:3010 (Sunny exports from the same host).
+#    Browse the UI over the LAN at http://<host>:3010 (e.g. http://janeway.local:3010); set
+#    the stack's NEXTAUTH_URL to that same host or login will fail.
 #    Tracing is on when those keys are present; unset → tracing is a no-op.
 ```
 

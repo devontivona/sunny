@@ -1,11 +1,17 @@
 # Sunny's deltas on top of the vendored upstream Langfuse compose.
 # Docker Compose auto-merges this file with docker-compose.yml.
 #
-# Upstream exposes langfuse-web (:3000) and minio (:9090) on ALL interfaces.
-# Sunny is single-host with no egress (D-OB1/D-OB7), so we rebind both to
-# 127.0.0.1 — and move the web UI to Sunny's port (LANGFUSE_WEB_PORT, default
-# 3010). The `!override` tag REPLACES upstream's port list (Compose otherwise
-# concatenates list values, which would leave the public :3000 binding in place).
+# Port bindings (no third-party egress; D-OB1/D-OB7). janeway is a headless home
+# server, so the web UI is bound to ALL interfaces on the LAN port
+# (LANGFUSE_WEB_PORT, default 3010) — reachable at http://<host>:3010 on the
+# trusted LAN, gated by Langfuse's own login. The backing stores
+# (Postgres/Clickhouse/Redis) and minio stay on 127.0.0.1 — nothing but the UI
+# is network-reachable. This is LAN exposure, NOT public egress: no Langfuse
+# Cloud, no tunnel. For a stricter posture, change the web binding back to
+# `127.0.0.1:...` and reach it via `ssh -L 3010:localhost:3010 <host>`.
+# `NEXTAUTH_URL` (in .env) must match the host you browse to, or auth breaks.
+# The `!override` tag REPLACES upstream's port list (Compose otherwise
+# concatenates list values, which would leave upstream's binding in place).
 #
 # Image versions are inherited from the vendored docker-compose.yml snapshot
 # (upstream pins langfuse:3 / redis:7 / postgres:17; clickhouse and chainguard
@@ -17,7 +23,7 @@
 services:
   langfuse-web:
     ports: !override
-      - '127.0.0.1:${LANGFUSE_WEB_PORT:-3010}:3000'
+      - '${LANGFUSE_WEB_PORT:-3010}:3000'
 
   minio:
     ports: !override
