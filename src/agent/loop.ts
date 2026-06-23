@@ -14,7 +14,7 @@ import type { ConversationStore } from '../gateway/store.js';
 import type { Db } from '../db/client.js';
 import type { CredentialResolver } from '../credentials/index.js';
 import { loadCore, memoryPaths } from '../memory/index.js';
-import { loadSkillIndex, skillsPaths } from '../skills/index.js';
+import { loadAllSkills, renderSkillIndex } from '../skills/index.js';
 import { logger } from '../logger.js';
 import { ensureConsolidationSchedule } from '../scheduler/index.js';
 import type { SteerHandle } from './dispatcher.js';
@@ -93,7 +93,6 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
   const recoveryModel = deps.recoveryModel ?? getRecoveryModel(config);
   const deliveryMode: DeliveryMode = deps.deliveryMode ?? 'tool';
   const paths = memoryPaths(config.runtimeDir);
-  const skillPaths = skillsPaths(config.runtimeDir);
   const memoryTools = createMemoryTools(config, store);
 
   return async function runTurn(event: ChannelEvent, steer: SteerHandle): Promise<void> {
@@ -124,7 +123,7 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
         config,
         loadCore(paths),
         deliveryMode,
-        loadSkillIndex(skillPaths, config.skills),
+        renderSkillIndex(loadAllSkills(config), config.skills),
       ),
       providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
     };

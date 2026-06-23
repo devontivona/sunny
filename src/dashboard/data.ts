@@ -1,12 +1,12 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { messages, scheduleRuns, schedules } from '../db/schema.js';
 import type { SunnyConfig } from '../config/index.js';
 import { loadCore, memoryPaths, readTopic, sanitizeTopic } from '../memory/index.js';
 import { listCredentials } from '../credentials/index.js';
-import { loadSkillBody, loadSkills, sanitizeSkillName, skillsPaths } from '../skills/index.js';
+import { loadAllSkills, parseSkill, sanitizeSkillName } from '../skills/index.js';
 import { toolCatalog } from '../agent/tools/catalog.js';
 
 /**
@@ -74,12 +74,13 @@ export class DashboardData {
     };
   }
 
-  /** Installed + self-authored skills (description, trust tier, source). */
+  /** All skills across every root (primary + owned source repos), with description,
+   *  trust tier, and source/provenance. */
   skills(): {
     skills: { name: string; description: string; trust: string; source: string | null }[];
   } {
     return {
-      skills: loadSkills(skillsPaths(this.config.runtimeDir)).map((s) => ({
+      skills: loadAllSkills(this.config).map((s) => ({
         name: s.name,
         description: s.description,
         trust: s.trust,
@@ -89,7 +90,8 @@ export class DashboardData {
   }
 
   /** One skill in full: its metadata, the rendered SKILL.md body, and the other
-   *  files in its directory (scripts/, references/, assets/). Observe-only. */
+   *  files in its directory (scripts/, references/, assets/). Resolves across all
+   *  roots via the skill's own SKILL.md path. Observe-only. */
   skill(name: string): {
     name: string;
     description: string;
@@ -104,19 +106,15 @@ export class DashboardData {
     } catch {
       return null;
     }
-    const paths = skillsPaths(this.config.runtimeDir);
-    const dir = paths.skillDir(slug);
-    if (!existsSync(dir)) return null;
-    const body = loadSkillBody(paths, slug);
-    if (body === null) return null;
-    const record = loadSkills(paths).find((r) => sanitizeSkillName(r.name) === slug);
+    const record = loadAllSkills(this.config).find((r) => sanitizeSkillName(r.name) === slug);
+    if (!record) return null;
     return {
-      name: slug,
-      description: record?.description ?? '',
-      trust: record?.trust ?? 'authored',
-      source: record?.source ?? null,
-      body,
-      files: listSkillFiles(dir),
+      name: record.name,
+      description: record.description,
+      trust: record.trust,
+      source: record.source ?? null,
+      body: parseSkill(readFileSync(record.file, 'utf8')).body,
+      files: listSkillFiles(dirname(record.file)),
     };
   }
 

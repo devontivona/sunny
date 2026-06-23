@@ -148,6 +148,17 @@ Because installed skills are untrusted third-party code, they are gated at insta
   owner once (the owner reconciles). An on-demand `skill sync` (helper subcommand) does the
   same pull immediately when the owner knows the repo changed.
 
+  **Multiple owned repos.** Beyond the single writable primary (`skills.repo` →
+  `~/.sunny/skills`), the owner may list additional **owned** repos in `skills.repos`. Each is
+  cloned **read-only** to `~/.sunny/skill-sources/<slug>` and ff-synced on the same cadence; the
+  skill loader reads across all roots (primary first; on a name conflict the primary wins), so a
+  capability you maintain in its own repo (e.g. `devontivona/devbox`) is available to Sunny and
+  auto-updates on every push — no vendoring, no manual install, no `npx`. Self-authoring only
+  ever writes the primary; sources are mirrors. Each source repo is auto-detected as a
+  single-skill repo (`SKILL.md` at its root) or a collection (`<name>/SKILL.md` subdirs). This
+  is the trusted, owner-curated lane; the untrusted third-party `npx skills add` lane (D-SK5,
+  deferred) remains separate. Adding a repo later is one entry in `skills.repos`.
+
 ---
 
 # Tool Access (contract + concrete tools)

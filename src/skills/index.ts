@@ -29,7 +29,8 @@ export interface SkillRecord {
   trust: TrustTier;
   /** Absolute path to the skill's SKILL.md. */
   file: string;
-  /** Provenance for installed skills (e.g. owner/repo), if declared. */
+  /** Provenance: the owned source repo it came from (e.g. owner/repo), or an explicit
+   *  frontmatter `source`. Undefined for primary self-authored skills. */
   source?: string;
 }
 
@@ -44,13 +45,50 @@ export interface SkillsPaths {
   skillFile: (name: string) => string;
 }
 
-export function skillsPaths(runtimeDir: string): SkillsPaths {
-  const root = join(runtimeDir, 'skills');
+function pathsForRoot(root: string): SkillsPaths {
   return {
     root,
     skillDir: (name: string) => join(root, sanitizeSkillName(name)),
     skillFile: (name: string) => join(root, sanitizeSkillName(name), 'SKILL.md'),
   };
+}
+
+/** Paths for the PRIMARY (writable) skill root: `~/.sunny/skills` (D-SK8). */
+export function skillsPaths(runtimeDir: string): SkillsPaths {
+  return pathsForRoot(join(runtimeDir, 'skills'));
+}
+
+/** Directory holding read-only clones of additional owned skill repos (D-SK8). */
+function sourcesDir(runtimeDir: string): string {
+  return join(runtimeDir, 'skill-sources');
+}
+
+/** Slugify a repo ref (owner/repo or URL) into a stable clone-directory name. */
+export function repoSlug(repo: string): string {
+  const slug = repo
+    .replace(/^(https?:\/\/|git@)/, '')
+    .replace(/\.git$/, '')
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .toLowerCase();
+  if (!slug) throw new Error(`invalid repo ref: ${repo}`);
+  return slug;
+}
+
+function sourceRoot(runtimeDir: string, repo: string): string {
+  return join(sourcesDir(runtimeDir), repoSlug(repo));
+}
+
+/** All skill roots, in precedence order: the writable primary first, then each owned
+ *  read-only source repo. `origin` is the repo ref (for provenance); undefined = primary. */
+function skillRoots(config: SunnyConfig): { paths: SkillsPaths; origin?: string }[] {
+  const roots: { paths: SkillsPaths; origin?: string }[] = [
+    { paths: skillsPaths(config.runtimeDir) },
+  ];
+  for (const repo of config.skills.repos ?? []) {
+    roots.push({ paths: pathsForRoot(sourceRoot(config.runtimeDir, repo)), origin: repo });
+  }
+  return roots;
 }
 
 /** Restrict skill names to a safe slug — prevents path traversal. */
@@ -124,30 +162,60 @@ function trustOf(fm: Record<string, string>): TrustTier {
 
 // --- loading (progressive disclosure) --------------------------------------
 
-/** Read all valid skill records (name + description + trust), sorted by name.
- *  Skills failing validation are skipped (D-SK7) and logged. */
-export function loadSkills(paths: SkillsPaths): SkillRecord[] {
+/** Read a record from one SKILL.md path, or null if missing/invalid (D-SK7). `origin`
+ *  (a repo ref) is recorded as provenance when the skill has no explicit frontmatter source. */
+function readSkillRecord(file: string, origin?: string): SkillRecord | null {
+  if (!existsSync(file)) return null;
+  const { frontmatter } = parseSkill(readFileSync(file, 'utf8'));
+  if (!frontmatter.name || !frontmatter.description) {
+    log.warn('skipping invalid skill (missing name/description)', { file });
+    return null;
+  }
+  return {
+    name: frontmatter.name,
+    description: frontmatter.description,
+    trust: trustOf(frontmatter),
+    file,
+    source: frontmatter.source ?? origin,
+  };
+}
+
+/** Read all valid skill records from ONE root, sorted by name. Auto-detects the
+ *  repo layout: a single-skill repo (a `SKILL.md` at the root) vs a collection
+ *  (`<name>/SKILL.md` subdirectories). `origin` marks provenance for owned sources. */
+export function loadSkills(paths: SkillsPaths, origin?: string): SkillRecord[] {
   if (!existsSync(paths.root)) return [];
   const records: SkillRecord[] = [];
-  for (const entry of readdirSync(paths.root, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    const file = join(paths.root, entry.name, 'SKILL.md');
-    if (!existsSync(file)) continue;
-    const { frontmatter } = parseSkill(readFileSync(file, 'utf8'));
-    if (!frontmatter.name || !frontmatter.description) {
-      log.warn('skipping invalid skill (missing name/description)', { dir: entry.name });
-      continue;
+  // Single-skill repo: SKILL.md directly at the repo root.
+  const rootSkill = join(paths.root, 'SKILL.md');
+  if (existsSync(rootSkill)) {
+    const rec = readSkillRecord(rootSkill, origin);
+    if (rec) records.push(rec);
+  } else {
+    // Collection: one skill per subdirectory.
+    for (const entry of readdirSync(paths.root, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.name === '.git') continue;
+      const rec = readSkillRecord(join(paths.root, entry.name, 'SKILL.md'), origin);
+      if (rec) records.push(rec);
     }
-    records.push({
-      name: frontmatter.name,
-      description: frontmatter.description,
-      trust: trustOf(frontmatter),
-      file,
-      source: frontmatter.source,
-    });
   }
   records.sort((a, b) => a.name.localeCompare(b.name));
   return records;
+}
+
+/** Read skills across ALL roots (primary + owned source repos), deduped by name with
+ *  the primary winning, sorted by name. This is what the prompt index and dashboard use. */
+export function loadAllSkills(config: SunnyConfig): SkillRecord[] {
+  const seen = new Set<string>();
+  const out: SkillRecord[] = [];
+  for (const { paths, origin } of skillRoots(config)) {
+    for (const rec of loadSkills(paths, origin)) {
+      if (seen.has(rec.name)) continue; // earlier roots (primary) win on conflict
+      seen.add(rec.name);
+      out.push(rec);
+    }
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /** Render the always-on skills index (names + descriptions only). Deterministic
@@ -241,9 +309,12 @@ export function deleteSkill(config: SunnyConfig, name: string): Promise<string> 
 }
 
 /** Expand a `config.skills.repo` value to a clone URL. Accepts `owner/repo`
- *  shorthand (→ GitHub HTTPS) or a full `https://`/`git@` URL. */
+ *  shorthand (→ GitHub HTTPS), or a full URL / local path passed through as-is
+ *  (`https://`, `git@`, `ssh://`, `file://`, or an absolute / `./` path). */
 export function repoUrl(repo: string): string {
-  return /^(https?:\/\/|git@)/.test(repo) ? repo : `https://github.com/${repo}.git`;
+  return /^(https?:\/\/|git@|ssh:\/\/|file:\/\/|\.{0,2}\/)/.test(repo)
+    ? repo
+    : `https://github.com/${repo}.git`;
 }
 
 /** Outcome of a skill-repo sync, so callers (startup, the periodic syncer) can act
@@ -305,6 +376,53 @@ async function syncSkillRepo(config: SunnyConfig): Promise<SkillSyncResult> {
   }
 }
 
+/**
+ * Sync one OWNED, read-only source repo into `~/.sunny/skill-sources/<slug>` (D-SK8):
+ * clone if absent, else `fetch` + **fast-forward only**. Sunny never writes to these,
+ * so they should always ff cleanly; a non-ff (someone hand-edited the clone) is left
+ * untouched and logged. Best-effort and non-fatal.
+ */
+async function syncSourceRepo(repo: string, root: string): Promise<SkillSyncResult> {
+  try {
+    if (!existsSync(join(root, '.git'))) {
+      if (existsSync(root) && readdirSync(root).length > 0) {
+        return { status: 'skipped', reason: 'source dir has content but is not a clone' };
+      }
+      mkdirSync(dirname(root), { recursive: true });
+      await exec('git', ['clone', '--quiet', repoUrl(repo), root]);
+      log.info('cloned source skill repo', { repo });
+      return { status: 'cloned' };
+    }
+    await git(root, ['fetch', '--quiet']);
+    let upstream: string;
+    try {
+      upstream = await git(root, ['rev-parse', '--abbrev-ref', '@{u}']);
+    } catch {
+      return { status: 'skipped', reason: 'no upstream tracking branch' };
+    }
+    const behind = Number(await git(root, ['rev-list', '--count', '@..@{u}']));
+    const ahead = Number(await git(root, ['rev-list', '--count', '@{u}..@']));
+    if (behind === 0) return { status: 'up-to-date', aheadUnpushed: ahead };
+    if (ahead > 0) {
+      log.warn('source skill repo has local edits — leaving untouched', { repo, ahead, behind });
+      return { status: 'diverged', ahead, behind };
+    }
+    await git(root, ['merge', '--ff-only', '--quiet', upstream]);
+    log.info('pulled source skill repo', { repo, commits: behind });
+    return { status: 'pulled', commits: behind };
+  } catch (err) {
+    log.warn('source skill repo sync failed (non-fatal)', { repo, err: String(err) });
+    return { status: 'error', detail: String(err) };
+  }
+}
+
+/** Sync every configured owned source repo (best-effort). */
+async function syncSourceRepos(config: SunnyConfig): Promise<void> {
+  for (const repo of config.skills.repos ?? []) {
+    await syncSourceRepo(repo, sourceRoot(config.runtimeDir, repo));
+  }
+}
+
 /** How often the background syncer pulls the canonical skill repo. */
 const SKILL_SYNC_MS = 10 * 60_000; // every 10 min — reads are live so the next turn sees updates
 
@@ -334,9 +452,14 @@ export function startSkillSync(deps: {
     } else if (r.status !== 'error') {
       warnedDiverged = false;
     }
+    // Owned read-only source repos: ff-sync each (no divergence notify — they're mirrors).
+    await syncSourceRepos(deps.config);
   }
   setInterval(() => void tick(), SKILL_SYNC_MS);
-  log.info('skill sync started', { everyMs: SKILL_SYNC_MS });
+  log.info('skill sync started', {
+    everyMs: SKILL_SYNC_MS,
+    sources: (deps.config.skills.repos ?? []).length,
+  });
 }
 
 /** Ensure the skills dir exists, sync the canonical repo (D-SK8), then write any
@@ -347,6 +470,8 @@ export async function initSkills(config: SunnyConfig): Promise<void> {
   const paths = skillsPaths(config.runtimeDir);
   mkdirSync(paths.root, { recursive: true });
   await syncSkillRepo(config);
+  // Clone/sync owned read-only source repos (D-SK8) so their skills are available too.
+  await syncSourceRepos(config);
 
   let changed = 0;
   for (const seed of SEED_SKILLS) {

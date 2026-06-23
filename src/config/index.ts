@@ -52,10 +52,15 @@ export const ConfigSchema = z.object({
       maxSkills: z.number().int().positive().default(20),
       /** Max chars per skill description in the index. */
       descriptionMaxChars: z.number().int().positive().default(280),
-      /** Optional dedicated skill repo (owner/repo or URL) for the unified npx skills install (D-SK8). */
+      /** Primary canonical skill repo (owner/repo or URL): the WRITABLE store of record
+       *  for self-authored skills, cloned to `~/.sunny/skills` (D-SK8). */
       repo: z.string().optional(),
+      /** Additional OWNED skill repos (owner/repo or URL): read-only sources cloned to
+       *  `~/.sunny/skill-sources/<slug>` and ff-synced alongside the primary (D-SK8). Add
+       *  more anytime; Sunny never writes to these. */
+      repos: z.array(z.string()).default([]),
     })
-    .default({ maxSkills: 20, descriptionMaxChars: 280 }),
+    .default({ maxSkills: 20, descriptionMaxChars: 280, repos: [] }),
   server: z
     .object({
       /** HTTP webhook listener port (task 2.2). */

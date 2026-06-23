@@ -1,12 +1,16 @@
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, it, expect } from 'vitest';
 import { makeConfig } from '../../tests/factories.js';
 import {
   composeSkill,
   deleteSkill,
   initSkills,
+  loadAllSkills,
   loadSkillBody,
   loadSkillIndex,
   loadSkills,
+  repoSlug,
   repoUrl,
   parseSkill,
   renderSkillIndex,
@@ -165,5 +169,67 @@ describe('initSkills seeding', () => {
     await initSkills(config); // seed is present → left alone
 
     expect(loadSkillBody(paths, 'email')).toBe('custom');
+  });
+});
+
+describe('repoSlug', () => {
+  it('slugifies repo refs and URLs to a stable clone dir name', () => {
+    expect(repoSlug('devontivona/devbox')).toBe('devontivona-devbox');
+    expect(repoSlug('https://github.com/devontivona/devbox.git')).toBe(
+      'github.com-devontivona-devbox',
+    );
+    expect(() => repoSlug('')).toThrow(/invalid repo ref/);
+  });
+});
+
+describe('loadAllSkills (multi-root owned repos)', () => {
+  // Simulate cloned source repos by writing files directly into ~/.sunny/skill-sources/<slug>.
+  // (loadAllSkills only reads the filesystem; git sync is exercised separately/manually.)
+  function writeSkillFile(dir: string, name: string, description: string, body = 'do it') {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, 'SKILL.md'),
+      `---\nname: ${name}\ndescription: ${description}\n---\n\n${body}\n`,
+    );
+  }
+
+  it('aggregates the primary + a single-skill repo + a collection repo, with provenance', async () => {
+    const config = makeConfig({
+      skills: { maxSkills: 20, descriptionMaxChars: 280, repos: ['owner/devbox', 'owner/pack'] },
+    });
+    // primary (self-authored, writable)
+    await writeSkill(config, { name: 'mine', description: 'a primary skill', body: 'x' });
+    const sources = join(config.runtimeDir, 'skill-sources');
+    // single-skill repo: SKILL.md at the clone root
+    writeSkillFile(join(sources, repoSlug('owner/devbox')), 'devbox', 'host sites');
+    // collection repo: one skill per subdir
+    writeSkillFile(join(sources, repoSlug('owner/pack'), 'alpha'), 'alpha', 'skill alpha');
+    writeSkillFile(join(sources, repoSlug('owner/pack'), 'beta'), 'beta', 'skill beta');
+
+    const all = loadAllSkills(config);
+    const byName = new Map(all.map((s) => [s.name, s]));
+    expect([...byName.keys()].sort()).toEqual(['alpha', 'beta', 'devbox', 'mine']);
+    // owned sources carry their repo as provenance; the primary has none.
+    expect(byName.get('devbox')?.source).toBe('owner/devbox');
+    expect(byName.get('alpha')?.source).toBe('owner/pack');
+    expect(byName.get('mine')?.source).toBeUndefined();
+    // all owned → trusted (authored), never 'installed'.
+    expect(all.every((s) => s.trust === 'authored')).toBe(true);
+  });
+
+  it('lets the primary win a name conflict with a source repo', async () => {
+    const config = makeConfig({
+      skills: { maxSkills: 20, descriptionMaxChars: 280, repos: ['owner/dup'] },
+    });
+    await writeSkill(config, { name: 'shared', description: 'primary version', body: 'p' });
+    writeSkillFile(
+      join(config.runtimeDir, 'skill-sources', repoSlug('owner/dup')),
+      'shared',
+      'source version',
+    );
+    const shared = loadAllSkills(config).filter((s) => s.name === 'shared');
+    expect(shared).toHaveLength(1);
+    expect(shared[0]?.description).toBe('primary version');
+    expect(shared[0]?.source).toBeUndefined(); // the primary, not the source
   });
 });
