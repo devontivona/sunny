@@ -26,11 +26,12 @@ agent. The agent core speaks only the normalized `Gateway` seam, with the iMessa
   D-DE4. App migrations auto-apply at startup; WDK world tables are created once with
   `npx workflow-postgres-setup`.
 - **Observability** — a self-hosted **Langfuse** stack (`deploy/langfuse/docker-compose.yml`),
-  Sunny's OTLP trace backend + trace/trajectory store + cost/usage dashboards (D-OB7). The
-  backing stores (Postgres/Clickhouse/Redis/minio) bind to `127.0.0.1`; the web UI/API is
-  published on the LAN (`:3010`, gated by Langfuse's own login) so it's reachable from a
-  headless host. It runs alongside `sunny-postgres` with its own stores. No third-party egress
-  (no Langfuse Cloud, no tunnel) — lock the UI to loopback + SSH tunnel for a stricter posture.
+  Sunny's OTLP trace backend + trace/trajectory store + cost/usage dashboards (D-OB7). All
+  services (web + Postgres/Clickhouse/Redis/minio) bind to `127.0.0.1`. The web UI is published
+  via **devbox** at `https://langfuse.waywardlane.com`, gated by Langfuse's own login — a
+  deliberate egress exception (the UI is password-protected; trace data still lives only on this
+  host, no Langfuse Cloud). Sunny exports to `localhost:3010` locally. `devbox rm langfuse` +
+  SSH tunnel for a stricter, off-internet posture.
 - **Supervisor (home server)** — **`devbox`** runs the unified app as the **`sunny`** systemd
   *user* service (`Restart=always`, linger enabled → starts at boot, survives reboot) and
   publishes it over HTTPS via a Cloudflare tunnel at **`https://sunny.waywardlane.com`**.
@@ -62,13 +63,14 @@ WORKFLOW_POSTGRES_URL="$DATABASE_URL" npx workflow-postgres-setup
 
 # 5. (Observability) Stand up self-hosted Langfuse — Sunny's trace backend (D-OB7)
 cp deploy/langfuse/.env.example deploy/langfuse/.env   # fill generated secrets + INIT keys (see that file)
-cd deploy/langfuse && docker compose up -d && cd -     # run from the dir so override.yml auto-merges
+# Publish + supervise via devbox (Caddy + Cloudflare tunnel); set NEXTAUTH_URL to the public URL.
+devbox add langfuse -d "$PWD/deploy/langfuse" -c "PATH=/snap/bin:/usr/bin:/bin docker compose up" -p 3010
 #  → the LANGFUSE_INIT_* keys provision the project headlessly on first boot. Copy that same
 #    public/secret pair into the repo-root .env as LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY,
 #    and set LANGFUSE_BASE_URL=http://localhost:3010 (Sunny exports from the same host).
-#    Browse the UI over the LAN at http://<host>:3010 (e.g. http://janeway.local:3010); set
-#    the stack's NEXTAUTH_URL to that same host or login will fail.
-#    Tracing is on when those keys are present; unset → tracing is a no-op.
+#    UI: https://langfuse.waywardlane.com (Langfuse login). Local-only instead? Drop the devbox
+#    step, `docker compose up -d`, set NEXTAUTH_URL=http://localhost:3010, SSH-tunnel :3010.
+#    Tracing is on when the keys are present; unset → tracing is a no-op.
 ```
 
 ### Run it
