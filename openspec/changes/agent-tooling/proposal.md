@@ -9,7 +9,7 @@ This change delivers that capability layer. The companion **security-permissions
 Deliver Sunny's capability layer in one change:
 
 - **agent-skills** — `SKILL.md` loader (agentskills.io format), progressive disclosure, self-authoring (`skill_manage`, auto+notify), a dedicated git skill-repo with a unified `npx skills` install path for self-authored *and* found skills, validation, and seeded known-good skills (skill-authoring, skill-discovery/installation, `devbox`).
-- **tool-access (contract + tools)** — a uniform **tool-registration contract** (each tool declares risk tier + `op://` references — *recorded, not yet enforced*); a minimal thin-tool surface (`bash`, `file-read`, memory ops) with browsing/fetching/email/site-building as CLIs-over-bash or skills, not dedicated tools; per-command `op run` credential injection; a **credentialed browse capability** (default engine: Vercel `agent-browser` — token-efficient, durable on-disk sessions, built-in encrypted auth vault, CLI-fits-bash; 1Password seeds the session, value never reaches the model; plus an ephemeral research mode; per-site knowledge as engine-agnostic SKILL.md skills from the browse.sh catalog + self-authored); and capabilities-as-skills (**email** over himalaya, **website-builder**).
+- **tool-access (tools)** — a minimal thin-tool surface (`bash`, `file-read`, memory ops) with browsing/fetching/email/site-building as CLIs-over-bash or skills, not dedicated tools; per-command `op run` credential injection; a **credentialed browse capability** (default engine: Vercel `agent-browser` — token-efficient, durable on-disk sessions, built-in encrypted auth vault, CLI-fits-bash; 1Password seeds the session, value never reaches the model; plus an ephemeral research mode; per-site knowledge as engine-agnostic SKILL.md skills from the browse.sh catalog + self-authored); and capabilities-as-skills (**email** over himalaya, **website-builder**).
 - **credentials (plumbing)** — dedicated read-only `Sunny` 1Password vault + Service Account; the model only ever handles `op://` references, never values; per-tool reference whitelist.
 - **web-dashboard (delta)** — read-only **Tools** and **Skills** directories.
 
@@ -19,7 +19,7 @@ Deliver Sunny's capability layer in one change:
 
 ### New Capabilities
 - **agent-skills** — self-installable/-authorable `SKILL.md` skills with progressive disclosure.
-- **tool-access** — the uniform tool-registration contract plus the concrete tool/skill catalog (enforcement deferred to `security-permissions`).
+- **tool-access** — the concrete bash-centric tool/skill catalog; gating deferred to `security-permissions`, which attaches at the command/action/credential layers (not per tool).
 - **credentials** — 1Password Service Account resolution plumbing; secrets resolved in the tool layer, never exposed to the model (hardening/rotation deferred to `security-permissions`).
 
 ### Modified Capabilities

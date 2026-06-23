@@ -20,12 +20,12 @@
 - [x] 6b Request-a-credential capability: `credential_manage` tool (owner-DM) — `list` credentials, `discover` op:// references from the vault (titles only, no values), `register` a name→reference and **test-resolve to verify** it points at a real value without surfacing it; the tool/prompt direct Sunny to ask the owner (via send_message) for a missing credential rather than invent a reference (D-CR5). `src/agent/tools/credentialManage.ts`. *(Unit-tested.)*
 
 ## Tool contract + thin tools (tool-access)
-- [ ] 7 Uniform tool-registration contract: every tool declares risk tier + `op://` references, recorded but **not yet enforced** (the seam security-permissions reads) (D-TA0).
+- [x] 7 ~~Uniform tool-registration contract~~ — **superseded** (D-TA0 revised after implementation): there is no per-tool security contract. Gating attaches at the **command** (bash AST policy), **action** (approval tiers), and **credential-name** (registry) layers — all already present — not a per-tool risk-tier/`op://` declaration. The only residual (a read-only tool catalog) folds into task 15.
 - [x] 8 Thin host tools (`src/agent/tools/bash.ts`): `bash` (real host shell via `child_process`, timeout + output caps + exit code) and `file_read` (capped); owner-DM only, never in autonomous runs (separate memory-only toolset). Hand-rolled (see build-principle table — `bash-tool` is interpreter/sandbox-oriented). Web fetch = bash (`curl`)/the browse capability, not a dedicated tool (D-TA2). *(Unit-tested.)*
 - [x] 9 Per-command credential injection (`execBash`, D-TA5): the `bash` tool takes `credentials` (ENV var → credential name), resolves each via the registry into that subprocess's env, and **masks the values out of the output**; never in model context. Also strips Sunny's own secrets (OP token, API keys, …) from every bash env. *(Unit-tested.)*
 
 ## Capabilities as skills
-- [~] 10 **Email** skill over the `himalaya` CLI: skill is a **bundled seed** (`src/skills/seeds.ts`), auto-written into `~/.sunny/skills` at init (no manual deploy) — read/search/triage/send via bash with `HIMALAYA_PASSWORD` injected per-command; bodies untrusted; send self-confirmed with the owner (D-TA2). Runbook: `docs/email-setup.md`. **Remaining (Devon's host):** write `~/.config/himalaya/config.toml`, add the mailbox password to the Sunny vault + register it. *(himalaya `send` hard-gated later: security-permissions.)*
+- [x] 10 **Email** skill over the `himalaya` CLI: bundled seed → now lives in the canonical skill repo (`devontivona/skills`) — read/search/triage/send via bash with `HIMALAYA_PASSWORD` injected per-command; bodies untrusted; send self-confirmed with the owner (D-TA2). **Live:** himalaya configured for the Gmail mailbox (`folder.aliases` for sent/drafts/trash, `save-copy = false`), app password in the Sunny vault + registered, read/send working. Runbook: `docs/email-setup.md`. *(himalaya `send` hard-gated later: security-permissions.)*
 - [ ] 11 **Website-builder** skill: single-page HTML for explainers/presentations/reports; bundles a small library of design styles in the skill's `assets/` (accept a style or recommend one); uses the `devbox` skill to build/run/host (D-TA2).
 
 ## Credentialed browse capability
@@ -34,7 +34,7 @@
 - [ ] 14 Per-site browse skills as engine-agnostic `SKILL.md` via the standard loader: consume the **browse.sh catalog** (`browse skills add <id>` as a fetcher, or fetch the raw `.md` — no hard `browse`-runtime dependency) and Sunny-**self-authored** site skills; execute over agent-browser verbs. Do **not** adopt the `browse`/Stagehand-CLI-bound `browserbase/skills` capability skills (D-TA4).
 
 ## Dashboard (web-dashboard delta)
-- [ ] 15 Read-only **Tools directory** (each registered tool: risk tier + declared `op://` refs) and **Skills directory** (each skill: description, trust tier, source); observe-only, per `DESIGN.md`.
+- [ ] 15 Read-only **Tools directory** (registered tools: name + purpose + owner-only flag) + the **credential registry** (names → `op://` refs + purpose, **no values**), and **Skills directory** (each skill: description, trust tier, source); observe-only, per `DESIGN.md`.
 
 ## Verify
 - [ ] 16 Exercise the capability paths under **attended** operation: bash, web-fetch, email read+send, a credentialed browser login persisting across runs, website-builder output served via devbox, and a self-authored skill round-trip. No autonomous/scheduled runs of credentialed/destructive paths until security-permissions lands.

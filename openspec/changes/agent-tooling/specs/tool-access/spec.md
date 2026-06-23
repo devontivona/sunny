@@ -1,15 +1,15 @@
 ## ADDED Requirements
 
-### Requirement: Uniform tool registration contract
-Every tool SHALL be registered through a uniform contract that declares, at minimum, its risk tier (auto / approval / forbidden) and the exact `op://` credential references it may resolve (defaulting to none). These declarations SHALL travel with the tool definition so that policy and credential layers can read them uniformly, without a new tool being able to bypass them. In this change the declarations are recorded and surfaced (e.g. on the dashboard) but are NOT yet enforced; enforcement is delivered by the `security-permissions` change, which reads these same declarations.
+### Requirement: Gating attaches to commands/actions/credentials, not per tool
+There SHALL be no per-tool security contract (no per-tool risk-tier or `op://`-reference declaration). Consequence gating SHALL derive from the **command** being run (for the bash surface), the **action** type (act-as-owner / money-spending / destructive), and the **credential name** resolved through the registry (the vault is the authorization boundary). A tool SHALL NOT carry a per-tool credential whitelist; the enforcement layer (`security-permissions`) reads these command/action/credential layers, which already exist.
 
-#### Scenario: Tool declares its tier and credential references
-- **WHEN** a tool is registered
-- **THEN** it carries a declared risk tier and the set of `op://` references it may resolve (possibly empty)
+#### Scenario: No per-tool credential whitelist
+- **WHEN** a tool resolves a credential
+- **THEN** it does so by name through the registry, not from a per-tool list of permitted `op://` references
 
-#### Scenario: Declarations are uniform and machine-readable
-- **WHEN** the policy or credential layer inspects a tool
-- **THEN** it can read the tool's risk tier and credential references through the same contract for every tool
+#### Scenario: Consequence determined by command/action, not tool
+- **WHEN** a high-consequence operation is attempted (e.g. a destructive shell command or an act-as-owner action)
+- **THEN** its gating derives from the parsed command or the action type, not from a risk tier declared on the tool
 
 ### Requirement: Core thin tools (bash, file read)
 Sunny SHALL expose capability primarily through a `bash` tool that executes a command on the host and returns its output, plus a thin `file-read` tool. The thin-tool surface SHALL be kept minimal; higher capabilities (browsing, fetching web pages, email, building sites) SHALL be CLIs driven via bash or `SKILL.md` skills over bash, NOT dedicated tools. Web fetching SHALL be performed via bash (e.g. a fetch CLI) or the browse capability rather than a dedicated `web-fetch` tool. Any external content entering Sunny's context (fetched pages, command output that reads remote data) SHALL be treated as untrusted data.
@@ -23,7 +23,7 @@ Sunny SHALL expose capability primarily through a `bash` tool that executes a co
 - **THEN** the returned content is handled as untrusted data, not as instructions
 
 ### Requirement: Per-command credential injection
-Secrets SHALL be injected into the specific command invocation that needs them (resolving `op://` references into that subprocess's environment at execution time, e.g. via `op run`), and SHALL NOT be exposed to the model or placed in the model's context. A command SHALL only receive credential references explicitly permitted for it (or its skill).
+Secrets SHALL be injected into the specific command invocation that needs them: the model names a credential (resolved through the registry, D-CR5), and its value is resolved into that subprocess's environment at execution time. The value SHALL NOT be exposed to the model or placed in the model's context, SHALL reach only that subprocess, and SHALL be masked from the command's returned output.
 
 #### Scenario: Secret bound to one command only
 - **WHEN** a command needs a credential

@@ -7,11 +7,13 @@
 
 ## Sequencing principle: capability first, enforcement as a layer
 
-We build and test the tools and skills **before** the gating layer. The move that
-keeps this from becoming a rewrite: **every tool declares its risk tier and `op://`
-references from day one (the contract, D-TA0), but nothing reads those declarations
-to gate yet.** `security-permissions` later adds the engine that reads them — a wrapper
-around the existing tool surface, with tool interfaces unchanged.
+We build and test the tools and skills **before** the gating layer. The capability
+surface is what `security-permissions` later wraps: gating attaches to **commands** (the
+bash AST policy), **actions** (approval tiers), and **credential names** (the registry) —
+layers that already exist here — so adding enforcement is a wrapper around the existing
+surface, not a rewrite, with tool interfaces unchanged. (We originally planned a per-tool
+risk-tier + `op://` contract as that seam; implementation moved the seam to
+commands/actions/credentials instead — see D-TA0.)
 
 The ungated state is **attended-testing-only** — no autonomous/scheduled runs of
 credentialed or destructive capabilities until `security-permissions` lands.
@@ -22,16 +24,15 @@ Sunny is built on the Vercel AI SDK. Before building any of the machinery in thi
 change from scratch, evaluate what the AI SDK already provides and use it: **tools**
 (`tool()` definitions, typed args/results), **MCP** (MCP client/transport for external
 tool servers), **agents/loops** (multi-step tool-calling, stop conditions), **skills**,
-and **sandboxes** (Vercel Sandbox for isolated execution). The registration contract
-(D-TA0), tool surface, and any skill/sandbox plumbing should wrap AI SDK primitives
-rather than reimplement them. Hand-roll only where the AI SDK genuinely has no
-equivalent, and note why.
+and **sandboxes** (Vercel Sandbox for isolated execution). The tool surface and any
+skill/sandbox plumbing should wrap AI SDK primitives rather than reimplement them.
+Hand-roll only where the AI SDK genuinely has no equivalent, and note why.
 
 **Evaluation (verified against `ai@6.0.206`, the installed version):**
 
 | Need | AI SDK provides? | Decision |
 |---|---|---|
-| Tool definitions | `tool()` (core export from `ai`) | **Wrap** — every tool is a `tool()`; the D-TA0 contract (risk tier, `op://` refs) is metadata layered on top |
+| Tool definitions | `tool()` (core export from `ai`) | **Wrap** — every tool is a `tool()` |
 | Agents / multi-step loop | `Agent` / `ToolLoopAgent` (core) | **Wrap** — use the ToolLoopAgent pattern for the turn loop (confirm/migrate the current loop in `src/agent/`) |
 | MCP client | `experimental_createMCPClient` + stdio/SSE transports | **Wrap** — use for external MCP tool servers when needed |
 | bash / file tools | the `bash-tool` npm pkg (`bash`/`readFile`/`writeFile`, supports `@vercel/sandbox`) | **Hand-rolled** instead — `bash-tool` is built on `just-bash` (a JS bash *interpreter*) + `@vercel/sandbox`, oriented toward sandboxed/interpreted execution; Sunny needs **real host shell** for self-devops (D-TA2). A thin `child_process` tool fits better and keeps exact control (timeout, output caps, future op-run injection). Revisit `bash-tool`+`@vercel/sandbox` for the security-permissions *sandbox fallback*. |
@@ -116,17 +117,28 @@ Because installed skills are untrusted third-party code, they are gated at insta
 Sunny's value is its tools: shell on the host, web fetch, a credentialed browser,
 email, and building/hosting sites (via `devbox`). Most third-party capability is a
 CLI, so **bash is the universal surface** and capabilities compose as skills over it.
-The security and credential policies must attach to tools uniformly — hence a single
-registration contract every tool follows.
+The security and credential policies attach at the command / action / credential
+layers (D-TA0), not per tool.
 
 ## Decisions
 
-- **D-TA0 — Uniform tool-registration contract (declared here, enforced later).**
-  Every tool is registered through one contract carrying its **risk tier**
-  (auto/approval/forbidden) and its **`op://` reference whitelist** (default none).
-  These declarations are recorded and surfaced (dashboard) in this change but not yet
-  gated; `security-permissions` adds the engine that reads them. This is the seam that
-  lets enforcement layer on without changing tool interfaces.
+- **D-TA0 — No per-tool security contract; gating attaches to commands/actions/credentials
+  (revised after implementation).** This change originally planned a uniform per-tool
+  contract (each tool declaring a **risk tier** + an **`op://` reference whitelist**) as
+  the seam `security-permissions` would read. Implementation made that obsolete:
+  - Credentials moved to the **vault-as-boundary + name registry** (D-CR3/D-CR5), so there
+    are no per-tool `op://` refs to declare — tools take a credential *name* at call time.
+  - The **bash-centric** model means consequence is per-**command** (the AST command policy,
+    D-TA1), per-**action** (approval tiers, D-SEC3), and per-**credential name** (the
+    registry) — none of which is a per-tool declaration. The few non-bash tools
+    (`send_message`, `memory_*`, `schedule_*`, `skill_manage`, `credential_manage`,
+    `file_read`) are uniformly low-consequence and already owner-DM-gated.
+
+  So **there is no per-tool security contract.** `security-permissions` reads the
+  command / action / registry layers, which already exist here — adding enforcement is a
+  wrapper around the existing surface, not a rewrite. The only residual is a **read-only
+  tool catalog** (name + purpose + owner-gated) for the dashboard (task 15) — introspection,
+  not enforcement, derivable from the registered tools.
 - **D-TA2 — Bash-centric capability; capabilities compose as skills.** The thin-tool
   surface is deliberately minimal: `bash` (universal), `file-read`, and **memory ops**
   (the one genuinely non-CLI tool — DB mutation). Everything else is a CLI driven via
