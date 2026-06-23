@@ -229,6 +229,7 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
               ownerName: config.owner.name,
               messages,
               scratch,
+              threadId: event.threadId,
             });
             recovered = true;
             if (recoveryText) {
