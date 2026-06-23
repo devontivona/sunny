@@ -1,16 +1,16 @@
 {
   "model": "claude-opus-4-8",
-  "timestamp": "2026-06-18T23:57:45.570Z",
+  "timestamp": "2026-06-23T02:18:04.038Z",
   "n": 5,
-  "costUsd": 2.2474,
+  "costUsd": 4.61,
   "stoppedOnBudget": false,
   "dimensions": {
     "elicitation": {
-      "passRate": 1,
+      "passRate": 0.975,
       "pass": true
     },
     "memory": {
-      "passRate": 1,
+      "passRate": 0.9333333333333332,
       "pass": true
     },
     "tool-selection": {
@@ -23,14 +23,15 @@
       "name": "elicitation/simple-reply",
       "dimension": "elicitation",
       "runs": 5,
-      "passes": 5,
-      "passRate": 1,
+      "passes": 4,
+      "passRate": 0.8,
       "threshold": 0.6,
       "pass": true,
       "graderPasses": {
         "delivered-via-send_message": 5,
         "no-fallback": 5,
-        "sent-something": 5
+        "sent-something": 5,
+        "elicited-without-recovery": 4
       }
     },
     {
@@ -43,7 +44,8 @@
       "pass": true,
       "graderPasses": {
         "delivered-via-send_message": 5,
-        "no-fallback": 5
+        "no-fallback": 5,
+        "elicited-without-recovery": 5
       }
     },
     {
@@ -57,7 +59,8 @@
       "graderPasses": {
         "delivered-via-send_message": 5,
         "no-fallback": 5,
-        "sent-something": 5
+        "sent-something": 5,
+        "elicited-without-recovery": 5
       }
     },
     {
@@ -70,6 +73,58 @@
       "pass": true,
       "graderPasses": {
         "is-silent": 5
+      }
+    },
+    {
+      "name": "elicitation/ack-thanks-after-task",
+      "dimension": "elicitation",
+      "runs": 5,
+      "passes": 5,
+      "passRate": 1,
+      "threshold": 0.6,
+      "pass": true,
+      "graderPasses": {
+        "is-silent": 5
+      }
+    },
+    {
+      "name": "elicitation/ack-then-correction",
+      "dimension": "elicitation",
+      "runs": 5,
+      "passes": 5,
+      "passRate": 1,
+      "threshold": 0.6,
+      "pass": true,
+      "graderPasses": {
+        "delivered-via-send_message": 5,
+        "no-fallback": 5,
+        "elicited-without-recovery": 5
+      }
+    },
+    {
+      "name": "elicitation/multiturn-trip",
+      "dimension": "elicitation",
+      "runs": 5,
+      "passes": 5,
+      "passRate": 1,
+      "threshold": 0.6,
+      "pass": true,
+      "graderPasses": {
+        "delivered-via-send_message": 5,
+        "no-fallback": 5,
+        "elicited-without-recovery": 5
+      }
+    },
+    {
+      "name": "elicitation/multiturn-debug-then-ack",
+      "dimension": "elicitation",
+      "runs": 5,
+      "passes": 5,
+      "passRate": 1,
+      "threshold": 0.6,
+      "pass": true,
+      "graderPasses": {
+        "final-turn-silent": 5
       }
     },
     {
@@ -101,14 +156,14 @@
       "name": "memory/recalls-archive",
       "dimension": "memory",
       "runs": 5,
-      "passes": 5,
-      "passRate": 1,
+      "passes": 4,
+      "passRate": 0.8,
       "threshold": 0.6,
       "pass": true,
       "graderPasses": {
         "tool-called:recall_history": 5,
-        "reply-mentions": 5,
-        "natural-recall (judge:claude-sonnet-4-6/v1)": 5
+        "reply-mentions": 4,
+        "natural-recall (judge:claude-sonnet-4-6/v1)": 4
       }
     },
     {

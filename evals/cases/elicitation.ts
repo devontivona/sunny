@@ -1,6 +1,7 @@
 import {
   deliveredViaSendMessage,
   elicitedWithoutRecovery,
+  finalTurnSilent,
   isSilent,
   noFallback,
   sentSomething,
@@ -111,6 +112,8 @@ export const elicitationCases: EvalCase[] = [
       'yeah i just cloned it fresh',
       'that fixed it, thanks',
     ],
-    graders: [isSilent],
+    // Multi-turn: earlier turns legitimately speak, so grade the FINAL turn's
+    // outcome via `delivered`, not cumulative outbound (see finalTurnSilent).
+    graders: [finalTurnSilent],
   },
 ];

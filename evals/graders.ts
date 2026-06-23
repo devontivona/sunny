@@ -30,6 +30,16 @@ export const deliveredViaSendMessage: Grader = (t) =>
 export const isSilent: Grader = (t) =>
   pass('is-silent', t.sends.length === 0, `delivered=${t.delivered} sends=${t.sends.length}`);
 
+/**
+ * The (final) turn deliberately chose silence — read from the `delivered`
+ * classification, not from outbound count. Use this for MULTI-TURN cases: `sends`
+ * accumulates across every turn of the case, so `isSilent`'s zero-outbound check
+ * would wrongly fail whenever an earlier turn legitimately spoke. `delivered` is
+ * the last turn's outcome, which is what these cases grade.
+ */
+export const finalTurnSilent: Grader = (t) =>
+  pass('final-turn-silent', t.delivered === 'silence', `delivered=${t.delivered}`);
+
 /** The fallback path never fired (elicitation held). */
 export const noFallback: Grader = (t) =>
   pass('no-fallback', t.delivered !== 'fallback_text', `delivered=${t.delivered}`);
