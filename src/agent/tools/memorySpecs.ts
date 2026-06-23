@@ -22,7 +22,12 @@ export const MEMORY_TOOL_SPECS = {
       '"[2025-06 → present] founder, Tivona".',
     inputSchema: z.object({
       file: z.string().describe('"USER" | "SUNNY" | "INDEX" | "topic:<name>"'),
-      action: z.enum(['add', 'replace', 'remove']),
+      action: z
+        .enum(['add', 'replace', 'remove'])
+        .describe(
+          'add appends content · replace swaps `target` for `content` (or, with no target, ' +
+            'rewrites the whole file) · remove deletes `target`.',
+        ),
       content: z.string().optional().describe('Text to add, full replacement body, or new text.'),
       target: z.string().optional().describe('Existing substring to replace/remove.'),
     }),
@@ -41,7 +46,13 @@ export const MEMORY_TOOL_SPECS = {
       'Returns matching past messages (newest first) for you to summarize. Use sparingly.',
     inputSchema: z.object({
       query: z.string().describe('Keywords to search for in past messages.'),
-      limit: z.number().int().positive().max(25).optional(),
+      limit: z
+        .number()
+        .int()
+        .positive()
+        .max(25)
+        .optional()
+        .describe('Max messages to return (default 10, max 25).'),
     }),
   },
 };

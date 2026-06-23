@@ -220,6 +220,17 @@ export default defineEventHandler(async (event) => {
         }
         case path === 'conversation/search':
           return await data.search(String(query.q ?? ''));
+        case path === 'tools':
+          return data.tools();
+        case path === 'credentials':
+          return data.credentials();
+        case path === 'skills':
+          return data.skills();
+        case path.startsWith('skills/'): {
+          const name = decodeURIComponent(path.slice('skills/'.length));
+          const detail = data.skill(name);
+          return detail ?? json(404, { error: 'skill not found' });
+        }
         case path === 'schedules':
           return { schedules: await data.schedules() };
         case path === 'activity':

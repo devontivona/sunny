@@ -15,7 +15,12 @@ export const CREDENTIAL_MANAGE_SPEC = {
     'credential you do NOT have, ask the owner (via send_message) to add it to the Sunny ' +
     'vault, then "discover" the reference and "register" it — never invent a reference.',
   inputSchema: z.object({
-    action: z.enum(['list', 'discover', 'register']),
+    action: z
+      .enum(['list', 'discover', 'register'])
+      .describe(
+        'What to do: list the credentials you have · discover items + op:// references in ' +
+          'the Sunny vault · register a name→reference mapping.',
+      ),
     name: z.string().optional().describe('Symbolic credential name, e.g. "gmail" (register).'),
     reference: z
       .string()

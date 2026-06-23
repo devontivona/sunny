@@ -13,7 +13,12 @@ export const SKILL_MANAGE_SPEC = {
     'skill triggers later. Created/edited skills are validated, saved, and committed ' +
     'automatically — after creating one, tell the user you wrote it (auto + notify).',
   inputSchema: z.object({
-    action: z.enum(['list', 'view', 'create', 'edit', 'delete']),
+    action: z
+      .enum(['list', 'view', 'create', 'edit', 'delete'])
+      .describe(
+        'What to do: list your skills · view one by name · create or edit from name + ' +
+          'description + body · delete by name.',
+      ),
     name: z.string().optional().describe('Skill name (required for view/create/edit/delete).'),
     description: z
       .string()

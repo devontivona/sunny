@@ -1,9 +1,13 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { messages, scheduleRuns, schedules } from '../db/schema.js';
 import type { SunnyConfig } from '../config/index.js';
 import { loadCore, memoryPaths, readTopic, sanitizeTopic } from '../memory/index.js';
+import { listCredentials } from '../credentials/index.js';
+import { loadSkillBody, loadSkills, sanitizeSkillName, skillsPaths } from '../skills/index.js';
+import { toolCatalog } from '../agent/tools/catalog.js';
 
 /**
  * Read-only data access for the dashboard (web-dashboard D-WD3/5). Reads the
@@ -46,6 +50,74 @@ export class DashboardData {
     const safe = sanitizeTopic(name);
     const content = readTopic(memoryPaths(this.config.runtimeDir), safe);
     return content === null ? null : { name: safe, content };
+  }
+
+  // --- Capabilities (tools / credentials / skills) -------------------------
+  // Observe-only directories (web-dashboard agent-tooling delta). Data-driven
+  // from the live tool catalog, credential registry, and skill loader — no
+  // values, no controls. Capabilities added by later tasks surface here for free.
+
+  /** Registered tools: name + purpose + owner-only flag + input parameters. */
+  tools(): { tools: ReturnType<typeof toolCatalog> } {
+    return { tools: toolCatalog(this.config) };
+  }
+
+  /** The credential registry: names → `op://` references + purposes. References
+   *  are pointers, never values (D-CR2/D-CR5) — no secret is ever served. */
+  credentials(): { credentials: { name: string; reference: string; purpose: string | null }[] } {
+    return {
+      credentials: listCredentials(this.config.runtimeDir).map((c) => ({
+        name: c.name,
+        reference: c.reference,
+        purpose: c.purpose ?? null,
+      })),
+    };
+  }
+
+  /** Installed + self-authored skills (description, trust tier, source). */
+  skills(): {
+    skills: { name: string; description: string; trust: string; source: string | null }[];
+  } {
+    return {
+      skills: loadSkills(skillsPaths(this.config.runtimeDir)).map((s) => ({
+        name: s.name,
+        description: s.description,
+        trust: s.trust,
+        source: s.source ?? null,
+      })),
+    };
+  }
+
+  /** One skill in full: its metadata, the rendered SKILL.md body, and the other
+   *  files in its directory (scripts/, references/, assets/). Observe-only. */
+  skill(name: string): {
+    name: string;
+    description: string;
+    trust: string;
+    source: string | null;
+    body: string;
+    files: string[];
+  } | null {
+    let slug: string;
+    try {
+      slug = sanitizeSkillName(name);
+    } catch {
+      return null;
+    }
+    const paths = skillsPaths(this.config.runtimeDir);
+    const dir = paths.skillDir(slug);
+    if (!existsSync(dir)) return null;
+    const body = loadSkillBody(paths, slug);
+    if (body === null) return null;
+    const record = loadSkills(paths).find((r) => sanitizeSkillName(r.name) === slug);
+    return {
+      name: slug,
+      description: record?.description ?? '',
+      trust: record?.trust ?? 'authored',
+      source: record?.source ?? null,
+      body,
+      files: listSkillFiles(dir),
+    };
   }
 
   // --- Conversation --------------------------------------------------------
@@ -243,6 +315,23 @@ export class DashboardData {
 }
 
 // --- helpers ---------------------------------------------------------------
+
+/** List every file in a skill directory as sorted, dir-relative paths (e.g.
+ *  `SKILL.md`, `scripts/build.sh`, `assets/theme.css`) — so the dashboard can show
+ *  what else ships with a skill beyond SKILL.md. */
+function listSkillFiles(dir: string): string[] {
+  const out: string[] = [];
+  const walk = (rel: string) => {
+    for (const entry of readdirSync(join(dir, rel), { withFileTypes: true })) {
+      if (entry.name === '.git') continue;
+      const r = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) walk(r);
+      else if (entry.isFile()) out.push(r);
+    }
+  };
+  walk('');
+  return out.sort();
+}
 
 /** Parse `- name — summary` / `name: summary` lines from INDEX.md. */
 function parseIndexSummaries(index: string): Map<string, string> {
