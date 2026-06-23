@@ -1,4 +1,5 @@
 import { generateText, type LanguageModel, type ModelMessage } from 'ai';
+import { telemetryEnabled } from '../observability/instrumentation.js';
 
 /**
  * Delivery-recovery pass (messaging-gateway D-MG8).
@@ -29,6 +30,8 @@ export interface RecoveryOptions {
   messages: ModelMessage[];
   /** The model's private notes/draft for the missed turn. */
   scratch: string;
+  /** The turn's thread id, so the recovery span groups with that turn's session. */
+  threadId: string;
 }
 
 /** Compose the clean iMessage the missed turn should have sent. Empty = nothing to send. */
@@ -37,6 +40,19 @@ export async function runRecoveryPass(opts: RecoveryOptions): Promise<string> {
     model: opts.model,
     system: recoverySystem(opts.ownerName, opts.scratch),
     messages: opts.messages,
+    // Trace the recovery pass too (observability D-OB1), tagged as a recovery so
+    // it is filterable in Langfuse — how often this path fires is itself a signal
+    // worth watching (the elicitation miss it backstops; D-MG8). Linked to the
+    // turn's session via threadId. No-op when tracing is disabled.
+    experimental_telemetry: {
+      isEnabled: telemetryEnabled(),
+      functionId: 'delivery-recovery',
+      metadata: {
+        recovery: true,
+        trigger: 'elicitation-miss',
+        langfuseSessionId: opts.threadId,
+      },
+    },
   });
   return result.text.trim();
 }
