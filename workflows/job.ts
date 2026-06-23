@@ -8,6 +8,7 @@ import {
   type FileReadToolInput,
 } from '../src/agent/tools/bashSpecs.js';
 import { telemetryEnabled } from '../src/observability/enabled.js';
+import { AGENT_STEP_LIMIT } from '../src/agent/limits.js';
 
 /**
  * Tier-2 durable job (durable-execution D-DE1/2/3, tasks 4.2/4.3). Runs a
@@ -50,7 +51,8 @@ export async function runJob(input: JobInput): Promise<void> {
   const result = await agent.stream({
     messages: [{ role: 'user', content: input.task }],
     writable: getWritable<UIMessageChunk>(),
-    maxSteps: 30,
+    // No work cap — runaway backstop only (the old 30-step cap could cut off a build).
+    maxSteps: AGENT_STEP_LIMIT,
     // OpenTelemetry → Langfuse (observability D-OB1): trace the background job's
     // LLM + tool steps. langfuseSessionId = the thread, so a job groups with the
     // conversation that spawned it. No-op when tracing is disabled.

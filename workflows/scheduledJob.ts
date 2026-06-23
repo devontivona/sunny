@@ -4,6 +4,7 @@ import { anthropic } from '@workflow/ai/anthropic';
 import { getWritable } from 'workflow';
 import { MEMORY_TOOL_SPECS } from '../src/agent/tools/memorySpecs.js';
 import { telemetryEnabled } from '../src/observability/enabled.js';
+import { AGENT_STEP_LIMIT } from '../src/agent/limits.js';
 
 /**
  * Durable job for a fired schedule (scheduling D-SC2/5, task 4.6). Runs an
@@ -55,7 +56,8 @@ export async function runScheduledJob(input: ScheduledJobInput): Promise<void> {
   const result = await agent.stream({
     messages: [{ role: 'user', content: input.prompt }],
     writable: getWritable<UIMessageChunk>(),
-    maxSteps: 20,
+    // No work cap — runaway backstop only.
+    maxSteps: AGENT_STEP_LIMIT,
     // OpenTelemetry → Langfuse (observability D-OB1): trace the scheduled run's
     // LLM + memory-tool steps. No-op when tracing is disabled.
     experimental_telemetry: {

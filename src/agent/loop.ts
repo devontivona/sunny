@@ -15,6 +15,7 @@ import type { Db } from '../db/client.js';
 import type { CredentialResolver } from '../credentials/index.js';
 import { loadCore, memoryPaths } from '../memory/index.js';
 import { loadAllSkills, renderSkillIndex } from '../skills/index.js';
+import { AGENT_STEP_LIMIT } from './limits.js';
 import { logger } from '../logger.js';
 import { telemetryEnabled } from '../observability/instrumentation.js';
 import { ensureConsolidationSchedule } from '../scheduler/index.js';
@@ -167,7 +168,10 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
       model,
       instructions,
       tools,
-      stopWhen: stepCountIs(20),
+      // No work cap — loop until the model stops calling tools on its own; the high
+      // limit is only a runaway backstop (D: lifted the old 20-step cap that cut off
+      // real multi-step work like building + hosting a site).
+      stopWhen: stepCountIs(AGENT_STEP_LIMIT),
       providerOptions: anthropicProviderOptions(config),
       // OpenTelemetry → Langfuse (D-OB1): emit LLM/tool/step spans for this turn.
       // The trajectory IS this trace (D-OB2). `langfuseSessionId` groups a thread's
