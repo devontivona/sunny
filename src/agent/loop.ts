@@ -200,30 +200,32 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
         delivered = classifyDelivery(counter.count, scratch, silence.silent);
         if (delivered === 'fallback_text') {
           // Elicitation miss: the model wrote text but called NEITHER send_message
-          // nor stay_silent. Run a cheap forced recovery pass (D-MG8) that composes
-          // a concise message from the private notes, or affirmatively chooses
-          // silence — so the reply isn't ghosted and raw scratch is never leaked.
+          // nor stay_silent. Run a cheap recovery pass (D-MG8) that rewrites the
+          // private notes into a clean iMessage as plain text — so the reply isn't
+          // ghosted and raw scratch is never leaked.
           log.warn('elicitation miss; running delivery recovery', {
             threadId: event.threadId,
             scratchLen: scratch.length,
           });
           try {
-            const recoverySends = await runRecoveryPass({
+            const recoveryText = await runRecoveryPass({
               model: recoveryModel,
               ownerName: config.owner.name,
               messages,
               scratch,
-              tools: { send_message: sendMessageTool, stay_silent: staySilentTool },
             });
             recovered = true;
-            // Record recovery sends in history as send_message tool calls (the same
-            // shape the main loop persists), so the next turn's context reinforces
-            // "speaking == send_message".
-            parts = [
-              ...parts,
-              ...recoverySends.map((text, i) => sendMessagePart(text, `recovery-${i}`)),
-            ];
-            delivered = classifyDelivery(counter.count, scratch, silence.silent);
+            if (recoveryText) {
+              // Deliver the composed message and record it in history as a
+              // send_message tool call (the same shape the main loop persists), so a
+              // recovered miss is indistinguishable from a clean send and the next
+              // turn's context reinforces "speaking == send_message".
+              await gateway.send(event.threadId, { text: recoveryText }, { persist: false });
+              parts = [...parts, sendMessagePart(recoveryText, 'recovery-0')];
+              delivered = 'send_message';
+            }
+            // Empty result → the backstop had nothing to send; leave it as
+            // fallback_text (recovered=true) so the rare no-send miss stays visible.
           } catch (err) {
             log.error('recovery pass failed', { threadId: event.threadId, err: String(err) });
           }

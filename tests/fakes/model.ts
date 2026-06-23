@@ -124,19 +124,17 @@ export function modelThatThrows(message = 'mock model failure'): MockLanguageMod
 }
 
 /**
- * A `doGenerate` mock that makes a single (forced) tool call — for the delivery
- * recovery pass, which uses `generateText` (not streaming). The named tool's real
- * `execute` runs, so e.g. `send_message` delivers + bumps the counter.
+ * A `doGenerate` mock that returns plain text — for the delivery-recovery pass,
+ * which uses `generateText` (not streaming) and returns the composed message text.
+ * Pass an empty string to model the "nothing to send" case.
  */
-export function generateToolCall(toolName: string, input: unknown = {}): MockLanguageModelV3 {
+export function recoveryText(text: string): MockLanguageModelV3 {
   return new MockLanguageModelV3({
     modelId: 'mock-recovery',
     doGenerate: () =>
       Promise.resolve({
-        content: [
-          { type: 'tool-call', toolCallId: 'rc-1', toolName, input: JSON.stringify(input) },
-        ],
-        finishReason: { unified: 'tool-calls', raw: undefined },
+        content: text ? [{ type: 'text', text }] : [],
+        finishReason: { unified: 'stop', raw: undefined },
         usage: ZERO_USAGE,
         warnings: [],
       }),

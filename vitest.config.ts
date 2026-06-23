@@ -36,6 +36,9 @@ export default defineConfig({
           name: 'integration',
           environment: 'node',
           include: ['src/**/*.integration.test.ts', 'tests/**/*.integration.test.ts'],
+          // Loads ANTHROPIC_API_KEY (from .env locally / the CI secret) for the
+          // real-model recovery test; no-op for the mock-only files.
+          setupFiles: ['./tests/setup/env.ts'],
           // PGlite is single-connection; keep DB-backed files from racing on one
           // engine by running this lane single-file (each file gets its own DB).
           fileParallelism: false,

@@ -5,10 +5,10 @@ import { createTestDb, type TestDb } from './db.js';
 import { createTestRuntime, type TestRuntime } from './harness.js';
 import { makeChannelEvent } from './factories.js';
 import {
-  generateToolCall,
   modelThatOnlyScratches,
   modelThatSends,
   modelThatThrows,
+  recoveryText,
   scriptModel,
 } from './fakes/model.js';
 
@@ -91,7 +91,7 @@ describe('agent loop end-to-end', () => {
     const rt = createTestRuntime({
       db: tdb.db,
       model: modelThatOnlyScratches('I think the answer is 42 but let me phrase it nicely'),
-      recoveryModel: generateToolCall('send_message', { text: "It's 42." }),
+      recoveryModel: recoveryText("It's 42."),
     });
     const ev = makeChannelEvent({ text: 'what is the answer?' });
     await runOnce(rt, ev);
@@ -105,24 +105,24 @@ describe('agent loop end-to-end', () => {
     };
     expect(payload.metadata?.delivered).toBe('send_message');
     expect(payload.metadata?.recovered).toBe(true);
-    // The recovery send is recorded in history as a send_message tool call.
+    // The recovery send is coerced into history as a send_message tool call, so a
+    // recovered miss is indistinguishable from a clean send (de-poisons history).
     expect(payload.parts.some((p) => p.type === 'tool-send_message')).toBe(true);
   });
 
-  it('miss → recovery can still choose silence (delivered=silence, nothing sent)', async () => {
+  it('miss → recovery returns nothing → nothing delivered, recovered recorded', async () => {
     const rt = createTestRuntime({
       db: tdb.db,
-      model: modelThatOnlyScratches('User just said thanks — no reply needed.'),
-      recoveryModel: generateToolCall('stay_silent', {}),
+      model: modelThatOnlyScratches('Only private reasoning here, nothing to say.'),
+      recoveryModel: recoveryText(''), // backstop composed nothing to send
     });
     const ev = makeChannelEvent({ text: 'thanks!' });
     await runOnce(rt, ev);
 
-    expect(rt.gateway.texts()).toEqual([]); // recovery picked silence — no ghosting AND no spam
+    expect(rt.gateway.texts()).toEqual([]); // no ghost-leak of raw scratch
     const turn = (await lastTurn(rt, ev.threadId)).find((m) => m.role === 'assistant');
     const meta = (turn!.payload as { metadata?: { delivered?: string; recovered?: boolean } })
       .metadata;
-    expect(meta?.delivered).toBe('silence');
     expect(meta?.recovered).toBe(true);
   });
 

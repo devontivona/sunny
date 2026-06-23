@@ -86,6 +86,8 @@ export interface ActivityTurn {
   timestamp: string;
   model: string | null;
   delivery: string | null;
+  /** Whether the delivery-recovery backstop fired this turn (D-MG8). */
+  recovered: boolean;
   steps: number | null;
   usage: TurnUsage | null;
 }

@@ -13,10 +13,10 @@ export function getModel(config: SunnyConfig): LanguageModel {
 
 /**
  * The cheap model for the delivery-recovery pass (D-MG8): when the main turn
- * produces text but never calls `send_message`/`stay_silent`, a forced one-shot
- * pass on this model composes the message (or chooses silence). Runs WITHOUT
- * thinking so the forced tool call is permitted (forcing ⊥ extended thinking on
- * Anthropic). Defaults to Haiku; overridable via `config.recoveryModelId`.
+ * produces text but never calls `send_message`/`stay_silent`, a one-shot pass on
+ * this model rewrites the private notes into a clean iMessage (returned as plain
+ * text — the runner does the delivery). Defaults to Haiku; overridable via
+ * `config.recoveryModelId`.
  */
 export function getRecoveryModel(config: SunnyConfig): LanguageModel {
   return anthropic(config.recoveryModelId);
