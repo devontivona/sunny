@@ -1,0 +1,31 @@
+# Sunny's deltas on top of the vendored upstream Langfuse compose.
+# Docker Compose auto-merges this file with docker-compose.yml.
+#
+# Port bindings. The web UI is published at https://langfuse.waywardlane.com via
+# devbox (Caddy + Cloudflare tunnel), gated by Langfuse's own login — a DELIBERATE
+# egress exception the owner accepted because the UI is password-protected. So the
+# web port binds to 127.0.0.1 only (Caddy proxies localhost into the tunnel); the
+# backing stores (Postgres/Clickhouse/Redis) and minio also stay on 127.0.0.1 —
+# nothing is directly network-reachable, everything funnels through the gated
+# public URL. No Langfuse Cloud; trace data still lives only on this host.
+# `NEXTAUTH_URL` (in .env) must equal the public URL or login breaks. To take it
+# off the internet: `devbox rm langfuse` and reach it via `ssh -L 3010:localhost:3010`.
+# The `!override` tag REPLACES upstream's port list (Compose otherwise
+# concatenates list values, which would leave upstream's binding in place).
+#
+# Image versions are inherited from the vendored docker-compose.yml snapshot
+# (upstream pins langfuse:3 / redis:7 / postgres:17; clickhouse and chainguard
+# minio float to latest). "Pinned" here means controlled-refresh: bump versions
+# by re-vendoring the upstream file, not by silent `docker compose pull` drift.
+# To harden further, add `image: <repo>@sha256:...` pins for the two floating
+# images below. Everything else — Clickhouse single-node, the minio bucket, the
+# env contract — comes straight from upstream.
+services:
+  langfuse-web:
+    ports: !override
+      - '127.0.0.1:${LANGFUSE_WEB_PORT:-3010}:3000'
+
+  minio:
+    ports: !override
+      - '127.0.0.1:9090:9000'
+      - '127.0.0.1:9091:9001'

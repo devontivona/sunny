@@ -5,6 +5,7 @@
 .claude/skills/workflow
 .claude/skills/agentation
 .claude/skills/agentation-self-driving
+.claude/skills/langfuse
 
 # Node / build
 node_modules/

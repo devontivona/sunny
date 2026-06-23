@@ -16,6 +16,7 @@ import type { CredentialResolver } from '../credentials/index.js';
 import { loadCore, memoryPaths } from '../memory/index.js';
 import { loadAllSkills, renderSkillIndex } from '../skills/index.js';
 import { logger } from '../logger.js';
+import { telemetryEnabled } from '../observability/instrumentation.js';
 import { ensureConsolidationSchedule } from '../scheduler/index.js';
 import type { SteerHandle } from './dispatcher.js';
 import { getModel, getRecoveryModel, anthropicProviderOptions } from './model.js';
@@ -168,6 +169,21 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
       tools,
       stopWhen: stepCountIs(20),
       providerOptions: anthropicProviderOptions(config),
+      // OpenTelemetry → Langfuse (D-OB1): emit LLM/tool/step spans for this turn.
+      // The trajectory IS this trace (D-OB2). `langfuseSessionId` groups a thread's
+      // turns into one session; redaction-at-source (D-OB5) scrubs the exported
+      // payloads. No-op when tracing is disabled (no Langfuse keys).
+      experimental_telemetry: {
+        isEnabled: telemetryEnabled(),
+        functionId: 'agent-turn',
+        metadata: {
+          langfuseSessionId: event.threadId,
+          langfuseUserId: event.isOwner ? config.owner.name : (event.senderName ?? 'group'),
+          isGroup: event.isGroup,
+          isOwner: event.isOwner,
+          deliveryMode,
+        },
+      },
       // Double-text steering (4.1b): fold any message that arrived mid-run into
       // the next step instead of starting a competing run.
       prepareStep: ({ messages: stepMessages }) => {
@@ -257,6 +273,7 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
               ownerName: config.owner.name,
               messages,
               scratch,
+              threadId: event.threadId,
             });
             recovered = true;
             if (recoveryText) {
