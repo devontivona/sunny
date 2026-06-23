@@ -29,7 +29,7 @@ export interface TestRuntimeOptions {
   /**
    * The delivery-recovery model (D-MG8). Defaults to one that throws if invoked,
    * so a test that unexpectedly triggers recovery fails loudly instead of hitting
-   * the network; miss tests inject a `generateToolCall(...)` mock.
+   * the network; miss tests inject a `recoveryText(...)` mock.
    */
   recoveryModel?: LanguageModel;
   /** Defaults to `makeConfig()` (owner = Devon, fresh temp runtime dir). */

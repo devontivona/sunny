@@ -20,15 +20,17 @@ Sunny SHALL deliver user-facing messages only by an explicit `send_message` acti
 - **THEN** no message is delivered to the user
 
 ### Requirement: Guard against unintended silence
-The system SHALL reinforce the explicit-send model so a turn does not end silently by accident, and SHALL provide a safety net if it does. Reinforcement SHALL include representing Sunny's prior replies in the model's own history as `send_message` tool calls (not plain assistant text), so the agent's track record demonstrates that speaking means calling `send_message`. As a fallback, if a turn ends with no `send_message` call but produced user-facing text, the system SHALL deliver that text rather than ghosting the user, and SHALL record that the fallback fired (it is expected to trend toward zero).
+The system SHALL reinforce the explicit-send model so a turn does not end silently by accident, and SHALL provide a safety net if it does. Reinforcement SHALL include representing Sunny's prior replies in the model's own history as `send_message` tool calls (not plain assistant text), so the agent's track record demonstrates that speaking means calling `send_message`. As a fallback, if a turn ends having produced user-facing text but with no `send_message` call and no `stay_silent` call (an elicitation miss), the system SHALL run a delivery-recovery pass: a cheap model rewrites the turn's private notes into a clean message and returns it as plain text (no forced tool call), which the system delivers and then records in history as a `send_message` tool call — so a recovered miss is indistinguishable from a clean send and reinforces the positive pattern rather than poisoning future turns. The recovery pass SHALL NOT have a silence option (choosing silence is the main turn's job via `stay_silent`); an empty result means there is nothing to send. The occurrence SHALL be recorded (telemetered, surfaced in the dashboard) and is expected to trend toward zero.
 
 #### Scenario: History reinforces the send action
 - **WHEN** the model prompt is built from prior turns
 - **THEN** Sunny's earlier replies appear as `send_message` tool calls with their results, not as plain assistant text
+- **AND** a recovered miss appears the same way (its composed message recorded as a `send_message` tool call), not as an undelivered plain-text reply
 
 #### Scenario: Fallback delivery on missed send
-- **WHEN** a turn ends with no `send_message` call but produced user-facing text
-- **THEN** that text is delivered to the user
+- **WHEN** a turn ends with no `send_message` call and no `stay_silent` call but produced user-facing text
+- **THEN** the recovery pass composes a clean message from the private notes and delivers it
+- **AND** that message is recorded in history as a `send_message` tool call
 - **AND** the occurrence is recorded (telemetered) for monitoring
 
 #### Scenario: Sends are not duplicated on resume

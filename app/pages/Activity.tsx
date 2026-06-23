@@ -37,6 +37,7 @@ function ActivityTab() {
           <tr>
             <th className="pr-md text-left font-normal">When</th>
             <th className="pr-md text-left font-normal">Delivery</th>
+            <th className="pr-md text-left font-normal">Backstop</th>
             <th className="pr-md text-right font-normal">Steps</th>
             <th className="pr-md text-right font-normal">In</th>
             <th className="pr-md text-right font-normal">Out</th>
@@ -51,6 +52,11 @@ function ActivityTab() {
               <td className="pr-md">
                 <span className={t.delivery === 'fallback_text' ? 'text-warning' : 'text-fg-muted'}>
                   {t.delivery ?? '—'}
+                </span>
+              </td>
+              <td className="pr-md">
+                <span className={t.recovered ? 'text-warning' : 'text-fg-dim'}>
+                  {t.recovered ? 'fired' : '—'}
                 </span>
               </td>
               <td className="pr-md text-right tabular-nums">{fmt(t.steps)}</td>
