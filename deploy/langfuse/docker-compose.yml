@@ -1,0 +1,171 @@
+# Self-hosted Langfuse — Sunny's observability platform (D-OB7).
+#
+# Single host, single user, NO EGRESS: every service binds to 127.0.0.1 only,
+# and only the Langfuse web UI/API port is published. The stack is the OTLP
+# trace backend + trace/trajectory store + cost/usage dashboards for Sunny
+# (observability change, task 1). Sunny exports spans to it over OTLP (task 3).
+#
+# This is a pinned, localhost-bound adaptation of Langfuse's upstream
+# docker-compose. When upgrading, diff against the upstream compose for your
+# target version and re-pin the image tags below. It runs ALONGSIDE the existing
+# `sunny-postgres` container (:5544) and uses its own Postgres/Clickhouse —
+# Sunny's app DB and Langfuse's store are deliberately separate.
+#
+# Bring-up: see deploy/langfuse/README is in the repo README "Running &
+# deploying". Copy .env.example -> .env in this dir and fill the generated
+# secrets, then `docker compose -f deploy/langfuse/docker-compose.yml up -d`.
+
+name: langfuse
+
+services:
+  langfuse-web:
+    image: langfuse/langfuse:3
+    restart: unless-stopped
+    depends_on:
+      postgres: { condition: service_healthy }
+      clickhouse: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      minio: { condition: service_healthy }
+      minio-init: { condition: service_completed_successfully }
+    ports:
+      # Only the UI/API is exposed, and only to localhost. Reach it via an SSH
+      # tunnel or the box's local browser — never bind 0.0.0.0.
+      - '127.0.0.1:${LANGFUSE_WEB_PORT:-3010}:3000'
+    environment:
+      DATABASE_URL: postgresql://postgres:${LF_POSTGRES_PASSWORD}@postgres:5432/postgres
+      SALT: ${LANGFUSE_SALT}
+      ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY}
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET}
+      NEXTAUTH_URL: http://localhost:${LANGFUSE_WEB_PORT:-3010}
+      TELEMETRY_ENABLED: 'false'
+      LANGFUSE_REPORT_USAGE_TO_LANGFUSE: 'false'
+      # Headless bootstrap (single-user, self-hosted): create the org/project +
+      # a known API key pair on first boot so no manual UI signup is needed.
+      # The public/secret keys here are what Sunny uses to export (root .env).
+      LANGFUSE_INIT_ORG_ID: sunny
+      LANGFUSE_INIT_PROJECT_ID: sunny
+      LANGFUSE_INIT_PROJECT_NAME: sunny
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_INIT_PROJECT_PUBLIC_KEY}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_INIT_PROJECT_SECRET_KEY}
+      LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL}
+      LANGFUSE_INIT_USER_NAME: Devon
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD}
+      CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: ${LF_CLICKHOUSE_PASSWORD}
+      # Single-node Clickhouse: no Zookeeper/Keeper, so migrations must use plain
+      # (non-replicated, non-ON-CLUSTER) tables.
+      CLICKHOUSE_CLUSTER_ENABLED: 'false'
+      REDIS_CONNECTION_STRING: redis://default:${LF_REDIS_PASSWORD}@redis:6379
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: minio
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${LF_MINIO_PASSWORD}
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: 'true'
+
+  langfuse-worker:
+    image: langfuse/langfuse-worker:3
+    restart: unless-stopped
+    depends_on:
+      postgres: { condition: service_healthy }
+      clickhouse: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      minio: { condition: service_healthy }
+      minio-init: { condition: service_completed_successfully }
+    environment:
+      DATABASE_URL: postgresql://postgres:${LF_POSTGRES_PASSWORD}@postgres:5432/postgres
+      SALT: ${LANGFUSE_SALT}
+      ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY}
+      CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: ${LF_CLICKHOUSE_PASSWORD}
+      # Single-node Clickhouse: no Zookeeper/Keeper, so migrations must use plain
+      # (non-replicated, non-ON-CLUSTER) tables.
+      CLICKHOUSE_CLUSTER_ENABLED: 'false'
+      REDIS_CONNECTION_STRING: redis://default:${LF_REDIS_PASSWORD}@redis:6379
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: minio
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${LF_MINIO_PASSWORD}
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: 'true'
+
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${LF_POSTGRES_PASSWORD}
+    volumes:
+      - langfuse_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: ${LF_CLICKHOUSE_PASSWORD}
+      # Single-node Clickhouse: no Zookeeper/Keeper, so migrations must use plain
+      # (non-replicated, non-ON-CLUSTER) tables.
+      CLICKHOUSE_CLUSTER_ENABLED: 'false'
+    volumes:
+      - langfuse_clickhouse_data:/var/lib/clickhouse
+      - langfuse_clickhouse_logs:/var/log/clickhouse-server
+    ulimits:
+      nofile: { soft: 262144, hard: 262144 }
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://localhost:8123/ping || exit 1']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    command: --requirepass ${LF_REDIS_PASSWORD}
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'AUTH', '${LF_REDIS_PASSWORD}', '--no-raw', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: ${LF_MINIO_PASSWORD}
+    volumes:
+      - langfuse_minio:/data
+    healthcheck:
+      test: ['CMD-SHELL', 'mc ready local || exit 1']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # One-shot: create the event-upload bucket Langfuse writes to (the server does
+  # not auto-create it). Runs to completion before web/worker start.
+  minio-init:
+    image: minio/mc
+    depends_on:
+      minio: { condition: service_healthy }
+    environment:
+      LF_MINIO_PASSWORD: ${LF_MINIO_PASSWORD}
+    entrypoint:
+      - sh
+      - -c
+      - mc alias set lf http://minio:9000 minio "$${LF_MINIO_PASSWORD}" && mc mb -p lf/langfuse
+
+volumes:
+  langfuse_postgres:
+  langfuse_clickhouse_data:
+  langfuse_clickhouse_logs:
+  langfuse_minio:

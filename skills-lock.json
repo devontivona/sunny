@@ -25,6 +25,12 @@
       "skillPath": "skills/chat/SKILL.md",
       "computedHash": "eec16293cb0044b8e4376dec986b96dc70bf425854c6fb7aa062890faa020a25"
     },
+    "langfuse": {
+      "source": "langfuse/skills",
+      "sourceType": "github",
+      "skillPath": "skills/langfuse/SKILL.md",
+      "computedHash": "4c5fd7416a341ca8b56b2efcd96f68f867205f0b774ecb12f3078db490c0d5f3"
+    },
     "workflow": {
       "source": "vercel/vercel-plugin",
       "sourceType": "github",

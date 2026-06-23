@@ -25,6 +25,10 @@ agent. The agent core speaks only the normalized `Gateway` seam, with the iMessa
   schedules, and the WDK world (`workflow` + `graphile_worker` schemas) — consolidated per
   D-DE4. App migrations auto-apply at startup; WDK world tables are created once with
   `npx workflow-postgres-setup`.
+- **Observability** — a self-hosted **Langfuse** stack (`deploy/langfuse/docker-compose.yml`),
+  Sunny's OTLP trace backend + trace/trajectory store + cost/usage dashboards (D-OB7). All
+  services bind to `127.0.0.1`; only the web UI/API is published (`127.0.0.1:3010`). It runs
+  alongside `sunny-postgres` with its own Postgres/Clickhouse/Redis/minio. No egress.
 - **Supervisor (home server)** — **`devbox`** runs the unified app as the **`sunny`** systemd
   *user* service (`Restart=always`, linger enabled → starts at boot, survives reboot) and
   publishes it over HTTPS via a Cloudflare tunnel at **`https://sunny.waywardlane.com`**.
@@ -53,6 +57,13 @@ cp .env.example .env   # fill keys; DATABASE_URL=postgres://sunny:<pw>@localhost
 WORKFLOW_POSTGRES_URL="$DATABASE_URL" npx workflow-postgres-setup
 
 # 4. Owner identity — add your iMessage phone/email to ~/.sunny/config.json → owner.identities
+
+# 5. (Observability) Stand up self-hosted Langfuse — Sunny's trace backend (D-OB7)
+cp deploy/langfuse/.env.example deploy/langfuse/.env   # fill generated secrets (see that file)
+docker compose -f deploy/langfuse/docker-compose.yml up -d
+#  → open http://localhost:3010, create an org/project, copy its API keys, then set
+#    LANGFUSE_BASE_URL / LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY in the repo-root .env.
+#    Tracing is on when those keys are present; unset → tracing is a no-op.
 ```
 
 ### Run it
