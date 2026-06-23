@@ -230,6 +230,61 @@ export class DashboardData {
     return out;
   }
 
+  // --- Durable jobs (WDK runs) ---------------------------------------------
+  // Observe-only view of the Workflow DevKit world: background jobs (start_job →
+  // runJob) and scheduled runs (runScheduledJob) are durable workflow runs recorded
+  // in the `workflow.*` schema. The dashboard surfaces them so a job that hangs or
+  // fails is visible (previously there was no signal anywhere). Read-only; the WDK
+  // tables aren't in the app's drizzle schema, so this reads them with raw SQL.
+
+  async jobs(limit = 30): Promise<{
+    jobs: {
+      id: string;
+      kind: string;
+      name: string;
+      status: string;
+      createdAt: string;
+      startedAt: string | null;
+      completedAt: string | null;
+      durationMs: number | null;
+      stepCount: number;
+      failedSteps: number;
+    }[];
+  }> {
+    const res = await this.db.execute(sql`
+      select r.id, r.name, r.status, r.created_at, r.started_at, r.completed_at,
+        (select count(*)::int from workflow.workflow_steps s where s.run_id = r.id) as step_count,
+        (select count(*)::int from workflow.workflow_steps s
+           where s.run_id = r.id and s.status = 'failed') as failed_steps
+      from workflow.workflow_runs r
+      order by r.created_at desc
+      limit ${limit}
+    `);
+    const rows = (res as unknown as { rows: Record<string, unknown>[] }).rows ?? [];
+    const iso = (v: unknown) => (v ? new Date(v as string).toISOString() : null);
+    return {
+      jobs: rows.map((r) => {
+        const startedAt = iso(r.started_at);
+        const completedAt = iso(r.completed_at);
+        return {
+          id: String(r.id),
+          kind: jobKind(String(r.name)),
+          name: String(r.name),
+          status: String(r.status),
+          createdAt: iso(r.created_at) ?? new Date(0).toISOString(),
+          startedAt,
+          completedAt,
+          durationMs:
+            startedAt && completedAt
+              ? new Date(completedAt).getTime() - new Date(startedAt).getTime()
+              : null,
+          stepCount: Number(r.step_count ?? 0),
+          failedSteps: Number(r.failed_steps ?? 0),
+        };
+      }),
+    };
+  }
+
   // --- Activity & health ---------------------------------------------------
 
   async activity(limit = 50) {
@@ -327,6 +382,13 @@ function listSkillFiles(dir: string): string[] {
   };
   walk('');
   return out.sort();
+}
+
+/** Humanize a WDK run name (`workflow//./workflows/job//runJob`) for display. */
+function jobKind(name: string): string {
+  if (name.endsWith('runJob')) return 'Background job';
+  if (name.endsWith('runScheduledJob')) return 'Scheduled job';
+  return name.split('//').filter(Boolean).pop() ?? name;
 }
 
 /** Parse `- name — summary` / `name: summary` lines from INDEX.md. */

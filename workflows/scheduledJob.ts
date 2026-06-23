@@ -3,6 +3,7 @@ import { DurableAgent } from '@workflow/ai/agent';
 import { anthropic } from '@workflow/ai/anthropic';
 import { getWritable } from 'workflow';
 import { MEMORY_TOOL_SPECS } from '../src/agent/tools/memorySpecs.js';
+import { telemetryEnabled } from '../src/observability/enabled.js';
 
 /**
  * Durable job for a fired schedule (scheduling D-SC2/5, task 4.6). Runs an
@@ -55,6 +56,13 @@ export async function runScheduledJob(input: ScheduledJobInput): Promise<void> {
     messages: [{ role: 'user', content: input.prompt }],
     writable: getWritable<UIMessageChunk>(),
     maxSteps: 20,
+    // OpenTelemetry → Langfuse (observability D-OB1): trace the scheduled run's
+    // LLM + memory-tool steps. No-op when tracing is disabled.
+    experimental_telemetry: {
+      isEnabled: telemetryEnabled(),
+      functionId: 'scheduled-job',
+      metadata: { langfuseSessionId: input.threadId, scheduleId: input.scheduleId },
+    },
   });
 
   const text = finalAssistantText(result.messages);

@@ -16,8 +16,16 @@ import { messages } from '../../../../src/db/schema.js';
 import { logger } from '../../../../src/logger.js';
 import { DashboardData } from '../../../../src/dashboard/data.js';
 import { AuthStore } from '../../../../src/dashboard/auth/store.js';
-import { constantTimeEqual, signSession, verifySession } from '../../../../src/dashboard/auth/session.js';
-import { loadDashboardConfig, ttl, type DashboardConfig } from '../../../../src/dashboard/config.js';
+import {
+  constantTimeEqual,
+  signSession,
+  verifySession,
+} from '../../../../src/dashboard/auth/session.js';
+import {
+  loadDashboardConfig,
+  ttl,
+  type DashboardConfig,
+} from '../../../../src/dashboard/config.js';
 
 /**
  * The web dashboard's read-only JSON API + iMessage-approval auth, served inside
@@ -112,7 +120,12 @@ export default defineEventHandler(async (event) => {
         if (row.status === 'approved' && cfg.sessionSecret) {
           const session = await auth.createSession(row.deviceHint ?? '');
           await auth.setRequestStatus(row.id, 'consumed', session.id);
-          setCookie(event, SESSION_COOKIE, signSession(session.id, cfg.sessionSecret), cookieOpts(cfg, ttl.session));
+          setCookie(
+            event,
+            SESSION_COOKIE,
+            signSession(session.id, cfg.sessionSecret),
+            cookieOpts(cfg, ttl.session),
+          );
           deleteCookie(event, PENDING_COOKIE, { path: '/' });
           log.info('session issued', { sessionId: session.id });
           return { state: 'authenticated' };
@@ -233,6 +246,8 @@ export default defineEventHandler(async (event) => {
         }
         case path === 'schedules':
           return { schedules: await data.schedules() };
+        case path === 'jobs':
+          return await data.jobs();
         case path === 'activity':
           return await data.activity();
         case path === 'health':
@@ -255,7 +270,8 @@ export default defineEventHandler(async (event) => {
       .orderBy(desc(messages.timestamp))
       .limit(25);
     const ownerThread = recentOwner.find((m) => m.threadId.split(':')[2] !== 'g')?.threadId;
-    if (!ownerThread) throw new Error('no owner DM thread known yet (owner must message Sunny first)');
+    if (!ownerThread)
+      throw new Error('no owner DM thread known yet (owner must message Sunny first)');
     // Conversational, in Sunny's voice — still a fixed, owner-only template
     // (only the device hint + approve link are interpolated; never arbitrary text).
     const text =

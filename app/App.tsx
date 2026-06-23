@@ -13,6 +13,7 @@ import { Credentials } from './pages/Credentials';
 import { Skills } from './pages/Skills';
 import { Conversation } from './pages/Conversation';
 import { Schedules } from './pages/Schedules';
+import { Jobs } from './pages/Jobs';
 import { Activity, Health } from './pages/Activity';
 
 type Auth = { status: 'loading' } | { status: 'resolved'; state: AuthState };
@@ -39,6 +40,8 @@ function RouteView() {
       return <Conversation threadId={second ? decodeURIComponent(second) : null} />;
     case 'schedules':
       return <Schedules />;
+    case 'jobs':
+      return <Jobs />;
     case 'activity':
       return <Activity />;
     case 'health':

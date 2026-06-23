@@ -110,6 +110,24 @@ export interface SearchHit {
   text: string;
 }
 
+export interface JobRunView {
+  id: string;
+  /** Humanized run name: 'Background job' | 'Scheduled job' | raw function. */
+  kind: string;
+  name: string;
+  status: string;
+  createdAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  durationMs: number | null;
+  stepCount: number;
+  failedSteps: number;
+}
+
+export interface JobsView {
+  jobs: JobRunView[];
+}
+
 export interface ScheduleRunView {
   id: string;
   firedAt: string;
