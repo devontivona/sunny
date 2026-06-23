@@ -19,7 +19,6 @@ describe('toolCatalog', () => {
         'schedule_create',
         'schedule_list',
         'schedule_delete',
-        'skill_manage',
         'credential_manage',
         'bash',
         'file_read',
@@ -30,7 +29,7 @@ describe('toolCatalog', () => {
 
   it('flags host/registry/scheduling tools as owner-only and the rest as broad', () => {
     const byName = new Map(toolCatalog(makeConfig()).map((e) => [e.name, e]));
-    for (const n of ['bash', 'file_read', 'skill_manage', 'credential_manage', 'schedule_create']) {
+    for (const n of ['bash', 'file_read', 'credential_manage', 'schedule_create']) {
       expect(byName.get(n)?.ownerOnly, n).toBe(true);
     }
     for (const n of ['send_message', 'stay_silent', 'start_job', 'memory_write']) {

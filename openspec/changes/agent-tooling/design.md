@@ -71,21 +71,40 @@ Because installed skills are untrusted third-party code, they are gated at insta
   the always-on budget from `agent-memory`.
 - **D-SK3 — Discovery scales via pgvector retrieval** when the library outgrows the
   metadata budget — reusing the memory L3 local-embeddings + `pgvector` path. No new datastore.
-- **D-SK4 — Self-authoring loop (auto + notify).** A `skill_manage` tool lets Sunny
-  create/edit/delete its own skills: reflect on a completed task → write a pushy,
-  keyword-rich `SKILL.md` → validate → commit to the skill repo (D-SK8) → auto-discovered
-  next run. Created automatically, user notified, immediately usable, reviewable/reversible
-  via the repo's git history.
+- **D-SK4 — Self-authoring is a skill over bash + a `skill` helper, not a bespoke tool
+  (revised after implementation).** The loop is unchanged — reflect on a completed task →
+  write a pushy, keyword-rich `SKILL.md` (plus any `scripts/`/`references/`/`assets/`) →
+  persist → auto-discovered next run, created automatically with the user notified and
+  reviewable/reversible via git. What changed is the *mechanism*: rather than a bespoke
+  `skill_manage` tool that only ever wrote a single `SKILL.md`, skill authoring is itself
+  a bundled **skill** (D-SK5) executed over the existing `bash`/`file_read` surface — Sunny
+  writes the skill's files directly (so a skill is a real *directory*, multi-file by nature)
+  and runs a small **`skill` helper** (`new|save|rm`) — bundled *inside* the
+  skill-authoring skill as `scripts/skill.mjs` (so it travels with the skill into the
+  canonical repo; no global install) and invoked with `node` — that performs the
+  load-bearing, get-it-right-every-time steps in one deterministic shot: **validate →
+  stage → commit → push** (D-SK8). This is the bash-centric model (D-TA2) applied to
+  Sunny's own toolmaking: the guarantees live in a deterministic CLI, not in model-driven
+  multi-step git, and not in a growing tool surface. *(Rejected: extending `skill_manage`
+  with per-file `write_file`/`delete_file`/`view --path` — it re-implements what bash+git
+  already do, adds a hand-rolled path-traversal surface, and still special-cases the one
+  capability that most wants to be a skill. The `skill` CLI takes a sanitized skill **name**,
+  never a model-supplied path, so it adds no traversal surface.)*
 - **D-SK5 — Two trust tiers: self-authored (trusted) vs installed (untrusted).**
   Self-authored → auto+notify. Installed (any agentskills-compatible Git source via
   `npx skills add`) → untrusted code; install is APPROVAL-gated and reviewed
   (*gating enforced in `security-permissions`*). Seed `anthropics/skills`,
   `vercel-labs/agent-skills`, and `devbox` as known-good defaults — including a
   **skill-authoring** skill and a **skill-discovery/installation** skill so Sunny can
-  uplevel itself (the "skills that get more skills" flywheel). **Bundled first-party seeds**
-  (e.g. the `email` skill, `src/skills/seeds.ts`) ship with the app and are written into
-  `~/.sunny/skills` at init if absent — like the memory core, no manual deploy; external
-  seeds come via `npx skills`.
+  uplevel itself (the "skills that get more skills" flywheel). The **skill-authoring skill**
+  is the concrete mechanism for D-SK4 (not a tool): a bundled seed whose body is the
+  prescriptive procedure for writing a skill *directory* and persisting it via the `skill`
+  helper command, which ships with the app. Because it is a seed, it self-heals (re-written
+  if missing at init) even though Sunny could delete it — the durable *capability* is the
+  helper CLI (in code), while the guidance is regenerable. **Bundled first-party seeds**
+  (e.g. the `email` and `skill-authoring` skills, `src/skills/seeds.ts`) ship with the app
+  and are written into `~/.sunny/skills` at init if absent — like the memory core, no manual
+  deploy; external seeds come via `npx skills`.
 - **D-SK6 — Skills cannot escalate privilege.** A skill body is instructions; its
   scripts/tools route through the normal tool surface so the same gating, approval
   tiers, and blocklist apply (enforced in `security-permissions`). `allowed-tools`
@@ -107,6 +126,19 @@ Because installed skills are untrusted third-party code, they are gated at insta
   plumbing). Best-practice: scope that git credential to just the skills repo (deploy key /
   fine-grained PAT) for least privilege; `git push` is still gated by the command policy in
   `security-permissions`.
+
+  The validate→stage→commit→push guarantees are delivered by the **`skill` helper** bundled
+  inside the skill-authoring skill (`scripts/skill.mjs`, installed by `initSkills` and pushed
+  with the skill — so any host has it with no global install), invoked from the skill body via
+  `node` over the bash surface (D-SK4). Because it operates on the skill *directory*, these
+  guarantees cover multi-file
+  skills (`scripts/`/`references/`/`assets/`), not just `SKILL.md`. Validation (D-SK7) runs
+  before commit, so a broken `SKILL.md` is never pushed; the loader also fail-safes invalid
+  skills at read time (skipped + warned), so the two layers compose. Running over bash means
+  the push is uniformly subject to the future command policy — unlike a tool calling
+  `child_process` git directly, which would bypass it. Concurrency falls to git's
+  `index.lock` (fails loud, never corrupts) plus per-thread turn serialization; a `flock` in
+  the helper is the escalation if a single-user host ever contends.
 
 ---
 

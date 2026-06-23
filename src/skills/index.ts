@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import type { SunnyConfig } from '../config/index.js';
 import { logger } from '../logger.js';
@@ -279,18 +280,42 @@ export async function initSkills(config: SunnyConfig): Promise<void> {
   mkdirSync(paths.root, { recursive: true });
   await syncSkillRepo(config);
 
-  let seeded = 0;
+  let changed = 0;
   for (const seed of SEED_SKILLS) {
     const file = paths.skillFile(seed.name);
-    if (existsSync(file)) continue;
-    mkdirSync(paths.skillDir(seed.name), { recursive: true });
-    writeFileSync(file, seed.content, { mode: 0o644 });
-    seeded += 1;
+    if (!existsSync(file)) {
+      mkdirSync(paths.skillDir(seed.name), { recursive: true });
+      writeFileSync(file, seed.content, { mode: 0o644 });
+      changed += 1;
+    }
+    // Install any bundled files (e.g. a skill's own scripts/) write-if-missing, so
+    // the capability travels with the skill and self-heals if removed (D-SK1/D-SK4).
+    for (const asset of seed.assets ?? []) {
+      const dest = join(paths.skillDir(seed.name), asset.dest);
+      if (existsSync(dest)) continue;
+      try {
+        const content = readFileSync(seedAssetPath(asset.src), 'utf8');
+        mkdirSync(dirname(dest), { recursive: true });
+        writeFileSync(dest, content, { mode: asset.mode ?? 0o644 });
+        changed += 1;
+      } catch (err) {
+        log.warn('could not install seed asset (non-fatal)', {
+          skill: seed.name,
+          asset: asset.dest,
+          err: String(err),
+        });
+      }
+    }
   }
-  if (seeded > 0) {
-    log.info('seeded bundled skills', { count: seeded });
+  if (changed > 0) {
+    log.info('seeded bundled skills', { count: changed });
     await commitSkillChange(config, 'skill: seed bundled skills');
   }
+}
+
+/** Resolve a bundled seed asset (`src/skills/seed-assets/<src>`) to an absolute path. */
+function seedAssetPath(src: string): string {
+  return fileURLToPath(new URL(`./seed-assets/${src}`, import.meta.url));
 }
 
 /** Commit a skill change to the ~/.sunny repo (D-SK8). Local only — pushing to a

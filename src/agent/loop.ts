@@ -33,7 +33,6 @@ import {
 } from './turn.js';
 import { createMemoryTools } from './tools/memory.js';
 import { createScheduleTools } from './tools/schedule.js';
-import { createSkillTools } from './tools/skillManage.js';
 import { createCredentialTools } from './tools/credentialManage.js';
 import { createBashTools } from './tools/bash.js';
 import { createSendMessageTool, type SendCounter } from './tools/sendMessage.js';
@@ -154,8 +153,8 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
       ...(event.isOwner && !event.isGroup
         ? createScheduleTools(db, event.threadId, config.timezone)
         : {}),
-      // Self-authoring skills: owner DMs only (privileged, owner-facing; D-SK4).
-      ...(event.isOwner && !event.isGroup ? createSkillTools(config) : {}),
+      // Skill authoring is a skill over bash + the `skill` helper (D-SK4), not a
+      // tool — so there's nothing to register here; it rides the bash/file tools below.
       // Credential registry: owner DMs only (D-CR5). resolver verifies on register.
       ...(event.isOwner && !event.isGroup ? createCredentialTools(config, deps.credentials) : {}),
       // Host tools (bash, file_read): owner DMs only — real host access, attended

@@ -278,9 +278,7 @@ export class DashboardData {
     let unprocessedInbound = 0;
     try {
       const active = await this.db.select().from(schedules).where(eq(schedules.active, true));
-      const overdue = active.filter(
-        (s) => s.nextRunAt && s.nextRunAt.getTime() < now - 5 * 60_000,
-      );
+      const overdue = active.filter((s) => s.nextRunAt && s.nextRunAt.getTime() < now - 5 * 60_000);
       scheduler = {
         ok: overdue.length === 0,
         detail:

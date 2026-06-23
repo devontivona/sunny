@@ -7,7 +7,6 @@ import { createSendMessageTool } from './sendMessage.js';
 import { createStaySilentTool } from './staySilent.js';
 import { createStartJobTool } from './startJob.js';
 import { createScheduleTools } from './schedule.js';
-import { createSkillTools } from './skillManage.js';
 import { createCredentialTools } from './credentialManage.js';
 import { createBashTools } from './bash.js';
 import { createMemoryTools } from './memory.js';
@@ -99,7 +98,6 @@ export function toolCatalog(config: SunnyConfig): ToolCatalogEntry[] {
   };
   const ownerOnly: Record<string, ToolLike> = {
     ...createScheduleTools(inertDb, '', config.timezone),
-    ...createSkillTools(config),
     ...createCredentialTools(config, undefined),
     ...createBashTools(config, undefined),
   };
