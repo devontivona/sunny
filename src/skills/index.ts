@@ -14,8 +14,8 @@ const exec = promisify(execFile);
  * Agent-skills runtime (agent-skills D-SK1/2/7/8). Skills are agentskills.io
  * `SKILL.md` files under `~/.sunny/skills/<name>/`, inside the single `~/.sunny`
  * git repo (created by initMemory). Progressive disclosure mirrors the memory
- * core: only name + description are always-on (the index); a body loads on demand
- * via `loadSkillBody` (skill_manage view). Self-authored skills are validated and
+ * core: only name + description are always-on (the index); a body is read on demand
+ * (file_read on its SKILL.md). Self-authored skills are validated and
  * written, then committed and pushed to the canonical skill repo (D-SK8) when one
  * is configured (`config.skills.repo`); `~/.sunny/skills` is a clone of it, synced
  * on init. Git access uses the host's own auth (e.g. the gh credential helper).
@@ -245,7 +245,7 @@ export function loadSkillIndex(paths: SkillsPaths, budget: SkillsBudget): string
   return renderSkillIndex(loadSkills(paths), budget);
 }
 
-/** Load one skill's body on demand (progressive disclosure; skill_manage view). */
+/** Load one skill's body on demand (progressive disclosure; e.g. dashboard detail). */
 export function loadSkillBody(paths: SkillsPaths, name: string): string | null {
   const file = paths.skillFile(name);
   if (!existsSync(file)) return null;
