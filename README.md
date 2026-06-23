@@ -59,10 +59,11 @@ WORKFLOW_POSTGRES_URL="$DATABASE_URL" npx workflow-postgres-setup
 # 4. Owner identity — add your iMessage phone/email to ~/.sunny/config.json → owner.identities
 
 # 5. (Observability) Stand up self-hosted Langfuse — Sunny's trace backend (D-OB7)
-cp deploy/langfuse/.env.example deploy/langfuse/.env   # fill generated secrets (see that file)
-docker compose -f deploy/langfuse/docker-compose.yml up -d
-#  → open http://localhost:3010, create an org/project, copy its API keys, then set
-#    LANGFUSE_BASE_URL / LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY in the repo-root .env.
+cp deploy/langfuse/.env.example deploy/langfuse/.env   # fill generated secrets + INIT keys (see that file)
+cd deploy/langfuse && docker compose up -d && cd -     # run from the dir so override.yml auto-merges
+#  → the LANGFUSE_INIT_* keys provision the project headlessly on first boot. Copy that same
+#    public/secret pair into the repo-root .env as LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY,
+#    and set LANGFUSE_BASE_URL=http://localhost:3010. UI/login: http://localhost:3010.
 #    Tracing is on when those keys are present; unset → tracing is a no-op.
 ```
 

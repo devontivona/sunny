@@ -1,0 +1,25 @@
+# Sunny's deltas on top of the vendored upstream Langfuse compose.
+# Docker Compose auto-merges this file with docker-compose.yml.
+#
+# Upstream exposes langfuse-web (:3000) and minio (:9090) on ALL interfaces.
+# Sunny is single-host with no egress (D-OB1/D-OB7), so we rebind both to
+# 127.0.0.1 — and move the web UI to Sunny's port (LANGFUSE_WEB_PORT, default
+# 3010). The `!override` tag REPLACES upstream's port list (Compose otherwise
+# concatenates list values, which would leave the public :3000 binding in place).
+#
+# Image versions are inherited from the vendored docker-compose.yml snapshot
+# (upstream pins langfuse:3 / redis:7 / postgres:17; clickhouse and chainguard
+# minio float to latest). "Pinned" here means controlled-refresh: bump versions
+# by re-vendoring the upstream file, not by silent `docker compose pull` drift.
+# To harden further, add `image: <repo>@sha256:...` pins for the two floating
+# images below. Everything else — Clickhouse single-node, the minio bucket, the
+# env contract — comes straight from upstream.
+services:
+  langfuse-web:
+    ports: !override
+      - '127.0.0.1:${LANGFUSE_WEB_PORT:-3010}:3000'
+
+  minio:
+    ports: !override
+      - '127.0.0.1:9090:9000'
+      - '127.0.0.1:9091:9001'
