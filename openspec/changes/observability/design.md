@@ -1,22 +1,24 @@
 # Design — Observability
 
-> Carved out of the `bootstrap-sunny` change (originally Phase 6). Also owns the
-> per-run cost/token budget cap that the scheduling spec defers here (was D-SC6).
+> Carved out of the `bootstrap-sunny` change (originally Phase 6). Scoped to the
+> tracing/trajectory foundation (Langfuse, spans, redaction gate); budget
+> enforcement, the audit log, and insights move to the `observability-2` change.
 
 # Observability
 
 ## Context (observability)
 
-Sunny acts autonomously (self-scheduling, long jobs, credentialed actions) and spends real money on Opus. Devon needs to see what it did, bound its cost, and review what it touched. Several finalized capabilities already point here: the security audit log (D-SEC7), scheduling's per-run cost cap and autonomous rate limit (D-SC6), and the always-on token budget (`agent-memory`). This capability consolidates them.
+Sunny acts autonomously (self-scheduling, long jobs, credentialed actions) and spends real money on Opus. Devon needs to see what it did, bound its cost, and review what it touched. This change delivers the **visibility** half — standard tracing and durable trajectories, self-hosted with no egress. Bounding cost (the per-run cap scheduling defers, D-SC6; the always-on budget from `agent-memory`) and reviewing access (the security audit log, D-SEC7) move to the **`observability-2`** change.
 
 ## Goals / Non-Goals (observability)
 
 **Goals:**
 - Standard, inspectable tracing of every turn/job/tool/LLM call.
-- A cost/token meter that can *enforce* caps, not just report.
-- A redacted audit trail of actions and secret access.
-- A human-readable insights summary on demand.
+- Durable, replayable per-run trajectories.
+- Redaction at every telemetry sink (no secret leakage).
 - Self-hosted, no personal data egress.
+
+(Budget enforcement, the audit log, and insights are goals of `observability-2`.)
 
 **Non-Goals:**
 - Shipping telemetry to a third-party cloud APM by default.
@@ -26,39 +28,32 @@ Sunny acts autonomously (self-scheduling, long jobs, credentialed actions) and s
 
 ### D-OB1 — OpenTelemetry as the tracing standard, self-hosted
 
-Tracing uses **OpenTelemetry**: AI SDK telemetry emits spans for LLM/tool/step calls; Workflow DevKit contributes execution spans; the gateway and tool layer add their own spans. Spans export to a **self-hosted local OTel collector/backend** — no egress. A cloud APM is opt-in only.
+Tracing uses **OpenTelemetry**: AI SDK telemetry emits spans for LLM/tool/step calls; Workflow DevKit contributes execution spans; the gateway and tool layer add their own spans. Spans export over OTLP to **self-hosted Langfuse** (D-OB7) — no egress. A cloud APM is opt-in only.
 
-### D-OB2 — Persistent per-run trajectories
+### D-OB2 — Per-run trajectories are Langfuse traces
 
-Each turn and job records a structured trajectory (messages, tool calls + results, decisions) persisted in Postgres, for inspection, debugging, and a future skill-eval loop. Complements OTel spans (spans for live tracing; trajectories for durable replay/analysis).
-
-### D-OB3 — Cost/token budget meter with enforcement
-
-Token usage and cost are metered per run and over rolling windows (e.g. per day). The meter is the **enforcement point** for the caps declared elsewhere: scheduling's per-run cost cap and autonomous rate limit (D-SC6) and the always-on budget pressure (`agent-memory`). A run that exceeds its cap is stopped and Devon is notified rather than continuing to spend.
-
-### D-OB4 — Redacted audit log
-
-Every tool invocation and secret access is written to a queryable audit log (fulfilling security D-SEC7), with all secret values redacted (ties to credentials D-CR2/D-CR4). The audit log does not depend on a 1Password Business plan.
+Each turn and job records a structured trajectory (messages, tool calls + results, decisions). Rather than a bespoke Postgres trajectory store, **trajectories are the Langfuse traces themselves** (D-OB7): the OTLP spans Sunny already emits become the durable, inspectable record, available for replay/analysis and a future skill-eval loop (Langfuse datasets/evals). This consolidates trajectory storage into one tool and removes the separate Postgres trajectory schema originally planned here.
 
 ### D-OB5 — Redaction across all sinks
 
 A redaction layer ensures secrets and the Service Account token never appear in traces, logs, trajectories, or insights. This is a hard property of every telemetry sink, not a per-call concern.
 
-### D-OB6 — User-facing insights
+### D-OB7 — Langfuse as the self-hosted observability platform
 
-Sunny can produce an insights summary (token usage, cost, tool breakdown, activity) deliverable over the messaging gateway on request or on a schedule.
+Sunny uses **self-hosted Langfuse** (its Docker Compose stack, on this host) as the single observability platform: the OTLP backend for all spans (D-OB1), the durable trace/trajectory store (D-OB2), and the cost/usage dashboards that `observability-2` builds reporting and insights on. On a 10-core / 31 GB host the stack's footprint (~3–4 GB, Clickhouse included) is comfortably absorbed, and `docker compose` handles storage setup at this scale. Langfuse does **not** own redaction-at-source (D-OB5), enforcement, or the security audit log — those remain Sunny's (enforcement and audit are specified in `observability-2`). Self-hosted preserves the no-egress property; Langfuse Cloud is not used.
 
 ### Rejected alternatives (observability)
 
-- **Default cloud APM (Datadog/Honeycomb/etc.):** egresses personal activity data; rejected as default, allowed only as explicit opt-in.
+- **Default cloud APM (Datadog/Honeycomb/LangSmith/Langfuse Cloud):** egresses personal activity data; rejected as default, allowed only as explicit opt-in.
+- **Arize Phoenix instead of Langfuse:** lighter (single container) and faster to first trace, but weaker durable cost/usage dashboards; with ample host headroom we chose Langfuse to consolidate trace backend + trajectory store + cost reporting in one tool. Phoenix remains a fallback if the Langfuse footprint becomes a problem.
+- **Bespoke Postgres trajectory store alongside Langfuse:** rejected as double-storage; Langfuse traces are the trajectory record (D-OB2).
 - **Bespoke trace format:** rejected for OpenTelemetry's portability and tooling.
-- **Report-only cost tracking:** insufficient — the caps must be enforceable (D-OB3), or autonomous runs could overspend.
 
 ## Risks / Trade-offs (observability)
 
-- **Self-hosted telemetry is ops to run:** a local collector/backend to maintain; accepted for privacy. Kept minimal.
-- **Trajectory storage growth:** Postgres trajectories accumulate; needs retention/pruning policy.
-- **Enforcement vs. interruption:** hard cost cutoffs can abort useful work mid-run; mitigated by notifying Devon and tuning caps.
+- **Self-hosted telemetry is ops to run:** the Langfuse stack (web/worker + Postgres + Clickhouse + Redis + minio) to maintain; accepted for privacy, and `docker compose` handles setup at this scale.
+- **Trace storage growth:** Langfuse traces accumulate in Clickhouse; needs a retention/pruning policy (Langfuse supports retention settings).
+- **Transient memory pressure:** heavy local builds can already saturate the host and swap; the Langfuse stack adds ~3–4 GB resident, so watch headroom under concurrent build + agent load.
 
 ---
 
