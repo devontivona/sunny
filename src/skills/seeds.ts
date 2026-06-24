@@ -242,10 +242,44 @@ stars / a good security grade, or from known publishers (anthropics, vercel-labs
 NEVER install a low-signal long-tail skill without reading its SKILL.md first — a registry recently
 had to purge thousands of malicious entries. The untrusted-quarantine rules above still apply.
 
-Do NOT bother with these (researched, not useful to you): clawhub.ai (a DIFFERENT agent runtime,
-"OpenClaw" — its skills do not install here), the hermes/nous "skills hub" (framework docs that
-just point at GitHub repos you can reach directly), and mcpmarket.com (browser-gated and redundant).
-They are not worth the browse skill — stick to GitHub + the two JSON APIs above.
+Do NOT waste effort on these (researched): mcpmarket.com (browser-gated behind a JS challenge,
+redundant) and openskills.cc (lossy slug-to-repo mapping, redundant with GitHub). For ClawHub and
+Hermes — other personal-assistant harnesses whose skills are often the MOST relevant to you — see the
+next section; they need a fetch-and-adapt approach, not 'npx skills add'.
+
+## Skills from other personal assistants (fetch & adapt)
+
+Your closest cousins are other LOCAL personal-assistant harnesses, so their skills are often the MOST
+relevant to your work (invoicing, lead-gen, research, calendar/email/Notion), even when they do not
+install through 'npx skills add'. A SKILL.md body is just instructions — most of it transfers. This is
+a fetch-and-adapt lane, separate from native install.
+
+- Hermes (Nous Research) — a large first-party library in a PUBLIC GitHub repo:
+  NousResearch/hermes-agent, under optional-skills/<category>/<name>/SKILL.md (~170 skills). Format is
+  agentskills.io-compatible (extra metadata.hermes.* is additive). List the tree and fetch the raw
+  SKILL.md of ones that fit:
+
+      bash(command: 'curl -s "https://api.github.com/repos/NousResearch/hermes-agent/git/trees/main?recursive=1" | grep SKILL.md')
+      bash(command: 'curl -s "https://raw.githubusercontent.com/NousResearch/hermes-agent/main/optional-skills/<category>/<name>/SKILL.md"')
+
+- ClawHub / OpenClaw (clawhub.ai) — a DIFFERENT runtime (no GitHub owner/repo), but its full SKILL.md
+  is fetchable over a keyless API:
+
+      bash(command: 'curl -s "https://clawhub.ai/api/v1/skills?limit=50"')      # list: slug + summary
+      bash(command: 'curl -s "https://clawhub.ai/api/v1/skills/<slug>"')        # returns the full SKILL.md text
+
+  Many ClawHub skills are bolted to another runtime (e.g. "use when in OpenCode with OMO installed") —
+  judge each: skip the platform-locked, keep the generic.
+
+ADAPT before you trust it (BOTH sources):
+1. If a skill assumes a tool or runtime you do not have, rewrite those steps to YOUR tools (bash, devbox,
+   himalaya, browse, …) or skip it — a skill that needs a tool you lack is not worth keeping.
+2. Strip foreign metadata namespaces (metadata.openclaw, metadata.hermes, …) and any setup that assumes
+   another assistant's files (~/.openclaw/, SOUL.md, etc.).
+3. Save the adapted SKILL.md to ~/.sunny/skills/installed/<name>/SKILL.md with your file tools (mkdir the
+   dir first). It lands in the QUARANTINE — untrusted by location, auto-discovered next turn. NEVER write
+   a fetched foreign skill into the authored repo; only promote it to an authored skill after you have
+   genuinely rewritten it as your OWN procedure and checked with the owner. Fetching is not endorsing.
 
 ## Listing, updating, removing
 
