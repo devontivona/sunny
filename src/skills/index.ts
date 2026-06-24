@@ -12,8 +12,10 @@ const exec = promisify(execFile);
 
 /**
  * Agent-skills runtime (agent-skills D-SK1/2/7/8). Skills are agentskills.io
- * `SKILL.md` files under `~/.sunny/skills/<name>/`, inside the single `~/.sunny`
- * git repo (created by initMemory). Progressive disclosure mirrors the memory
+ * `SKILL.md` files read across three roots under `~/.sunny/skills/`, classified BY
+ * LOCATION (D-SK5): `authored/` (self-authored + curated seeds, the canonical-repo
+ * clone — trusted), `trusted/<slug>/` (owned source-repo mirrors — trusted), and
+ * `installed/` (third-party `npx skills` installs — untrusted). Progressive disclosure mirrors the memory
  * core: only name + description are always-on (the index); a body is read on demand
  * (file_read on its SKILL.md). Self-authored skills are validated and
  * written, then committed and pushed to the canonical skill repo (D-SK8) when one
@@ -53,14 +55,24 @@ function pathsForRoot(root: string): SkillsPaths {
   };
 }
 
-/** Paths for the PRIMARY (writable) skill root: `~/.sunny/skills` (D-SK8). */
+/** Paths for the PRIMARY (writable) skill root: `~/.sunny/skills/authored` (D-SK8) —
+ *  self-authored skills + curated first-party seeds, the canonical-repo clone. */
 export function skillsPaths(runtimeDir: string): SkillsPaths {
-  return pathsForRoot(join(runtimeDir, 'skills'));
+  return pathsForRoot(join(runtimeDir, 'skills', 'authored'));
 }
 
-/** Directory holding read-only clones of additional owned skill repos (D-SK8). */
+/** Directory holding read-only clones of additional owned skill repos (D-SK8):
+ *  `~/.sunny/skills/trusted/<slug>`. Owner-owned mirrors — trusted tier, distinct
+ *  provenance from `authored` (which Sunny writes). */
 function sourcesDir(runtimeDir: string): string {
-  return join(runtimeDir, 'skill-sources');
+  return join(runtimeDir, 'skills', 'trusted');
+}
+
+/** Root for third-party skills installed via `npx skills` (D-SK5): `~/.sunny/skills/installed`.
+ *  UNTRUSTED — classified by location, so any install (even raw `npx skills add` over bash)
+ *  that lands here is marked untrusted regardless of how it got there. */
+function installedDir(runtimeDir: string): string {
+  return join(runtimeDir, 'skills', 'installed');
 }
 
 /** Slugify a repo ref (owner/repo or URL) into a stable clone-directory name. */
@@ -79,14 +91,24 @@ function sourceRoot(runtimeDir: string, repo: string): string {
   return join(sourcesDir(runtimeDir), repoSlug(repo));
 }
 
-/** All skill roots, in precedence order: the writable primary first, then each owned
- *  read-only source repo. `origin` is the repo ref (for provenance); undefined = primary. */
-function skillRoots(config: SunnyConfig): { paths: SkillsPaths; origin?: string }[] {
-  const roots: { paths: SkillsPaths; origin?: string }[] = [
-    { paths: skillsPaths(config.runtimeDir) },
+/** The clean-layout skill roots (each a git repo with a single-skill or collection layout),
+ *  in precedence order: the writable primary (`authored`) first, then each owned read-only
+ *  source repo (`trusted/<slug>`). `origin` is the repo ref (provenance; undefined = primary).
+ *  `trust` is decided BY ROOT (by on-disk location), not from frontmatter. The `installed/`
+ *  third-party root is handled separately (`loadInstalledSkills`) because `npx skills` nests
+ *  its output under an agent dir rather than the flat repo layout (D-SK5/D-SK8). */
+function skillRoots(
+  config: SunnyConfig,
+): { paths: SkillsPaths; origin?: string; trust: TrustTier }[] {
+  const roots: { paths: SkillsPaths; origin?: string; trust: TrustTier }[] = [
+    { paths: skillsPaths(config.runtimeDir), trust: 'authored' },
   ];
   for (const repo of config.skills.repos ?? []) {
-    roots.push({ paths: pathsForRoot(sourceRoot(config.runtimeDir, repo)), origin: repo });
+    roots.push({
+      paths: pathsForRoot(sourceRoot(config.runtimeDir, repo)),
+      origin: repo,
+      trust: 'authored',
+    });
   }
   return roots;
 }
@@ -156,15 +178,12 @@ export function validateSkill(raw: string): SkillValidation {
   return { ok: errors.length === 0, errors };
 }
 
-function trustOf(fm: Record<string, string>): TrustTier {
-  return fm.source ? 'installed' : 'authored';
-}
-
 // --- loading (progressive disclosure) --------------------------------------
 
-/** Read a record from one SKILL.md path, or null if missing/invalid (D-SK7). `origin`
- *  (a repo ref) is recorded as provenance when the skill has no explicit frontmatter source. */
-function readSkillRecord(file: string, origin?: string): SkillRecord | null {
+/** Read a record from one SKILL.md path, or null if missing/invalid (D-SK7). `trust` is the
+ *  owning root's tier (by location, not frontmatter — D-SK5). `origin` (a repo ref) is recorded
+ *  as provenance when the skill has no explicit frontmatter source. */
+function readSkillRecord(file: string, trust: TrustTier, origin?: string): SkillRecord | null {
   if (!existsSync(file)) return null;
   const { frontmatter } = parseSkill(readFileSync(file, 'utf8'));
   if (!frontmatter.name || !frontmatter.description) {
@@ -174,7 +193,7 @@ function readSkillRecord(file: string, origin?: string): SkillRecord | null {
   return {
     name: frontmatter.name,
     description: frontmatter.description,
-    trust: trustOf(frontmatter),
+    trust,
     file,
     source: frontmatter.source ?? origin,
   };
@@ -182,20 +201,25 @@ function readSkillRecord(file: string, origin?: string): SkillRecord | null {
 
 /** Read all valid skill records from ONE root, sorted by name. Auto-detects the
  *  repo layout: a single-skill repo (a `SKILL.md` at the root) vs a collection
- *  (`<name>/SKILL.md` subdirectories). `origin` marks provenance for owned sources. */
-export function loadSkills(paths: SkillsPaths, origin?: string): SkillRecord[] {
+ *  (`<name>/SKILL.md` subdirectories). `trust` is the root's tier (by location);
+ *  `origin` marks provenance for owned sources. */
+export function loadSkills(
+  paths: SkillsPaths,
+  trust: TrustTier = 'authored',
+  origin?: string,
+): SkillRecord[] {
   if (!existsSync(paths.root)) return [];
   const records: SkillRecord[] = [];
   // Single-skill repo: SKILL.md directly at the repo root.
   const rootSkill = join(paths.root, 'SKILL.md');
   if (existsSync(rootSkill)) {
-    const rec = readSkillRecord(rootSkill, origin);
+    const rec = readSkillRecord(rootSkill, trust, origin);
     if (rec) records.push(rec);
   } else {
     // Collection: one skill per subdirectory.
     for (const entry of readdirSync(paths.root, { withFileTypes: true })) {
       if (!entry.isDirectory() || entry.name === '.git') continue;
-      const rec = readSkillRecord(join(paths.root, entry.name, 'SKILL.md'), origin);
+      const rec = readSkillRecord(join(paths.root, entry.name, 'SKILL.md'), trust, origin);
       if (rec) records.push(rec);
     }
   }
@@ -203,17 +227,57 @@ export function loadSkills(paths: SkillsPaths, origin?: string): SkillRecord[] {
   return records;
 }
 
-/** Read skills across ALL roots (primary + owned source repos), deduped by name with
- *  the primary winning, sorted by name. This is what the prompt index and dashboard use. */
+/** How deep to walk the `installed/` root for SKILL.md files. `npx skills` nests them at
+ *  `installed/<agent-dir>/skills/<name>/SKILL.md` (depth 4); the bound is a runaway guard. */
+const INSTALLED_WALK_MAX_DEPTH = 6;
+
+/** Read third-party skills from the `installed/` root (D-SK5). Unlike the clean repo roots,
+ *  `npx skills` writes a nested `<agent-dir>/skills/<name>/SKILL.md` layout, so we walk for
+ *  SKILL.md files at any depth. Every record is UNTRUSTED purely by virtue of living here —
+ *  so even a raw `npx skills add` over bash that lands here is classified untrusted, with no
+ *  manifest to keep in sync. Deduped by skill name (first found wins). */
+function loadInstalledSkills(root: string): SkillRecord[] {
+  if (!existsSync(root)) return [];
+  const out: SkillRecord[] = [];
+  const seen = new Set<string>();
+  const walk = (dir: string, depth: number): void => {
+    if (depth > INSTALLED_WALK_MAX_DEPTH) return;
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name === '.git' || entry.name === 'node_modules') continue;
+      const p = join(dir, entry.name);
+      if (entry.isDirectory()) walk(p, depth + 1);
+      else if (entry.name === 'SKILL.md') {
+        const rec = readSkillRecord(p, 'installed');
+        if (rec && !seen.has(rec.name)) {
+          seen.add(rec.name);
+          out.push(rec);
+        }
+      }
+    }
+  };
+  walk(root, 0);
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** Read skills across ALL roots (authored primary + trusted owned sources + installed
+ *  third-party), deduped by name with earlier (higher-trust) roots winning, sorted by
+ *  name. This is what the prompt index and dashboard use. */
 export function loadAllSkills(config: SunnyConfig): SkillRecord[] {
   const seen = new Set<string>();
   const out: SkillRecord[] = [];
-  for (const { paths, origin } of skillRoots(config)) {
-    for (const rec of loadSkills(paths, origin)) {
-      if (seen.has(rec.name)) continue; // earlier roots (primary) win on conflict
+  for (const { paths, origin, trust } of skillRoots(config)) {
+    for (const rec of loadSkills(paths, trust, origin)) {
+      if (seen.has(rec.name)) continue; // earlier roots (authored) win on conflict
       seen.add(rec.name);
       out.push(rec);
     }
+  }
+  // Third-party installs come last: authored/trusted skills win a name conflict, and a
+  // third-party skill can never shadow one Sunny owns.
+  for (const rec of loadInstalledSkills(installedDir(config.runtimeDir))) {
+    if (seen.has(rec.name)) continue;
+    seen.add(rec.name);
+    out.push(rec);
   }
   return out.sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -469,6 +533,9 @@ export function startSkillSync(deps: {
 export async function initSkills(config: SunnyConfig): Promise<void> {
   const paths = skillsPaths(config.runtimeDir);
   mkdirSync(paths.root, { recursive: true });
+  // The third-party install root (D-SK5): create it so `npx skills` has somewhere to land
+  // and the loader has a stable untrusted root to scan, even before anything is installed.
+  mkdirSync(installedDir(config.runtimeDir), { recursive: true });
   await syncSkillRepo(config);
   // Clone/sync owned read-only source repos (D-SK8) so their skills are available too.
   await syncSourceRepos(config);
@@ -515,8 +582,9 @@ function seedAssetPath(src: string): string {
  *  dedicated remote needs git creds (deferred to credentials/security). Non-fatal:
  *  a no-op commit (nothing changed) or a missing repo is logged, not thrown. */
 /** Commit a skill change, and push it to the canonical repo when one is configured
- *  (D-SK8). When `~/.sunny/skills` is its own repo (a clone), commit + push there;
- *  otherwise fall back to committing under the `~/.sunny` repo (no-repo setups).
+ *  (D-SK8). When `~/.sunny/skills/authored` is its own repo (a clone), commit + push there;
+ *  otherwise fall back to committing under the `~/.sunny` repo (no-repo setups) — only the
+ *  authored tier is committed; `trusted/` (clones) and `installed/` (third-party) are not.
  *  All git steps are best-effort and non-fatal (offline → committed locally). */
 async function commitSkillChange(config: SunnyConfig, message: string): Promise<void> {
   const root = skillsPaths(config.runtimeDir).root;
@@ -524,7 +592,7 @@ async function commitSkillChange(config: SunnyConfig, message: string): Promise<
   const cwd = ownRepo ? root : config.runtimeDir;
   if (!ownRepo && !existsSync(join(config.runtimeDir, '.git'))) return;
   try {
-    await exec('git', ['add', '-A', ...(ownRepo ? [] : ['skills'])], { cwd });
+    await exec('git', ['add', '-A', ...(ownRepo ? [] : ['skills/authored'])], { cwd });
     await exec('git', ['commit', '-q', '-m', message], { cwd });
   } catch (err) {
     log.warn('could not commit skill change (non-fatal)', { err: String(err) });

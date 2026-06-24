@@ -53,10 +53,10 @@ export const ConfigSchema = z.object({
       /** Max chars per skill description in the index. */
       descriptionMaxChars: z.number().int().positive().default(280),
       /** Primary canonical skill repo (owner/repo or URL): the WRITABLE store of record
-       *  for self-authored skills, cloned to `~/.sunny/skills` (D-SK8). */
+       *  for self-authored skills, cloned to `~/.sunny/skills/authored` (D-SK8). */
       repo: z.string().optional(),
       /** Additional OWNED skill repos (owner/repo or URL): read-only sources cloned to
-       *  `~/.sunny/skill-sources/<slug>` and ff-synced alongside the primary (D-SK8). Add
+       *  `~/.sunny/skills/trusted/<slug>` and ff-synced alongside the primary (D-SK8). Add
        *  more anytime; Sunny never writes to these. */
       repos: z.array(z.string()).default([]),
     })

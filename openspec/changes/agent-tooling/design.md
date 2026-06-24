@@ -112,13 +112,31 @@ Because installed skills are untrusted third-party code, they are gated at insta
 - **D-SK7 — Validation before activation** against the `SKILL.md` schema; invalid → not activated.
 - **D-SK8 — Canonical skill repo (self-authored + curated only).** Skills persist in a
   dedicated **private** git repo (`config.skills.repo`, e.g. `devontivona/skills`) that is
-  the store of record; `~/.sunny/skills/` is a **clone** of it, synced on init (clone on a
+  the store of record; `~/.sunny/skills/authored/` is a **clone** of it, synced on init (clone on a
   fresh host, fast-forward pull otherwise) and committed + pushed on every self-authored
   edit, so Sunny's improvements round-trip durably. The repo holds **self-authored** skills
   plus **curated first-party** defaults (e.g. `email`) — **not** found/installed external
-  skills: those are installed from their own upstream repos and tracked by a lockfile
-  (`skills-lock.json`), re-fetched from source, **not vendored** in (keeps the repo "your
-  stuff", avoids staleness/license bloat). The **bundled seeds** (`src/skills/seeds.ts`)
+  skills: those install into a separate quarantine root (`~/.sunny/skills/installed/`, see the
+  three-root layout below), **not** the canonical repo (keeps it "your stuff", avoids
+  staleness/license bloat). *Implementation note (revised):* the install path is the
+  `vercel-labs/skills` CLI (`npx skills add`), which maintains its **own** `skills-lock.json`
+  (source + content hash; `experimental_install` re-provisions from it) inside the quarantine
+  dir — so re-fetch-from-source is the tool's, and Sunny keeps **no** hand-maintained manifest
+  (the originally-planned separate `skills-lock.json` is moot). `--copy` lands the files on disk
+  under `installed/` (re-fetchable, still outside the canonical repo).
+
+  **Three roots, trust by location (revised).** The loader reads three roots under
+  `~/.sunny/skills/`: `authored/` (the canonical clone — self-authored + curated seeds), each
+  `trusted/<slug>/` (owned source-repo mirrors, D-SK8 "multiple owned repos"), and `installed/`
+  (third-party `npx skills` installs). Trust is decided **by which root a skill lives in**, not
+  from frontmatter — so a third-party skill is `installed` (untrusted) purely because of its
+  location, and even a raw `npx skills add` over bash that lands in `installed/` is classified
+  untrusted with nothing to keep in sync. `authored`/`trusted` are both the trusted tier (Sunny
+  controls them); only `installed` is untrusted. The `installed` tier is the **hook** the
+  `security-permissions` approval/review gate and drift-pinning will read — until then an
+  installed skill loads ungated (attended-only).
+
+  The **bundled seeds** (`src/skills/seeds.ts`)
   become a **fallback** for cold-start / when no repo is configured (write-if-missing after
   sync). **Git access is the host's own auth** (e.g. the gh credential helper / an SSH
   deploy key), set up when provisioning the box — **not** an `op://` ref; this removes the
@@ -156,8 +174,9 @@ Because installed skills are untrusted third-party code, they are gated at insta
   auto-updates on every push — no vendoring, no manual install, no `npx`. Self-authoring only
   ever writes the primary; sources are mirrors. Each source repo is auto-detected as a
   single-skill repo (`SKILL.md` at its root) or a collection (`<name>/SKILL.md` subdirs). This
-  is the trusted, owner-curated lane; the untrusted third-party `npx skills add` lane (D-SK5,
-  deferred) remains separate. Adding a repo later is one entry in `skills.repos`.
+  is the trusted, owner-curated lane (`authored` + `trusted` roots); the untrusted third-party
+  `npx skills add` lane (D-SK5) is the separate `installed/` quarantine root. Adding a repo later
+  is one entry in `skills.repos`.
 
 ---
 

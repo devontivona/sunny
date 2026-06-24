@@ -13,7 +13,7 @@
 //   skill rm   <name>                           remove the skill → commit → push
 //
 // This file is BUNDLED INTO the `skill-authoring` seed skill: `initSkills` installs
-// it at ~/.sunny/skills/skill-authoring/scripts/skill.mjs, so it travels with the
+// it at ~/.sunny/skills/authored/skill-authoring/scripts/skill.mjs, so it travels with the
 // skill (into the canonical skill repo on push) and needs no global install — the
 // skill body invokes it with `node`. Plain Node + git only (no build step, no tsx)
 // so it runs on any host as-is. It is the deterministic counterpart of the in-process
@@ -22,14 +22,7 @@
 // `sanitizeSkillName`/`validateSkill` there — keep them in sync.
 
 import { execFileSync } from 'node:child_process';
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  realpathSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -86,7 +79,9 @@ export function validate(raw) {
 /** Compose a starter SKILL.md (frontmatter + body) from fields. */
 export function composeSkill({ name, description, body }) {
   const slug = sanitizeName(name);
-  const desc = String(description).trim().replace(/\s*\n\s*/g, ' ');
+  const desc = String(description)
+    .trim()
+    .replace(/\s*\n\s*/g, ' ');
   return `---\nname: ${slug}\ndescription: ${desc}\n---\n\n${String(body).trim()}\n`;
 }
 
@@ -95,6 +90,13 @@ export function composeSkill({ name, description, body }) {
 /** Resolve the runtime dir the same way the app does (SUNNY_HOME → ~/.sunny). */
 function runtimeDir() {
   return process.env.SUNNY_HOME ?? join(homedir(), '.sunny');
+}
+
+/** The PRIMARY (writable) skill root — the canonical-repo clone (D-SK8). Self-authoring
+ *  only ever writes here; `trusted/` (owned mirrors) and `installed/` (third-party) are
+ *  read-only/untrusted and never touched by this helper. Mirrors `skillsPaths` in index.ts. */
+function authoredRoot() {
+  return join(runtimeDir(), 'skills', 'authored');
 }
 
 function git(args, cwd) {
@@ -116,18 +118,19 @@ function hasRemote(cwd) {
  * can report it. Best-effort push: offline → committed locally.
  */
 function gitPersist(dir, message) {
-  const root = join(dir, 'skills');
+  const root = join(dir, 'skills', 'authored');
   const ownRepo = existsSync(join(root, '.git'));
   const cwd = ownRepo ? root : dir;
   if (!ownRepo && !existsSync(join(dir, '.git'))) {
     return { committed: false, pushed: false, note: 'no git repo — saved to disk only' };
   }
-  git(['add', '-A', ...(ownRepo ? [] : ['skills'])], cwd);
+  git(['add', '-A', ...(ownRepo ? [] : ['skills/authored'])], cwd);
   try {
     git(['commit', '-q', '-m', message], cwd);
   } catch (err) {
     const blob = `${err?.stdout ?? ''}${err?.stderr ?? ''}${err?.message ?? ''}`;
-    if (/nothing to commit/i.test(blob)) return { committed: false, pushed: false, note: 'nothing changed' };
+    if (/nothing to commit/i.test(blob))
+      return { committed: false, pushed: false, note: 'nothing changed' };
     throw err;
   }
   let pushed = false;
@@ -161,7 +164,7 @@ function done(msg) {
 function cmdNew(name, description) {
   const slug = sanitizeName(name);
   if (!description) fail('`new` requires a description: skill new <name> -d "what triggers it"');
-  const dir = join(runtimeDir(), 'skills', slug);
+  const dir = join(authoredRoot(), slug);
   const file = join(dir, 'SKILL.md');
   if (existsSync(file)) fail(`skill "${slug}" already exists at ${dir}`);
   const raw = composeSkill({
@@ -173,12 +176,14 @@ function cmdNew(name, description) {
   if (!v.ok) fail(`invalid: ${v.errors.join('; ')}`);
   mkdirSync(dir, { recursive: true });
   writeFileSync(file, raw, { mode: 0o644 });
-  done(`scaffolded ${dir}\n  edit SKILL.md (and add any scripts/ references/ assets/), then: skill save ${slug}`);
+  done(
+    `scaffolded ${dir}\n  edit SKILL.md (and add any scripts/ references/ assets/), then: skill save ${slug}`,
+  );
 }
 
 function cmdSave(name) {
   const slug = sanitizeName(name);
-  const file = join(runtimeDir(), 'skills', slug, 'SKILL.md');
+  const file = join(authoredRoot(), slug, 'SKILL.md');
   if (!existsSync(file)) fail(`no SKILL.md for "${slug}" — run: skill new ${slug} -d "..."`);
   const v = validate(readFileSync(file, 'utf8'));
   if (!v.ok) fail(`invalid SKILL.md: ${v.errors.join('; ')}`);
@@ -188,7 +193,7 @@ function cmdSave(name) {
 
 function cmdRm(name) {
   const slug = sanitizeName(name);
-  const dir = join(runtimeDir(), 'skills', slug);
+  const dir = join(authoredRoot(), slug);
   if (!existsSync(dir)) fail(`no skill named "${slug}"`);
   rmSync(dir, { recursive: true, force: true });
   const r = gitPersist(runtimeDir(), `skill: delete ${slug}`);
@@ -196,14 +201,16 @@ function cmdRm(name) {
 }
 
 function gitErrMsg(err) {
-  return String(err?.stderr || err?.stdout || err?.message || err).trim().split('\n')[0];
+  return String(err?.stderr || err?.stdout || err?.message || err)
+    .trim()
+    .split('\n')[0];
 }
 
 /** Pull the latest skills from the canonical repo, fast-forward only. Mirrors
  *  `syncSkillRepo` in src/skills/index.ts — never auto-merges; reports divergence
  *  for the owner to reconcile. On-demand counterpart of the hourly background sync. */
 function cmdSync() {
-  const root = join(runtimeDir(), 'skills');
+  const root = authoredRoot();
   if (!existsSync(join(root, '.git'))) fail('skills dir is not a git clone — nothing to sync');
   try {
     git(['fetch', '--quiet'], root);
@@ -219,7 +226,11 @@ function cmdSync() {
   const behind = Number(git(['rev-list', '--count', '@..@{u}'], root).trim());
   const ahead = Number(git(['rev-list', '--count', '@{u}..@'], root).trim());
   if (behind === 0) {
-    done(ahead > 0 ? `up to date (${ahead} local commit(s) not yet pushed)` : 'up to date — no new skills');
+    done(
+      ahead > 0
+        ? `up to date (${ahead} local commit(s) not yet pushed)`
+        : 'up to date — no new skills',
+    );
     return;
   }
   if (ahead > 0) {

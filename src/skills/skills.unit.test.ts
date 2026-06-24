@@ -197,7 +197,7 @@ describe('repoSlug', () => {
 });
 
 describe('loadAllSkills (multi-root owned repos)', () => {
-  // Simulate cloned source repos by writing files directly into ~/.sunny/skill-sources/<slug>.
+  // Simulate cloned source repos by writing files directly into ~/.sunny/skills/trusted/<slug>.
   // (loadAllSkills only reads the filesystem; git sync is exercised separately/manually.)
   function writeSkillFile(dir: string, name: string, description: string, body = 'do it') {
     mkdirSync(dir, { recursive: true });
@@ -213,7 +213,7 @@ describe('loadAllSkills (multi-root owned repos)', () => {
     });
     // primary (self-authored, writable)
     await writeSkill(config, { name: 'mine', description: 'a primary skill', body: 'x' });
-    const sources = join(config.runtimeDir, 'skill-sources');
+    const sources = join(config.runtimeDir, 'skills', 'trusted');
     // single-skill repo: SKILL.md at the clone root
     writeSkillFile(join(sources, repoSlug('owner/devbox')), 'devbox', 'host sites');
     // collection repo: one skill per subdir
@@ -237,7 +237,7 @@ describe('loadAllSkills (multi-root owned repos)', () => {
     });
     await writeSkill(config, { name: 'shared', description: 'primary version', body: 'p' });
     writeSkillFile(
-      join(config.runtimeDir, 'skill-sources', repoSlug('owner/dup')),
+      join(config.runtimeDir, 'skills', 'trusted', repoSlug('owner/dup')),
       'shared',
       'source version',
     );
@@ -245,5 +245,55 @@ describe('loadAllSkills (multi-root owned repos)', () => {
     expect(shared).toHaveLength(1);
     expect(shared[0]?.description).toBe('primary version');
     expect(shared[0]?.source).toBeUndefined(); // the primary, not the source
+  });
+
+  it('classifies skills under installed/ as untrusted, by location (not frontmatter)', async () => {
+    const config = makeConfig();
+    // A self-authored skill in the primary (authored) root.
+    await writeSkill(config, { name: 'mine', description: 'a primary skill', body: 'x' });
+    // A third-party skill dropped into installed/ — as `npx skills add` would land it.
+    // Note: NO `source:` frontmatter — trust must come from the location, not the file.
+    writeSkillFile(
+      join(config.runtimeDir, 'skills', 'installed', 'third-party'),
+      'third-party',
+      'came from npx skills',
+    );
+
+    const byName = new Map(loadAllSkills(config).map((s) => [s.name, s]));
+    expect(byName.get('mine')?.trust).toBe('authored');
+    expect(byName.get('third-party')?.trust).toBe('installed');
+  });
+
+  it('finds third-party skills in the nested `npx skills` layout under installed/', async () => {
+    const config = makeConfig();
+    // `npx skills add ... -a claude-code --copy` (run from installed/) lands skills at
+    // installed/<agent-dir>/skills/<name>/SKILL.md and writes a skills-lock.json alongside.
+    writeSkillFile(
+      join(config.runtimeDir, 'skills', 'installed', '.claude', 'skills', 'deploy-to-vercel'),
+      'deploy-to-vercel',
+      'deploy apps to Vercel',
+    );
+    // The CLI's own lockfile must not be mistaken for a skill.
+    writeFileSync(
+      join(config.runtimeDir, 'skills', 'installed', 'skills-lock.json'),
+      '{"version":1,"skills":{}}',
+    );
+
+    const rec = loadAllSkills(config).find((s) => s.name === 'deploy-to-vercel');
+    expect(rec?.trust).toBe('installed');
+  });
+
+  it('lets an authored skill win a name conflict with an installed one', async () => {
+    const config = makeConfig();
+    await writeSkill(config, { name: 'dup', description: 'authored version', body: 'a' });
+    writeSkillFile(
+      join(config.runtimeDir, 'skills', 'installed', 'dup'),
+      'dup',
+      'installed version',
+    );
+    const dup = loadAllSkills(config).filter((s) => s.name === 'dup');
+    expect(dup).toHaveLength(1);
+    expect(dup[0]?.trust).toBe('authored');
+    expect(dup[0]?.description).toBe('authored version');
   });
 });
