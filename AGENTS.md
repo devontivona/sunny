@@ -57,6 +57,27 @@ Two layers split on the determinism/cost axis (design `testing-and-evals`):
 - **Fixtures** — typed builders in `tests/factories.ts` (deterministic; **no faker**).
   Property-based tests (`fast-check`) cover the pure normalizers only.
 
+### Reproduce loop/prompt/model bugs from REAL conversations, not synthetic inputs
+
+Agent-behavior bugs (delivery, elicitation, recovery, summarization) usually depend on
+the *full* real context — token scale, the tool-call/reasoning trajectory, accumulated
+scratch — that a hand-written input does not reproduce. A real case: a recovery-ghosting
+bug returned empty **every time** on the captured 145k-token trajectory but **never** on
+a minimal synthetic one, so a synthetic "regression test" guarded nothing. So when you
+change the loop, a prompt, or model wiring, work fixture-first:
+
+1. **Capture the offending turn from production** and save its input as a fixture —
+   `langfuse-cli` (the `langfuse` skill: `npx langfuse-cli api traces get <id>`, base
+   URL from `LANGFUSE_BASE_URL`) or query Postgres directly. Examples already in the
+   repo: `evals/cases/fixtures/recoveryGhostTrajectory.json` (a full captured trajectory
+   + scratch) and the `RealMiss` entries in `evals/cases/fixtures/realMisses.ts`.
+2. **Write the test/eval against that fixture and watch it FAIL first** — reproduce the
+   bug before touching code. A test you never saw red proves nothing.
+3. Make the change; confirm the same test goes green. Keep the fixture as the guard.
+
+Fixtures are the owner's own data, lightly redacted (see `realMisses.ts`). Trim oversized
+tool-result payloads only *after* confirming the trimmed fixture still reproduces.
+
 ### Definition of done (every PR)
 
 Before pushing, the deterministic suite must be green locally:
@@ -77,7 +98,7 @@ What the *same PR* must include, by change type:
 | New/changed DB query, schema, or migration | Integration test against PGlite (incl. recall/FTS if touched) |
 | New/changed **agent behavior** (prompt, loop, tool, model, memory wiring) | Add/extend an eval case **and** run `npm run eval`, pasting the scorecard delta |
 | New gateway/transport seam or normalization | Unit test (normalization) + integration test if it touches the store |
-| Bug fix | A regression test that fails before the fix and passes after |
+| Bug fix | A regression test that fails before the fix and passes after. For loop/prompt/model bugs, derive the fixture from a **real captured turn** (Langfuse/PG), not a synthetic input — see "Reproduce … from REAL conversations" |
 | Docs/config-only, no behavior change | None — state "no behavior change" in the PR |
 
 Checklist (mirrored in `.github/pull_request_template.md`):
