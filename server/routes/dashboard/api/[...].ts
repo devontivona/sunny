@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { and, desc, eq } from 'drizzle-orm';
 import {
   defineEventHandler,
@@ -15,9 +16,22 @@ import { getRuntime } from '../../../../src/runtime.js';
 import { messages } from '../../../../src/db/schema.js';
 import { logger } from '../../../../src/logger.js';
 import { DashboardData } from '../../../../src/dashboard/data.js';
+import {
+  contentTypeForName,
+  isWithinMediaRoot,
+  renderableMedia,
+} from '../../../../src/gateway/media.js';
 import { AuthStore } from '../../../../src/dashboard/auth/store.js';
-import { constantTimeEqual, signSession, verifySession } from '../../../../src/dashboard/auth/session.js';
-import { loadDashboardConfig, ttl, type DashboardConfig } from '../../../../src/dashboard/config.js';
+import {
+  constantTimeEqual,
+  signSession,
+  verifySession,
+} from '../../../../src/dashboard/auth/session.js';
+import {
+  loadDashboardConfig,
+  ttl,
+  type DashboardConfig,
+} from '../../../../src/dashboard/config.js';
 
 /**
  * The web dashboard's read-only JSON API + iMessage-approval auth, served inside
@@ -112,7 +126,12 @@ export default defineEventHandler(async (event) => {
         if (row.status === 'approved' && cfg.sessionSecret) {
           const session = await auth.createSession(row.deviceHint ?? '');
           await auth.setRequestStatus(row.id, 'consumed', session.id);
-          setCookie(event, SESSION_COOKIE, signSession(session.id, cfg.sessionSecret), cookieOpts(cfg, ttl.session));
+          setCookie(
+            event,
+            SESSION_COOKIE,
+            signSession(session.id, cfg.sessionSecret),
+            cookieOpts(cfg, ttl.session),
+          );
           deleteCookie(event, PENDING_COOKIE, { path: '/' });
           log.info('session issued', { sessionId: session.id });
           return { state: 'authenticated' };
@@ -220,6 +239,28 @@ export default defineEventHandler(async (event) => {
         }
         case path === 'conversation/search':
           return await data.search(String(query.q ?? ''));
+        case path === 'media': {
+          // Authenticated media serving (messaging-media D-MM9): stream a row's
+          // i-th renderable image from disk. Confined to the media root — never a
+          // general file server — and only reachable past the auth gate above.
+          const msg = String(query.msg ?? '');
+          const i = Number(query.i ?? -1);
+          if (!msg || !Number.isInteger(i) || i < 0) return json(400, { error: 'bad media ref' });
+          const [row] = await db.select().from(messages).where(eq(messages.id, msg)).limit(1);
+          if (!row) return json(404, { error: 'not found' });
+          const ref = renderableMedia(row.payload)[i];
+          if (!ref?.disk || !isWithinMediaRoot(config.runtimeDir, ref.disk)) {
+            return json(404, { error: 'not found' });
+          }
+          try {
+            const bytes = readFileSync(ref.disk);
+            setResponseHeader(event, 'content-type', ref.mediaType || contentTypeForName(ref.disk));
+            setResponseHeader(event, 'cache-control', 'private, max-age=300');
+            return bytes;
+          } catch {
+            return json(404, { error: 'not found' });
+          }
+        }
         case path === 'schedules':
           return { schedules: await data.schedules() };
         case path === 'activity':
@@ -244,7 +285,8 @@ export default defineEventHandler(async (event) => {
       .orderBy(desc(messages.timestamp))
       .limit(25);
     const ownerThread = recentOwner.find((m) => m.threadId.split(':')[2] !== 'g')?.threadId;
-    if (!ownerThread) throw new Error('no owner DM thread known yet (owner must message Sunny first)');
+    if (!ownerThread)
+      throw new Error('no owner DM thread known yet (owner must message Sunny first)');
     // Conversational, in Sunny's voice — still a fixed, owner-only template
     // (only the device hint + approve link are interpolated; never arbitrary text).
     const text =
