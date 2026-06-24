@@ -288,9 +288,16 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
               await gateway.send(event.threadId, { text: recoveryText }, { persist: false });
               parts = [...parts, sendMessagePart(recoveryText, 'recovery-0')];
               delivered = 'send_message';
+            } else {
+              // The backstop is the last line of defense; an empty result means the
+              // user is GHOSTED despite the turn having written a reply. That must never
+              // happen silently — surface it as a critical error (the prompt should make
+              // an empty composition impossible; if this fires, the prompt regressed).
+              log.error('CRITICAL: delivery recovery returned empty — user ghosted', {
+                threadId: event.threadId,
+                scratchLen: scratch.length,
+              });
             }
-            // Empty result → the backstop had nothing to send; leave it as
-            // fallback_text (recovered=true) so the rare no-send miss stays visible.
           } catch (err) {
             log.error('recovery pass failed', { threadId: event.threadId, err: String(err) });
           }

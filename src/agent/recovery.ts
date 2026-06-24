@@ -34,12 +34,38 @@ export interface RecoveryOptions {
   threadId: string;
 }
 
+/**
+ * Reduce the turn's messages to PLAIN TEXT only — drop tool-call / tool-result /
+ * reasoning (thinking) parts, keeping each message's text content. The recovery
+ * model only needs the conversational context plus the scratch (in its system
+ * prompt), not the tool trajectory.
+ *
+ * This is load-bearing, not cosmetic: feeding the raw trajectory (the main Opus
+ * model's redacted thinking blocks + tool-call/tool-result parts) to the Haiku
+ * recovery call makes it intermittently return EMPTY text — the exact production
+ * ghosting bug (verified by replaying a captured miss: tool-laden input → empty
+ * every time; text-only → a real reply every time). Sanitizing here keeps the
+ * backstop reliable regardless of how rich the turn's trajectory was.
+ */
+export function sanitizeForRecovery(messages: ModelMessage[]): ModelMessage[] {
+  const out: ModelMessage[] = [];
+  for (const m of messages) {
+    if (typeof m.content === 'string') {
+      if (m.content.trim()) out.push(m);
+      continue;
+    }
+    const text = (m.content as Array<{ type: string }>).filter((p) => p.type === 'text');
+    if (text.length > 0) out.push({ ...m, content: text } as ModelMessage);
+  }
+  return out;
+}
+
 /** Compose the clean iMessage the missed turn should have sent. Empty = nothing to send. */
 export async function runRecoveryPass(opts: RecoveryOptions): Promise<string> {
   const result = await generateText({
     model: opts.model,
     system: recoverySystem(opts.ownerName, opts.scratch),
-    messages: opts.messages,
+    messages: sanitizeForRecovery(opts.messages),
     // Trace the recovery pass too (observability D-OB1), tagged as a recovery so
     // it is filterable in Langfuse — how often this path fires is itself a signal
     // worth watching (the elicitation miss it backstops; D-MG8). Linked to the

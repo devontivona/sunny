@@ -1,6 +1,8 @@
 import { anthropic } from '@ai-sdk/anthropic';
+import type { ModelMessage } from 'ai';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { SteerHandle } from '../src/agent/dispatcher.js';
+import { runRecoveryPass } from '../src/agent/recovery.js';
 import { REAL_MISSES } from '../evals/cases/fixtures/realMisses.js';
 import { createTestDb, type TestDb } from './db.js';
 import { createTestRuntime } from './harness.js';
@@ -59,5 +61,81 @@ describe('delivery-recovery against the real Haiku model', () => {
     expect(payload.metadata?.delivered).toBe('send_message');
     // Recovered send is coerced into history as a send_message tool call (de-poison).
     expect(payload.parts.some((p) => p.type === 'tool-send_message')).toBe(true);
+  });
+});
+
+/**
+ * Regression for the production ghosting captured 2026-06-24 (the "fetch HN top
+ * story" miss): when the turn's trajectory carried tool-call / tool-result /
+ * reasoning parts, feeding it raw to Haiku returned EMPTY text every time — the
+ * backstop reported recovered while delivering nothing. `sanitizeForRecovery`
+ * reduces the input to plain text, which is reliably non-empty. This drives the
+ * REAL Haiku model with exactly that tool-laden shape and asserts a real reply.
+ */
+describe('delivery-recovery with a tool-laden trajectory (real Haiku)', () => {
+  it('returns a non-empty reply despite tool-call/tool-result history', async () => {
+    const messages = [
+      { role: 'user', content: [{ type: 'text', text: 'Run uname -a and show me the output.' }] },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'tool-call', toolCallId: 't1', toolName: 'bash', input: { command: 'uname -a' } },
+        ],
+      },
+      {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId: 't1',
+            toolName: 'bash',
+            output: { type: 'text', value: 'Linux janeway 5.15.0-181-generic x86_64' },
+          },
+        ],
+      },
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool-call',
+            toolCallId: 't2',
+            toolName: 'send_message',
+            input: { text: 'Linux janeway 5.15.0-181' },
+          },
+        ],
+      },
+      {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId: 't2',
+            toolName: 'send_message',
+            output: { type: 'text', value: 'delivered' },
+          },
+        ],
+      },
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'Fetch https://news.ycombinator.com and tell me the top story.' },
+        ],
+      },
+    ] as unknown as ModelMessage[];
+
+    const scratch =
+      'Top story right now: "John Carmack on the mistakes around Quake that ruined id software" — ' +
+      '189 points, 72 comments (via twitter.com/ID_AA_Carmack). Want me to pull the discussion highlights?';
+
+    const out = await runRecoveryPass({
+      model: anthropic('claude-haiku-4-5'),
+      ownerName: 'Devon',
+      messages,
+      scratch,
+      threadId: 'regression-hn-toolladen',
+    });
+
+    // The bug was an empty composition → user ghosted. Must be a real message now.
+    expect(out.trim().length).toBeGreaterThan(0);
   });
 });
