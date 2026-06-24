@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it, expect } from 'vitest';
 import { makeConfig } from '../../tests/factories.js';
@@ -158,6 +158,20 @@ describe('initSkills seeding', () => {
 
     await initSkills(config); // running again seeds nothing new
     expect(loadSkills(paths).length).toBe(after);
+  });
+
+  it('seeds the browse skill with its reference assets', async () => {
+    const config = makeConfig();
+    const paths = skillsPaths(config.runtimeDir);
+
+    await initSkills(config);
+
+    const browse = loadSkills(paths).find((s) => s.name === 'browse');
+    expect(browse?.description).toMatch(/agent-browser/);
+    // Deeper engine + per-site docs travel with the skill (progressive disclosure).
+    const dir = paths.skillDir('browse');
+    expect(existsSync(join(dir, 'references/agent-browser.md'))).toBe(true);
+    expect(existsSync(join(dir, 'references/per-site-skills.md'))).toBe(true);
   });
 
   it('does not overwrite a user-edited seed', async () => {
