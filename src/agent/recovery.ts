@@ -40,12 +40,17 @@ export interface RecoveryOptions {
  * model only needs the conversational context plus the scratch (in its system
  * prompt), not the tool trajectory.
  *
- * This is load-bearing, not cosmetic: feeding the raw trajectory (the main Opus
- * model's redacted thinking blocks + tool-call/tool-result parts) to the Haiku
- * recovery call makes it intermittently return EMPTY text — the exact production
- * ghosting bug (verified by replaying a captured miss: tool-laden input → empty
- * every time; text-only → a real reply every time). Sanitizing here keeps the
- * backstop reliable regardless of how rich the turn's trajectory was.
+ * This is load-bearing, not cosmetic. Fed the raw trajectory, the Haiku recovery
+ * call reads the assistant/tool turns as ITS OWN ongoing agent session and tries to
+ * CONTINUE the task rather than rewrite the scratch — given a tool it emits another
+ * `bash`/`agent-browser` call to "finish fetching"; with no tools defined (the real
+ * recovery call) that impulse resolves to an EMPTY `stop` turn instead of plain
+ * text. That is the production ghosting bug (verified by replaying a captured miss:
+ * raw trajectory → empty every time, `finish=stop`; text-only → a real reply every
+ * time). Stripping the tool-call/tool-result/reasoning parts removes the agentic
+ * framing, so the conversation reads as a plain dialogue and the model follows the
+ * "write the message" instruction. Keeps the backstop reliable regardless of how
+ * rich the turn's trajectory was.
  */
 export function sanitizeForRecovery(messages: ModelMessage[]): ModelMessage[] {
   const out: ModelMessage[] = [];
