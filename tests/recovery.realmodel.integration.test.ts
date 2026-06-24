@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { anthropic } from '@ai-sdk/anthropic';
 import type { ModelMessage } from 'ai';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -66,73 +67,29 @@ describe('delivery-recovery against the real Haiku model', () => {
 
 /**
  * Regression for the production ghosting captured 2026-06-24 (the "fetch HN top
- * story" miss): when the turn's trajectory carried tool-call / tool-result /
- * reasoning parts, feeding it raw to Haiku returned EMPTY text every time — the
- * backstop reported recovered while delivering nothing. `sanitizeForRecovery`
- * reduces the input to plain text, which is reliably non-empty. This drives the
- * REAL Haiku model with exactly that tool-laden shape and asserts a real reply.
+ * story" miss). The fixture is the ACTUAL failing turn pulled from the Langfuse
+ * trace — its full message trajectory (tool-call/tool-result/reasoning parts) +
+ * the scratch the backstop was given. Fed raw to Haiku this returns EMPTY every
+ * time (verified: 3/3 — the user was ghosted); `runRecoveryPass`'s text-only
+ * sanitization makes it reliably non-empty. Synthetic inputs do NOT reproduce
+ * this, so the real captured trajectory is the only honest guard — without the
+ * sanitization this test fails.
  */
-describe('delivery-recovery with a tool-laden trajectory (real Haiku)', () => {
-  it('returns a non-empty reply despite tool-call/tool-result history', async () => {
-    const messages = [
-      { role: 'user', content: [{ type: 'text', text: 'Run uname -a and show me the output.' }] },
-      {
-        role: 'assistant',
-        content: [
-          { type: 'tool-call', toolCallId: 't1', toolName: 'bash', input: { command: 'uname -a' } },
-        ],
-      },
-      {
-        role: 'tool',
-        content: [
-          {
-            type: 'tool-result',
-            toolCallId: 't1',
-            toolName: 'bash',
-            output: { type: 'text', value: 'Linux janeway 5.15.0-181-generic x86_64' },
-          },
-        ],
-      },
-      {
-        role: 'assistant',
-        content: [
-          {
-            type: 'tool-call',
-            toolCallId: 't2',
-            toolName: 'send_message',
-            input: { text: 'Linux janeway 5.15.0-181' },
-          },
-        ],
-      },
-      {
-        role: 'tool',
-        content: [
-          {
-            type: 'tool-result',
-            toolCallId: 't2',
-            toolName: 'send_message',
-            output: { type: 'text', value: 'delivered' },
-          },
-        ],
-      },
-      {
-        role: 'user',
-        content: [
-          { type: 'text', text: 'Fetch https://news.ycombinator.com and tell me the top story.' },
-        ],
-      },
-    ] as unknown as ModelMessage[];
+describe('delivery-recovery on the captured ghost trajectory (real Haiku)', () => {
+  const fixture = JSON.parse(
+    readFileSync(
+      new URL('../evals/cases/fixtures/recoveryGhostTrajectory.json', import.meta.url),
+      'utf8',
+    ),
+  ) as { scratch: string; messages: ModelMessage[] };
 
-    const scratch =
-      'Top story right now: "John Carmack on the mistakes around Quake that ruined id software" — ' +
-      '189 points, 72 comments (via twitter.com/ID_AA_Carmack). Want me to pull the discussion highlights?';
-
+  it('recovers the real ghosted turn (non-empty reply)', async () => {
     const out = await runRecoveryPass({
       model: anthropic('claude-haiku-4-5'),
       ownerName: 'Devon',
-      messages,
-      scratch,
-      threadId: 'regression-hn-toolladen',
+      messages: fixture.messages,
+      scratch: fixture.scratch,
+      threadId: 'regression-ghost-trajectory',
     });
 
     // The bug was an empty composition → user ghosted. Must be a real message now.
