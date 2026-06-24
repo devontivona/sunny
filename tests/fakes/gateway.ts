@@ -4,12 +4,16 @@ import type {
   Gateway,
   InboundHandler,
   OutboundMessage,
+  SendResult,
 } from '../../src/gateway/types.js';
+import type { OutboundAttachment } from '../../src/gateway/media.js';
 
 /** One captured outbound send, for assertion. */
 export interface SentMessage {
   threadId: string;
   text: string;
+  /** The attachment the caller passed, if any (messaging-media D-MM5). */
+  attachment?: OutboundAttachment;
   /** The persist flag the caller passed (the loop sends with `persist: false`). */
   persist: boolean;
 }
@@ -30,6 +34,7 @@ export class FakeGateway implements Gateway {
     typing: true,
     groups: true,
     proactiveGroup: true,
+    media: true,
   };
 
   /** Every outbound send, in order. */
@@ -53,8 +58,14 @@ export class FakeGateway implements Gateway {
     threadId: string,
     message: OutboundMessage,
     opts?: { persist?: boolean },
-  ): Promise<void> {
-    this.sent.push({ threadId, text: message.text, persist: opts?.persist ?? true });
+  ): Promise<SendResult> {
+    this.sent.push({
+      threadId,
+      text: message.text,
+      attachment: message.attachment,
+      persist: opts?.persist ?? true,
+    });
+    return {};
   }
 
   async startTyping(threadId: string): Promise<void> {

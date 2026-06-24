@@ -22,16 +22,28 @@ export function createSendMessageTool(gateway: Gateway, threadId: string, counte
       'your thinking and any other text you produce are private and never delivered. ' +
       'You may call this multiple times in one turn (each becomes a separate message), ' +
       'and calling it does NOT end your turn. If you have nothing useful to say, simply ' +
-      'do not call it.',
+      'do not call it. Optionally attach ONE image by passing its local file path (a file ' +
+      'you produced) or a public URL in "image" — to send several images, send several ' +
+      'messages. Pass the path or URL, never the raw bytes.',
     inputSchema: z.object({
       text: z.string().min(1).describe('The exact text to deliver to the user.'),
+      image: z
+        .string()
+        .optional()
+        .describe('Optional: a local file path or URL of a single image to attach.'),
     }),
-    execute: async ({ text }) => {
+    execute: async ({ text, image }) => {
       // Deliver only — the conversational loop persists the whole turn as one
       // UIMessage record afterward (D-MG9), so we don't persist per bubble here.
-      await gateway.send(threadId, { text }, { persist: false });
+      const result = await gateway.send(
+        threadId,
+        { text, ...(image ? { attachment: { pathOrUrl: image } } : {}) },
+        { persist: false },
+      );
       counter.count += 1;
-      return 'delivered';
+      // Return the media outcome so the persisted turn carries a durable,
+      // renderable ref for the dashboard (D-MM5/9). Plain string when no image.
+      return result?.media ? { status: 'delivered', media: result.media } : 'delivered';
     },
   });
 }

@@ -2,8 +2,9 @@ import { and, asc, desc, eq, isNull, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import type { Db } from '../db/client.js';
 import { messages } from '../db/schema.js';
+import { attachmentRefsOf, type AttachmentRef, type OutboundMediaResult } from './media.js';
 import { isGroupThreadId } from './threadId.js';
-import type { ChannelEvent } from './types.js';
+import type { Attachment, ChannelEvent } from './types.js';
 
 /**
  * Sunny's self-owned conversation store (messaging-gateway D-MG2), backed by
@@ -25,12 +26,24 @@ export interface StoredMessage {
   isOwner: boolean;
 }
 
-/** Inbound user message as a `UIMessage` (D-MG9) — one text part, raw text. */
-function userPayload(event: ChannelEvent): unknown {
+/**
+ * Inbound user message as a `UIMessage` (D-MG9): one text part plus a
+ * `data-attachment` part per persisted attachment (D-MM1). The parts carry only
+ * a disk REFERENCE, never the bytes — so history replay re-reads from disk
+ * instead of re-billing the bytes as tokens or re-fetching an expired URL.
+ */
+function userPayload(event: ChannelEvent, refs: AttachmentRef[]): unknown {
   return {
     id: event.messageId,
     role: 'user',
-    parts: [{ type: 'text', text: event.text }],
+    parts: [
+      { type: 'text', text: event.text },
+      ...refs.map((ref, i) => ({
+        type: 'data-attachment',
+        id: `${event.messageId}-${i}`,
+        data: ref,
+      })),
+    ],
     metadata: { createdAt: event.timestamp.toISOString() },
   };
 }
@@ -40,7 +53,7 @@ function userPayload(event: ChannelEvent): unknown {
  * Represented as a `send_message` tool call so it reads the same as a
  * conversational send in history (reinforces "speaking == send_message").
  */
-function assistantSendPayload(id: string, text: string): unknown {
+function assistantSendPayload(id: string, text: string, media?: OutboundMediaResult): unknown {
   return {
     id,
     role: 'assistant',
@@ -49,8 +62,10 @@ function assistantSendPayload(id: string, text: string): unknown {
         type: 'tool-send_message',
         toolCallId: `send-${id}`,
         state: 'output-available',
-        input: { text },
-        output: 'delivered',
+        input: { text, ...(media && 'url' in media ? { image: media.url } : {}) },
+        // The tool output carries the durable/external media ref (D-MM5/9) so the
+        // dashboard can render a standalone send's image (D-MM9).
+        output: media ? { status: 'delivered', media } : 'delivered',
       },
     ],
     metadata: { createdAt: new Date().toISOString() },
@@ -68,7 +83,7 @@ export class ConversationStore {
    * if it was a duplicate (same channel + message id) — i.e. a webhook retry
    * (durable-execution D-DE1: inbound dedup).
    */
-  async appendInbound(event: ChannelEvent): Promise<boolean> {
+  async appendInbound(event: ChannelEvent, refs: AttachmentRef[] = []): Promise<boolean> {
     const inserted = await this.db
       .insert(messages)
       .values({
@@ -79,7 +94,7 @@ export class ConversationStore {
         senderId: event.senderId,
         senderName: event.senderName ?? null,
         text: event.text,
-        payload: userPayload(event),
+        payload: userPayload(event, refs),
         isOwner: event.isOwner,
         timestamp: event.timestamp,
       })
@@ -113,7 +128,10 @@ export class ConversationStore {
       senderId: r.senderId,
       senderName: r.senderName ?? undefined,
       text: r.text,
-      attachments: [],
+      // Reconstruct attachments from the persisted payload refs (D-MM1/2): the
+      // bytes are already on disk, so the replayed event reflects them rather
+      // than dropping them to []. fetchData is omitted — nothing to re-fetch.
+      attachments: refToAttachment(r.payload),
       timestamp: r.timestamp,
       isGroup: isGroupThreadId(r.threadId),
       isOwner: r.isOwner,
@@ -130,6 +148,7 @@ export class ConversationStore {
     messageId: string,
     text: string,
     channel = 'imessage',
+    media?: OutboundMediaResult,
   ): Promise<void> {
     const id = messageId || randomUUID();
     await this.db.insert(messages).values({
@@ -140,7 +159,7 @@ export class ConversationStore {
       senderId: 'sunny',
       senderName: 'Sunny',
       text,
-      payload: assistantSendPayload(id, text),
+      payload: assistantSendPayload(id, text, media),
       isOwner: false,
       timestamp: new Date(),
     });
@@ -198,6 +217,17 @@ export class ConversationStore {
       .limit(limit);
     return rows.map(toStored);
   }
+}
+
+/** Rebuild normalized attachments (metadata only) from a stored payload's refs. */
+function refToAttachment(payload: unknown): Attachment[] {
+  return attachmentRefsOf(payload).map((ref, i) => ({
+    id: `${i}`,
+    filename: ref.name,
+    mimeType: ref.mediaType,
+    size: ref.size,
+    kind: ref.kind,
+  }));
 }
 
 function toStored(row: typeof messages.$inferSelect): StoredMessage {
