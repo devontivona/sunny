@@ -96,3 +96,36 @@ describe('delivery-recovery on the captured ghost trajectory (real Haiku)', () =
     expect(out.trim().length).toBeGreaterThan(0);
   });
 });
+
+/**
+ * When the turn completed in one go, the scratch accumulates interim progress lines
+ * ("on it", "give me a few minutes") AND the final result. The backstop delivers ONE
+ * message after the turn is done, so it must send the FINAL state — not stitch a
+ * "give me a minute" progress line onto a "done, it's live" completion (observed in
+ * the wild on a website-builder turn). The prompt now collapses that.
+ */
+describe('delivery-recovery collapses interim progress on a completed turn (real Haiku)', () => {
+  it('sends the final result, dropping contradictory progress chatter', async () => {
+    const scratch = [
+      "On it — I'll build the one-pager and host it. Give me a few minutes.",
+      'Style picked (terminal). Writing the page.',
+      "Done — it's live: https://example.waywardlane.com — built with website-builder, hosted via devbox. Want any changes?",
+    ].join('\n');
+    const messages = [
+      { role: 'user', content: [{ type: 'text', text: 'Build a one-pager about X and host it.' }] },
+    ] as unknown as ModelMessage[];
+
+    const out = await runRecoveryPass({
+      model: anthropic('claude-haiku-4-5'),
+      ownerName: 'Devon',
+      messages,
+      scratch,
+      threadId: 'regression-progress-collapse',
+    });
+
+    expect(out.trim().length).toBeGreaterThan(0);
+    expect(out).toContain('https://example.waywardlane.com'); // the actual result is delivered
+    // No contradictory "still working" progress alongside the completion.
+    expect(out.toLowerCase()).not.toMatch(/give me a (few )?minute|one moment|working on it/);
+  });
+});
