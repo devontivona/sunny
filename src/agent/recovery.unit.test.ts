@@ -1,22 +1,27 @@
 import type { ModelMessage } from 'ai';
 import { describe, expect, it } from 'vitest';
-import { sanitizeForRecovery } from './recovery.js';
+import { renderTranscript } from './recovery.js';
 
 /**
- * The delivery-recovery backstop feeds the turn's messages to a cheap Haiku call.
- * The raw trajectory carries the main model's reasoning (thinking) blocks plus
- * tool-call/tool-result parts; passing those to Haiku made it return EMPTY text in
- * production (ghosting the user). `sanitizeForRecovery` reduces messages to plain
- * text — these tests lock that shape so the fix can't silently regress.
+ * The delivery-recovery backstop renders the turn's messages as a labeled, third-
+ * person transcript (instead of replaying them as native assistant/tool turns) so
+ * the Haiku call doesn't identify as Sunny and continue the task — the production
+ * ghosting bug. These tests lock the transcript shape: speaker labels, annotated
+ * tool calls, and the omission of reasoning + raw tool-result payloads.
  */
-describe('sanitizeForRecovery', () => {
-  it('keeps text content and drops reasoning / tool-call / tool-result parts', () => {
+describe('renderTranscript', () => {
+  it('labels speakers, annotates tool calls, and omits reasoning / tool-results', () => {
     const messages = [
-      { role: 'user', content: [{ type: 'text', text: 'run uname' }] },
+      { role: 'user', content: [{ type: 'text', text: "how's it going" }] },
       {
         role: 'assistant',
         content: [
-          { type: 'reasoning', text: '', providerOptions: { anthropic: { signature: 'abc' } } },
+          {
+            type: 'reasoning',
+            text: 'thinking...',
+            providerOptions: { anthropic: { signature: 'x' } },
+          },
+          { type: 'text', text: 'going well — humming along' },
           { type: 'tool-call', toolCallId: 't1', toolName: 'bash', input: { command: 'uname -a' } },
         ],
       },
@@ -27,44 +32,59 @@ describe('sanitizeForRecovery', () => {
             type: 'tool-result',
             toolCallId: 't1',
             toolName: 'bash',
-            output: { type: 'text', value: 'Linux' },
+            output: { type: 'text', value: 'Linux janeway' },
           },
         ],
       },
       {
         role: 'assistant',
         content: [
-          { type: 'reasoning', text: '', providerOptions: { anthropic: { signature: 'def' } } },
-          { type: 'text', text: 'Linux janeway 5.15' },
+          {
+            type: 'tool-call',
+            toolCallId: 't2',
+            toolName: 'send_message',
+            input: { text: 'Linux janeway' },
+          },
         ],
       },
-      { role: 'user', content: [{ type: 'text', text: 'Fetch HN top story' }] },
-    ] as unknown as ModelMessage[];
-
-    const out = sanitizeForRecovery(messages);
-
-    // The pure tool-call assistant turn and the tool-result turn are dropped; the
-    // reasoning blocks are stripped; text survives.
-    expect(out.map((m) => m.role)).toEqual(['user', 'assistant', 'user']);
-    for (const m of out) {
-      const parts = m.content as Array<{ type: string }>;
-      expect(parts.every((p) => p.type === 'text')).toBe(true);
-    }
-    expect((out.at(-1)!.content as Array<{ text: string }>)[0]!.text).toBe('Fetch HN top story');
-  });
-
-  it('keeps plain string messages and drops empty ones', () => {
-    const messages = [
-      { role: 'user', content: 'hello' },
-      { role: 'assistant', content: '   ' },
       {
-        role: 'assistant',
-        content: [{ type: 'tool-call', toolCallId: 'x', toolName: 'bash', input: {} }],
+        role: 'user',
+        content: [
+          { type: 'file', mediaType: 'image/jpeg', filename: 'card.jpg', data: 'data:...' },
+        ],
       },
     ] as unknown as ModelMessage[];
 
-    const out = sanitizeForRecovery(messages);
-    expect(out).toHaveLength(1);
-    expect(out[0]!.content).toBe('hello');
+    const out = renderTranscript(messages, 'Devon');
+
+    expect(out.split('\n')).toEqual([
+      "Devon: how's it going",
+      'Sunny (private note): going well — humming along',
+      'Sunny [ran bash: uname -a]',
+      'Sunny (sent): Linux janeway',
+      'Devon: [sent an attachment]',
+    ]);
+    // No raw thinking or tool-result payloads leak in.
+    expect(out).not.toContain('thinking');
+    expect(out).not.toContain('tool-result');
+  });
+
+  it('truncates a long non-send tool input', () => {
+    const messages = [
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool-call',
+            toolCallId: 't1',
+            toolName: 'bash',
+            input: { command: 'x'.repeat(200) },
+          },
+        ],
+      },
+    ] as unknown as ModelMessage[];
+    const out = renderTranscript(messages, 'Devon');
+    expect(out).toMatch(/^Sunny \[ran bash: x+…\]$/);
+    expect(out.length).toBeLessThan(120);
   });
 });
