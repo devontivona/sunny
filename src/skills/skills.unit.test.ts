@@ -231,6 +231,23 @@ describe('loadAllSkills (multi-root owned repos)', () => {
     expect(all.every((s) => s.trust === 'authored')).toBe(true);
   });
 
+  it('reads a source repo that nests its skill in a `skills/<name>/` container', async () => {
+    const config = makeConfig({
+      skills: { maxSkills: 20, descriptionMaxChars: 280, repos: ['owner/devbox'] },
+    });
+    // devbox-style repo: SKILL.md lives at skills/devbox/SKILL.md alongside other files,
+    // not at the repo root or one level down.
+    const repoRoot = join(config.runtimeDir, 'skills', 'trusted', repoSlug('owner/devbox'));
+    writeSkillFile(join(repoRoot, 'skills', 'devbox'), 'devbox', 'build/run/host projects');
+    // Sibling non-skill files at the repo root must not confuse detection.
+    mkdirSync(join(repoRoot, 'src'), { recursive: true });
+    writeFileSync(join(repoRoot, 'README.md'), '# devbox\n');
+
+    const devbox = loadAllSkills(config).find((s) => s.name === 'devbox');
+    expect(devbox?.trust).toBe('authored');
+    expect(devbox?.source).toBe('owner/devbox');
+  });
+
   it('lets the primary win a name conflict with a source repo', async () => {
     const config = makeConfig({
       skills: { maxSkills: 20, descriptionMaxChars: 280, repos: ['owner/dup'] },

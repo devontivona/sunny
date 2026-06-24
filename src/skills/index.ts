@@ -200,9 +200,10 @@ function readSkillRecord(file: string, trust: TrustTier, origin?: string): Skill
 }
 
 /** Read all valid skill records from ONE root, sorted by name. Auto-detects the
- *  repo layout: a single-skill repo (a `SKILL.md` at the root) vs a collection
- *  (`<name>/SKILL.md` subdirectories). `trust` is the root's tier (by location);
- *  `origin` marks provenance for owned sources. */
+ *  repo layout: a single-skill repo (a `SKILL.md` at the root) vs a collection —
+ *  `<name>/SKILL.md` subdirectories and/or a conventional `skills/<name>/SKILL.md`
+ *  container (so a repo can ship its skill alongside other files). `trust` is the
+ *  root's tier (by location); `origin` marks provenance for owned sources. */
 export function loadSkills(
   paths: SkillsPaths,
   trust: TrustTier = 'authored',
@@ -216,11 +217,23 @@ export function loadSkills(
     const rec = readSkillRecord(rootSkill, trust, origin);
     if (rec) records.push(rec);
   } else {
-    // Collection: one skill per subdirectory.
-    for (const entry of readdirSync(paths.root, { withFileTypes: true })) {
-      if (!entry.isDirectory() || entry.name === '.git') continue;
-      const rec = readSkillRecord(join(paths.root, entry.name, 'SKILL.md'), trust, origin);
-      if (rec) records.push(rec);
+    // Collection: one skill per subdirectory — either directly under the root
+    // (`<name>/SKILL.md`) or inside a conventional `skills/` container
+    // (`skills/<name>/SKILL.md`, the agentskills.io / npx layout a repo uses when it
+    // ships the skill alongside other files). Deduped by name within the root.
+    const containers = [paths.root];
+    const skillsContainer = join(paths.root, 'skills');
+    if (existsSync(skillsContainer)) containers.push(skillsContainer);
+    const seen = new Set<string>();
+    for (const base of containers) {
+      for (const entry of readdirSync(base, { withFileTypes: true })) {
+        if (!entry.isDirectory() || entry.name === '.git') continue;
+        const rec = readSkillRecord(join(base, entry.name, 'SKILL.md'), trust, origin);
+        if (rec && !seen.has(rec.name)) {
+          seen.add(rec.name);
+          records.push(rec);
+        }
+      }
     }
   }
   records.sort((a, b) => a.name.localeCompare(b.name));
