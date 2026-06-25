@@ -36,6 +36,8 @@ import {
 import { createMemoryTools } from './tools/memory.js';
 import { createScheduleTools } from './tools/schedule.js';
 import { createCredentialTools } from './tools/credentialManage.js';
+import { createMcpTools } from './tools/mcpManage.js';
+import { assembleMcpTools } from '../mcp/loopTools.js';
 import { createBashTools } from './tools/bash.js';
 import { createSendMessageTool, type SendCounter } from './tools/sendMessage.js';
 import { createStaySilentTool, type SilenceFlag } from './tools/staySilent.js';
@@ -144,6 +146,24 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
     const silence: SilenceFlag = { silent: false };
     const sendMessageTool = createSendMessageTool(gateway, event.threadId, counter);
     const staySilentTool = createStaySilentTool(silence);
+    const ownerDm = event.isOwner && !event.isGroup;
+    // MCP servers (mcp D-MCP6/7): connect each enabled server, merge its tools into the
+    // loop set, and close after the turn. Owner-DM-only (the attended-only seam) — never
+    // in autonomous/scheduled runs, which assemble their own tool sets and never reach
+    // here. Connect failures degrade gracefully (the server's tools are just absent), with
+    // a single owner notice via the DM thread.
+    //
+    // No consent driver is wired: OAuth consent links reach the owner through Sunny's
+    // own `send_message` (mcp_manage returns the link from `probe`/`connect`), so the
+    // model stays the single voice (D-MG8). Wiring a driver here made the tool send the
+    // link directly too — the owner got the authorize message twice.
+    const notifyOwnerThread = (text: string) =>
+      void gateway.send(event.threadId, { text }, { persist: false }).catch((err) =>
+        log.warn('mcp owner notice failed', { threadId: event.threadId, err: String(err) }),
+      );
+    const mcp = ownerDm
+      ? await assembleMcpTools(config, deps.credentials, notifyOwnerThread)
+      : { tools: {}, close: () => Promise.resolve() };
     const tools = {
       // Text mode delivers the reply text directly, so there is no send_message tool.
       ...(deliveryMode === 'tool' ? { send_message: sendMessageTool } : {}),
@@ -151,16 +171,20 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
       start_job: createStartJobTool(event.threadId, config.owner.name, deps.start),
       // Self-scheduling only on owner DMs (anti-recursion: scheduled runs never
       // get these tools; D-SC4). Non-owner/group turns can't schedule.
-      ...(event.isOwner && !event.isGroup
-        ? createScheduleTools(db, event.threadId, config.timezone)
-        : {}),
+      ...(ownerDm ? createScheduleTools(db, event.threadId, config.timezone) : {}),
       // Skill authoring is a skill over bash + the `skill` helper (D-SK4), not a
       // tool — so there's nothing to register here; it rides the bash/file tools below.
       // Credential registry: owner DMs only (D-CR5). resolver verifies on register.
-      ...(event.isOwner && !event.isGroup ? createCredentialTools(config, deps.credentials) : {}),
+      ...(ownerDm ? createCredentialTools(config, deps.credentials) : {}),
+      // MCP registry tool (mcp D-MCP4): install/probe/test external MCP servers. Owner
+      // DMs only, sibling to credential_manage. No consent driver — the consent link is
+      // returned to Sunny, who relays it via send_message (single voice; no duplicate).
+      ...(ownerDm ? createMcpTools(config, deps.credentials) : {}),
       // Host tools (bash, file_read): owner DMs only — real host access, attended
       // only until command-permissioning lands (security-permissions; D-TA2).
-      ...(event.isOwner && !event.isGroup ? createBashTools(config, deps.credentials) : {}),
+      ...(ownerDm ? createBashTools(config, deps.credentials) : {}),
+      // Enabled MCP servers' tools (the bounded D-TA2 exception; results are untrusted).
+      ...mcp.tools,
       ...memoryTools,
     };
     let stepNo = 0;
@@ -347,6 +371,11 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
       await gateway.send(event.threadId, {
         text: 'Sorry — I hit an error handling that. Mind trying again?',
       });
+    } finally {
+      // Connect-per-turn (D-MCP6): close every MCP client opened for this turn.
+      await mcp.close().catch((err) =>
+        log.warn('mcp close failed', { threadId: event.threadId, err: String(err) }),
+      );
     }
   };
 }

@@ -15,6 +15,7 @@ export const NAV: NavItem[] = [
   { path: 'memory', label: 'Memory' },
   { path: 'tools', label: 'Tools' },
   { path: 'credentials', label: 'Credentials' },
+  { path: 'mcp', label: 'MCP servers' },
   { path: 'skills', label: 'Skills' },
   { path: 'conversation', label: 'Conversation' },
   { path: 'schedules', label: 'Schedules' },

@@ -12,10 +12,13 @@ import {
   setResponseStatus,
   type H3Event,
 } from 'nitro/h3';
+import { auth as completeMcpOAuth } from '@ai-sdk/mcp';
 import { getRuntime } from '../../../../src/runtime.js';
 import { messages } from '../../../../src/db/schema.js';
 import { logger } from '../../../../src/logger.js';
 import { DashboardData } from '../../../../src/dashboard/data.js';
+import { getMcpServer } from '../../../../src/mcp/registry.js';
+import { SunnyOAuthProvider, findOAuthServerByState } from '../../../../src/mcp/oauth.js';
 import {
   contentTypeForName,
   isWithinMediaRoot,
@@ -201,6 +204,48 @@ export default defineEventHandler(async (event) => {
     );
   }
 
+  // MCP OAuth callback (mcp D-MCP5). Ungated: the third-party authorization server
+  // redirects the owner's browser here with `?code&state` and NO session cookie. We
+  // match the in-flight `state` to a registered server and complete the token exchange
+  // (tokens are saved to the OAuth store, never surfaced). This is the completion half
+  // of consent — `mcp_manage` initiates it (surfaces the consent link).
+  if (path === 'mcp/oauth/callback' && method === 'GET') {
+    setResponseHeader(event, 'content-type', 'text/html; charset=utf-8');
+    const code = String(query.code ?? '');
+    const state = String(query.state ?? '');
+    if (!code || !state) {
+      setResponseStatus(event, 400);
+      return approvalPage('Missing authorization code or state.', false);
+    }
+    const serverName = findOAuthServerByState(config.runtimeDir, state);
+    const entry = serverName ? getMcpServer(config.runtimeDir, serverName) : undefined;
+    if (!serverName || !entry) {
+      setResponseStatus(event, 400);
+      return approvalPage('Unknown or expired authorization request (state mismatch).', false);
+    }
+    try {
+      const provider = new SunnyOAuthProvider({
+        runtimeDir: config.runtimeDir,
+        serverName,
+        serverUrl: entry.url,
+      });
+      await completeMcpOAuth(provider, {
+        serverUrl: entry.url,
+        authorizationCode: code,
+        callbackState: state,
+      });
+      log.info('mcp oauth callback completed', { serverName });
+      return approvalPage(
+        `Authorized "${serverName}" ✓ — you can close this tab; its tools are ready.`,
+        true,
+      );
+    } catch (err) {
+      log.error('mcp oauth callback failed', { serverName, err: String(err) });
+      setResponseStatus(event, 502);
+      return approvalPage('Could not complete authorization — ask Sunny to connect it again.', false);
+    }
+  }
+
   if (path === 'auth/logout' && method === 'POST') {
     const token = getCookie(event, SESSION_COOKIE);
     if (token && cfg.sessionSecret) {
@@ -243,6 +288,8 @@ export default defineEventHandler(async (event) => {
           return data.tools();
         case path === 'credentials':
           return data.credentials();
+        case path === 'mcp':
+          return data.mcpServers();
         case path === 'skills':
           return data.skills();
         case path.startsWith('skills/'): {

@@ -8,6 +8,7 @@ import { createStaySilentTool } from './staySilent.js';
 import { createStartJobTool } from './startJob.js';
 import { createScheduleTools } from './schedule.js';
 import { createCredentialTools } from './credentialManage.js';
+import { createMcpTools } from './mcpManage.js';
 import { createBashTools } from './bash.js';
 import { createMemoryTools } from './memory.js';
 
@@ -89,7 +90,7 @@ export function toolCatalog(config: SunnyConfig): ToolCatalogEntry[] {
   const inertStore = undefined as unknown as ConversationStore;
 
   // Mirror loop.ts assembly. `send_message`/`stay_silent`/`start_job`/memory are
-  // registered on every turn; scheduling/skills/credentials/host tools are owner-DM-only.
+  // registered on every turn; scheduling/credentials/mcp/host tools are owner-DM-only.
   const broad: Record<string, ToolLike> = {
     send_message: createSendMessageTool(inertGateway, '', counter),
     stay_silent: createStaySilentTool(silence),
@@ -99,6 +100,7 @@ export function toolCatalog(config: SunnyConfig): ToolCatalogEntry[] {
   const ownerOnly: Record<string, ToolLike> = {
     ...createScheduleTools(inertDb, '', config.timezone),
     ...createCredentialTools(config, undefined),
+    ...createMcpTools(config, undefined),
     ...createBashTools(config, undefined),
   };
 

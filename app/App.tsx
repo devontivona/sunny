@@ -10,6 +10,7 @@ import { CoreDoc } from './pages/CoreDoc';
 import { Memory } from './pages/Memory';
 import { Tools } from './pages/Tools';
 import { Credentials } from './pages/Credentials';
+import { Mcp } from './pages/Mcp';
 import { Skills } from './pages/Skills';
 import { Conversation } from './pages/Conversation';
 import { Schedules } from './pages/Schedules';
@@ -34,6 +35,8 @@ function RouteView() {
       return <Tools />;
     case 'credentials':
       return <Credentials />;
+    case 'mcp':
+      return <Mcp />;
     case 'skills':
       return <Skills name={second ? decodeURIComponent(second) : null} />;
     case 'conversation':
