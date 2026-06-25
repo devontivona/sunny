@@ -1,6 +1,8 @@
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { anthropic } from '@ai-sdk/anthropic';
 import type { SteerHandle } from '../src/agent/dispatcher.js';
 import { classifyDelivery } from '../src/agent/turn.js';
+import { memoryPaths } from '../src/memory/index.js';
 import { createTestDb } from '../tests/db.js';
 import { createTestRuntime } from '../tests/harness.js';
 import { makeChannelEvent, makeConfig, seedMemory, OWNER_THREAD } from '../tests/factories.js';
@@ -30,6 +32,17 @@ export async function runEvalCase(c: EvalCase, modelId = DEFAULT_MODEL_ID): Prom
     const config = makeConfig({ modelId, ...c.setup?.config });
     await seedMemory(config, c.setup?.memory ?? []);
 
+    // Seed the captured memory core verbatim so the rebuilt system prompt matches
+    // production (the core — esp. SUNNY.md conventions — shapes behavior; an empty core
+    // makes elicitation rates unfaithful). Written straight to the runtime's core files.
+    if (c.setup?.memoryCore) {
+      const paths = memoryPaths(config.runtimeDir);
+      mkdirSync(paths.root, { recursive: true });
+      if (c.setup.memoryCore.user != null) writeFileSync(paths.USER, c.setup.memoryCore.user);
+      if (c.setup.memoryCore.sunny != null) writeFileSync(paths.SUNNY, c.setup.memoryCore.sunny);
+      if (c.setup.memoryCore.index != null) writeFileSync(paths.INDEX, c.setup.memoryCore.index);
+    }
+
     // Evals exercise the REAL delivery-recovery path (Haiku): a missed turn must
     // actually recover so the elicitation metric reflects production behavior.
     const rt = createTestRuntime({
@@ -56,6 +69,28 @@ export async function runEvalCase(c: EvalCase, modelId = DEFAULT_MODEL_ID): Prom
         );
       } else {
         await rt.store.appendOutbound(OWNER_THREAD, `seed-${n}`, seed.text);
+      }
+    }
+
+    // Seed REAL captured turns verbatim (fixture-from-a-trace): user turns through
+    // appendInbound, assistant turns through appendTurn with their raw UIMessage payload,
+    // so the loop reconstructs the EXACT production history (incl. the scratch/send_message
+    // ratio that drives elicitation). Falls back to `text` when a row has no payload.
+    let f = 0;
+    for (const turn of c.setup?.fixtureTurns ?? []) {
+      f += 1;
+      if (turn.role === 'user') {
+        await rt.store.appendInbound(
+          makeChannelEvent({
+            threadId: OWNER_THREAD,
+            messageId: `fixture-${f}`,
+            text: turn.text,
+            isOwner: c.setup?.isOwner ?? true,
+            isGroup: c.setup?.isGroup ?? false,
+          }),
+        );
+      } else {
+        await rt.store.appendTurn(OWNER_THREAD, turn.payload ?? null, turn.text);
       }
     }
 

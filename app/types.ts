@@ -102,6 +102,14 @@ export interface TurnUsage {
   cacheWrite: number | null;
 }
 
+export interface MessageAttachment {
+  kind: 'image' | 'file' | 'video' | 'audio';
+  mediaType: string;
+  name: string;
+  /** Authenticated dashboard media route, or an external URL. */
+  src: string;
+}
+
 export interface ConversationMessage {
   id: string;
   role: 'user' | 'assistant';
@@ -109,6 +117,8 @@ export interface ConversationMessage {
   senderName: string | null;
   /** Delivered bubbles: the user's text, or each assistant `send_message`. */
   delivered: string[];
+  /** Inline image attachments (inbound + outbound), served via the auth gate. */
+  attachments: MessageAttachment[];
   /** Assistant's retained private scratch (never delivered); null for users. */
   scratch: string | null;
   delivery: string | null;

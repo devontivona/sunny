@@ -67,12 +67,16 @@ The dashboard SHALL render the memory soul: the always-on core (`SUNNY.md` and `
 - **THEN** `INDEX.md` and the list of topic documents are shown, each openable to view its contents
 
 ### Requirement: Conversation view
-The dashboard SHALL show recent conversation from the message store, grouped by thread, including each turn's role, timestamp, delivered text, and — for Sunny's turns — the retained private scratch from the stored `UIMessage` payload. It SHALL support keyword search over message history.
+The dashboard SHALL show recent conversation from the message store, grouped by thread, including each turn's role, timestamp, delivered text, and — for Sunny's turns — the retained private scratch from the stored `UIMessage` payload. It SHALL render message images (inbound and outbound) inline in the thread, served through an authenticated dashboard route (never exposing media without the dashboard's auth gate). It SHALL support keyword search over message history.
 
 #### Scenario: View recent conversation
 - **WHEN** the owner opens the conversation page for a thread
 - **THEN** recent messages are shown with role and timestamp
 - **AND** Sunny's retained scratch (working context not delivered to the user) is viewable alongside its delivered messages
+
+#### Scenario: Message images are shown
+- **WHEN** a thread contains a message with an image attachment
+- **THEN** the image is rendered inline in the conversation view, served only through the authenticated dashboard route
 
 #### Scenario: Search history
 - **WHEN** the owner enters a keyword search
@@ -120,3 +124,40 @@ The dashboard SHALL NOT render secret values. Any configuration shown SHALL be l
 #### Scenario: Config view excludes secrets
 - **WHEN** the dashboard displays configuration or health
 - **THEN** no secret (e.g. API keys, tokens) appears in the output
+
+### Requirement: Tools directory on the dashboard
+The read-only dashboard SHALL present a Tools directory listing the registered tools, each with its name, a one-line purpose, whether it is owner-only, and its input parameters (name, type, required) — derived from the live tool schema. The directory SHALL remain observe-only — it SHALL NOT expose any control to invoke, edit, or configure a tool.
+
+#### Scenario: Tools listed with purpose, owner-only flag, and parameters
+- **WHEN** the owner views the Tools directory
+- **THEN** each registered tool is listed with its purpose, owner-only flag, and input parameters
+
+#### Scenario: Tools directory is observe-only
+- **WHEN** the owner views the Tools directory
+- **THEN** no control is presented to invoke, edit, or configure any tool
+
+### Requirement: Credentials directory on the dashboard
+The read-only dashboard SHALL present a Credentials directory (its own page) listing the credential registry: each credential's name → `op://` reference and purpose — references and metadata only, never values. The directory SHALL remain observe-only — it SHALL NOT reveal any secret value, nor expose any control to add, edit, or remove a credential.
+
+#### Scenario: Credentials listed without values
+- **WHEN** the owner views the Credentials directory
+- **THEN** each registered credential is listed by name with its `op://` reference and purpose, and no secret value is shown
+
+#### Scenario: Credentials directory is observe-only
+- **WHEN** the owner views the Credentials directory
+- **THEN** no control is presented to add, edit, or remove a credential
+
+### Requirement: Skills directory on the dashboard
+The read-only dashboard SHALL present a Skills directory listing every installed and self-authored skill with its description, its trust tier (self-authored vs installed), and its source. Each skill SHALL be openable to a detail view rendering its full `SKILL.md` body and listing the other files in its directory (e.g. `scripts/`, `references/`, `assets/`). The directory SHALL remain observe-only — it SHALL NOT expose any control to run, edit, install, or delete a skill.
+
+#### Scenario: Skills listed with description and trust tier
+- **WHEN** the owner views the Skills directory
+- **THEN** each skill is listed with its description, trust tier, and source
+
+#### Scenario: Skill detail shows the SKILL.md and its files
+- **WHEN** the owner opens a skill
+- **THEN** the full `SKILL.md` body is rendered and the other files in the skill's directory are listed
+
+#### Scenario: Skills directory is observe-only
+- **WHEN** the owner views the Skills directory
+- **THEN** no control is presented to run, edit, install, or delete any skill

@@ -1,10 +1,16 @@
 import type { Dimension, EvalCase } from '../types.js';
 import { elicitationCases } from './elicitation.js';
+import { realElicitationCases } from './elicitationReal.js';
 import { memoryCases } from './memory.js';
 import { toolSelectionCases } from './toolSelection.js';
 
 /** The full versioned dataset (task 7.2 loader). */
-export const ALL_CASES: EvalCase[] = [...elicitationCases, ...memoryCases, ...toolSelectionCases];
+export const ALL_CASES: EvalCase[] = [
+  ...elicitationCases,
+  ...realElicitationCases,
+  ...memoryCases,
+  ...toolSelectionCases,
+];
 
 /** Select cases by dimension; `'all'` (or undefined) returns the whole dataset. */
 export function loadCases(dimension?: Dimension | 'all'): EvalCase[] {
@@ -12,4 +18,4 @@ export function loadCases(dimension?: Dimension | 'all'): EvalCase[] {
   return ALL_CASES.filter((c) => c.dimension === dimension);
 }
 
-export { elicitationCases, memoryCases, toolSelectionCases };
+export { elicitationCases, realElicitationCases, memoryCases, toolSelectionCases };

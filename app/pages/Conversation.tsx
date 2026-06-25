@@ -38,7 +38,28 @@ function Bubble({ m }: { m: ConversationMessage }) {
           ))}
         </div>
       ) : (
-        !m.scratch && <div className="text-fg-dim italic">(silent turn)</div>
+        !m.scratch && m.attachments.length === 0 && (
+          <div className="text-fg-dim italic">(silent turn)</div>
+        )
+      )}
+      {m.attachments.length > 0 && (
+        <div className="mt-xs flex flex-wrap gap-sm">
+          {m.attachments.map((a, i) =>
+            a.kind === 'image' ? (
+              <a key={i} href={a.src} target="_blank" rel="noreferrer">
+                <img
+                  src={a.src}
+                  alt={a.name}
+                  className="max-h-64 max-w-full rounded border border-border"
+                />
+              </a>
+            ) : (
+              <a key={i} href={a.src} target="_blank" rel="noreferrer" className="text-primary hover:underline">
+                {a.name} ({a.mediaType})
+              </a>
+            ),
+          )}
+        </div>
       )}
       {m.scratch && (
         <details className="mt-xs pl-md">

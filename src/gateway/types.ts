@@ -8,13 +8,31 @@
  * changes.
  */
 
+import type { AttachmentKind, OutboundAttachment, OutboundMediaResult } from './media.js';
+
+export type { OutboundAttachment } from './media.js';
+
 export type ChannelId = string;
 
+/**
+ * A normalized inbound attachment. Carries enough to RETRIEVE the content, not
+ * just metadata (messaging-media D-MM1): `fetchData()` pulls the bytes from the
+ * transport (Sendblue media URLs expire, so the gateway calls this promptly), or
+ * `data` holds bytes the transport already inlined. Once persisted, replayed
+ * attachments are reconstructed from the stored payload without either.
+ */
 export interface Attachment {
   id: string;
   filename: string;
   mimeType: string;
   size: number;
+  kind: AttachmentKind;
+  /** Retrieve the bytes (transport-specific). Absent on replayed/persisted refs. */
+  fetchData?: () => Promise<Buffer>;
+  /** Bytes the transport provided inline (e.g. a `data:` URI). */
+  data?: Buffer;
+  /** Source URL, if any — informational and may be short-lived. */
+  url?: string;
 }
 
 /**
@@ -36,9 +54,20 @@ export interface ChannelEvent {
   isOwner: boolean;
 }
 
-/** Outbound payload (D-MG3). Attachments/reactions are added as channels gain them. */
+/**
+ * Outbound payload (D-MG3). `attachment` carries a single optional image
+ * (messaging-media D-MM5) — a local path Sunny produced or a URL; the gateway
+ * hosts/sends it (or degrades to text, per the channel + thread).
+ */
 export interface OutboundMessage {
   text: string;
+  attachment?: OutboundAttachment;
+}
+
+/** What a send did with an attachment, for the caller to record (D-MM5/9). */
+export interface SendResult {
+  messageId?: string;
+  media?: OutboundMediaResult;
 }
 
 /** Per-channel capability flags for feature-detection + graceful degradation (D-MG3). */
@@ -49,6 +78,8 @@ export interface ChannelCapabilities {
   groups: boolean;
   /** Restart-durable, initiated group messaging — supported on Sendblue (D-MG5). */
   proactiveGroup: boolean;
+  /** Media/attachment send + receive — supported on Sendblue (D-MM7). */
+  media: boolean;
 }
 
 export type InboundHandler = (event: ChannelEvent) => Promise<void>;
@@ -69,7 +100,11 @@ export interface Gateway {
    * passes `{ persist: false }` because it rolls all of a turn's sends + scratch
    * into a single `UIMessage` turn record itself (D-MG9).
    */
-  send(threadId: string, message: OutboundMessage, opts?: { persist?: boolean }): Promise<void>;
+  send(
+    threadId: string,
+    message: OutboundMessage,
+    opts?: { persist?: boolean },
+  ): Promise<SendResult>;
 
   /** Show a typing indicator on a thread (no-op if unsupported). */
   startTyping(threadId: string): Promise<void>;

@@ -78,6 +78,30 @@ change the loop, a prompt, or model wiring, work fixture-first:
 Fixtures are the owner's own data, lightly redacted (see `realMisses.ts`). Trim oversized
 tool-result payloads only *after* confirming the trimmed fixture still reproduces.
 
+### Powered evals from real conversations (for stochastic behaviors)
+
+A deterministic regression test works for a reproducible bug. But behaviors like
+**elicitation** (does the model call `send_message` vs. leave the reply in scratch?) are
+**~50/50 stochastic** — a single run proves nothing, and a 2–3 run A/B is noise. To move
+these you need a *rate*, measured the same way Langfuse's eval structure does it:
+**dataset item from a real trace → repeated experiment runs → score → compare runs.** Our
+file-based harness mirrors that:
+
+1. **Capture** the real turn from Postgres (the source of truth — verbatim `UIMessage`
+   payloads with scratch + every tool part): `npx tsx evals/capture-turn.ts <threadId>
+   [--input-id <msgId>]`. Use the `langfuse` skill to *find* which turns missed
+   (`delivery-recovery` traces; their `langfuseSessionId` is the `threadId`).
+2. **Seed it** into an eval case via `setup.fixtureTurns` (`evals/cases/elicitationReal.ts`).
+   The harness replays it through the **real loop** (`runEvalCase`), so the model faces the
+   exact production history (the scratch/`send_message` ratio that drives the behavior) —
+   not a single stubbed model call.
+3. **Run at high `-n`** (≥10) to get a stable pass-rate; `evals/run.ts` already does N-rep
+   scoring + a `baseline.json` diff. **Establish the baseline rate first**, then A/B a change
+   and compare rates — never read a 2-run result as signal.
+
+Don't measure a prompt/loop change against synthetic elicitation cases — they pass while
+production misses ~50%, the same blind spot as a synthetic regression test.
+
 ### Definition of done (every PR)
 
 Before pushing, the deterministic suite must be green locally:

@@ -1,10 +1,23 @@
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { Chat, ConsoleLogger, type Adapter, type Message, type Thread } from 'chat';
 import { createSendblueAdapter } from 'chat-adapter-sendblue';
 import { createMemoryState } from '@chat-adapter/state-memory';
 import type { SunnyConfig } from '../config/index.js';
 import { logger } from '../logger.js';
 import { Authorizer } from './auth.js';
+import {
+  contentTypeForName,
+  kindForMediaType,
+  outboundToken,
+  persistInbound,
+  persistOutbound,
+  planOutbound,
+  publicBaseUrl,
+  publishOutbox,
+  type AttachmentRef,
+  type OutboundMediaResult,
+} from './media.js';
 import type { ConversationStore } from './store.js';
 import { isGroupThreadId } from './threadId.js';
 import type {
@@ -13,6 +26,7 @@ import type {
   Gateway,
   InboundHandler,
   OutboundMessage,
+  SendResult,
 } from './types.js';
 
 const log = logger('gateway:sendblue');
@@ -82,6 +96,7 @@ export class SendblueGateway implements Gateway {
       typing: true,
       groups: true,
       proactiveGroup: true,
+      media: true,
     };
 
     const adapter = createSendblueAdapter({
@@ -121,26 +136,115 @@ export class SendblueGateway implements Gateway {
     threadId: string,
     message: OutboundMessage,
     opts?: { persist?: boolean },
-  ): Promise<void> {
+  ): Promise<SendResult> {
+    const isGroup = isGroupThreadId(threadId);
+    // Decide how the optional attachment is delivered (D-MM5/6/7): native media in
+    // a DM, a hosted public link in a group, a URL passed straight through, or
+    // dropped (text-only) if the channel lacks media support.
+    const plan = planOutbound(message.attachment, { media: this.capabilities.media, isGroup });
+
+    let text = message.text;
+    let mediaUrl: string | undefined;
+    let media: OutboundMediaResult | undefined;
+    try {
+      if (plan.kind === 'url') {
+        mediaUrl = plan.url; // existing URL — no hosting (D-MM4)
+        media = {
+          url: plan.url,
+          mediaType: 'image/*',
+          kind: 'image',
+          name: plan.url.split('/').pop() || 'image',
+        };
+      } else if (plan.kind === 'host') {
+        const hosted = this.hostLocalFile(plan.pathOrUrl, plan.mimeType);
+        mediaUrl = hosted.publicUrl;
+        media = hosted.media;
+      } else if (plan.kind === 'link') {
+        // Group: media send is DM-only, so post the public URL as text (D-MM6).
+        if (/^https?:\/\//i.test(plan.pathOrUrl)) {
+          text = [message.text, plan.pathOrUrl].filter(Boolean).join('\n');
+          media = {
+            url: plan.pathOrUrl,
+            mediaType: 'image/*',
+            kind: 'image',
+            name: plan.pathOrUrl.split('/').pop() || 'image',
+          };
+        } else {
+          const hosted = this.hostLocalFile(plan.pathOrUrl, plan.mimeType);
+          text = [message.text, hosted.publicUrl].filter(Boolean).join('\n');
+          media = hosted.media;
+        }
+      }
+    } catch (err) {
+      // A bad image path must not ghost the text — deliver the text anyway (D-MM2).
+      log.warn('outbound attachment failed; sending text only', {
+        threadId,
+        err: String(err),
+      });
+      mediaUrl = undefined;
+      media = undefined;
+      text = message.text;
+    }
+
     const thread = this.activeThreads.get(threadId);
     let sentId: string;
-    if (thread) {
+    if (mediaUrl) {
+      // Native MMS: Sendblue fetches the public media_url server-side (DM-only).
+      // sendMediaMessage is on the Sendblue adapter, not the base `Adapter` seam.
+      await (
+        this.adapter as unknown as {
+          sendMediaMessage(threadId: string, mediaUrl: string, content?: string): Promise<void>;
+        }
+      ).sendMediaMessage(threadId, mediaUrl, text);
+      sentId = randomUUID();
+    } else if (thread) {
       // Reply within the current session — use the live thread handle.
-      const sent = await thread.post(message.text);
+      const sent = await thread.post(text);
       sentId = sent?.id ?? randomUUID();
     } else {
       // Proactive send (no live thread this session, e.g. a scheduled run or a
       // durable job completing after a restart): Sendblue REST send by thread id.
-      const sent = await this.adapter.postMessage(threadId, message.text);
+      const sent = await this.adapter.postMessage(threadId, text);
       sentId = (sent as { id?: string })?.id ?? randomUUID();
     }
     // The conversational loop persists its own per-turn record (D-MG9), so it
     // opts out here; proactive/Tier-2 sends persist a standalone outbound row.
     if (opts?.persist ?? true) {
-      await this.store.appendOutbound(threadId, sentId, message.text);
+      await this.store.appendOutbound(threadId, sentId, text, 'imessage', media);
     }
-    log.info('sent message', { threadId, messageId: sentId, proactive: !thread });
-    if (logContent()) log.info('outbound content', { threadId, text: message.text });
+    log.info('sent message', {
+      threadId,
+      messageId: sentId,
+      proactive: !thread,
+      media: media ? ('path' in media ? 'hosted' : 'url') : 'none',
+    });
+    if (logContent()) log.info('outbound content', { threadId, text });
+    return { messageId: sentId, media };
+  }
+
+  /**
+   * Host a local file for outbound media (D-MM4): persist a durable copy (for
+   * dashboard rendering) and a short-TTL public-outbox copy, and build the public
+   * URL Sendblue fetches. Bytes never hit the log (D-MM8).
+   */
+  private hostLocalFile(
+    path: string,
+    mimeType?: string,
+  ): { publicUrl: string; media: OutboundMediaResult } {
+    const bytes = readFileSync(path);
+    const mediaType = mimeType ?? contentTypeForName(path);
+    const token = outboundToken();
+    const durablePath = persistOutbound(this.config.runtimeDir, token, bytes, mediaType);
+    const outboxName = publishOutbox(this.config.runtimeDir, bytes, mediaType);
+    return {
+      publicUrl: `${publicBaseUrl()}/media/${outboxName}`,
+      media: {
+        path: durablePath,
+        mediaType,
+        kind: kindForMediaType(mediaType),
+        name: path.split('/').pop() || 'image',
+      },
+    };
   }
 
   async startTyping(threadId: string): Promise<void> {
@@ -197,23 +301,46 @@ export class SendblueGateway implements Gateway {
       senderId,
       senderName: message.author.fullName,
       text: message.text,
-      attachments: message.attachments.map((a) => ({
-        id: a.url ?? a.name ?? '',
-        filename: a.name ?? '',
-        mimeType: a.mimeType ?? 'application/octet-stream',
-        size: a.size ?? 0,
-      })),
+      attachments: message.attachments.map((a) => {
+        const mimeType = a.mimeType ?? 'application/octet-stream';
+        return {
+          id: a.url ?? a.name ?? '',
+          filename: a.name ?? '',
+          mimeType,
+          size: a.size ?? 0,
+          kind: a.type ?? kindForMediaType(mimeType),
+          // Retrievable content (D-MM1): the adapter exposes fetchData (a plain
+          // fetch of the expiring media_url) or inlined bytes for data: URIs.
+          fetchData: a.fetchData,
+          data: a.data instanceof Buffer ? a.data : undefined,
+          url: a.url,
+        };
+      }),
       timestamp: message.metadata?.dateSent ?? new Date(),
       isGroup,
       isOwner: auth.isOwner,
     };
 
+    // Fetch + persist attachment bytes PROMPTLY (Sendblue URLs expire, D-MM2). A
+    // per-attachment failure is non-fatal: the message + other attachments still
+    // go through, with the failure recorded as a note.
+    const refs = event.attachments.length > 0 ? await this.persistAttachments(event) : [];
+
     // Persist on arrival with dedup (D-DE1): a webhook retry of the same message
     // is a no-op and is not re-processed.
-    const inserted = await this.store.appendInbound(event);
+    const inserted = await this.store.appendInbound(event, refs);
     if (!inserted) {
       log.info('duplicate inbound; skipping', { messageId: event.messageId });
       return;
+    }
+    if (event.attachments.length > 0) {
+      // Metadata only — attachment bytes never hit the log (D-MM8).
+      log.info('inbound attachments', {
+        messageId: event.messageId,
+        count: event.attachments.length,
+        types: event.attachments.map((a) => a.mimeType),
+        saved: refs.filter((r) => r.path).length,
+      });
     }
     if (logContent()) {
       log.info('inbound content', {
@@ -229,5 +356,47 @@ export class SendblueGateway implements Gateway {
       return;
     }
     await this.inboundHandler(event);
+  }
+
+  /**
+   * Fetch + persist each attachment's bytes to disk (D-MM2). Returns a ref per
+   * attachment (saved path, or `error` if the fetch failed — never throws, so one
+   * bad attachment can't drop the message). Bytes stay out of the log (D-MM8).
+   */
+  private async persistAttachments(event: ChannelEvent): Promise<AttachmentRef[]> {
+    const refs: AttachmentRef[] = [];
+    for (let i = 0; i < event.attachments.length; i++) {
+      const a = event.attachments[i]!;
+      const name = a.filename || `attachment-${i}`;
+      try {
+        const bytes = a.data ?? (a.fetchData ? await a.fetchData() : null);
+        if (!bytes || bytes.length === 0) throw new Error('no attachment content');
+        const path = persistInbound(this.config.runtimeDir, event.messageId, i, bytes, a.mimeType);
+        refs.push({
+          path,
+          mediaType: a.mimeType,
+          kind: a.kind,
+          name,
+          size: bytes.length,
+          direction: 'inbound',
+        });
+      } catch (err) {
+        log.warn('inbound attachment fetch failed (non-fatal)', {
+          messageId: event.messageId,
+          index: i,
+          err: String(err),
+        });
+        refs.push({
+          path: null,
+          mediaType: a.mimeType,
+          kind: a.kind,
+          name,
+          size: a.size,
+          direction: 'inbound',
+          error: String(err),
+        });
+      }
+    }
+    return refs;
   }
 }
