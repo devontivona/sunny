@@ -62,11 +62,33 @@ export interface ConversationSeed {
   senderName?: string;
 }
 
+/** One REAL captured turn for a fixture-from-a-trace (built by `evals/capture-turn.ts`
+ *  from the persisted Postgres rows). Seeded verbatim through the store so the loop
+ *  reconstructs the EXACT production history a turn ran against. */
+export interface FixtureTurn {
+  role: 'user' | 'assistant';
+  /** Flattened text projection (delivered/inbound text). */
+  text: string;
+  /** The rich `UIMessage` payload — for an assistant turn this carries the scratch +
+   *  every tool part incl. `send_message`, seeded via `appendTurn` so history (and the
+   *  send/scratch ratio that drives elicitation) reconstructs faithfully. */
+  payload?: unknown;
+}
+
 export interface EvalCaseSetup {
   /** Seeded memory core, written through the REAL `applyMemoryWrite` (D15). */
   memory?: MemoryWriteInput[];
   /** Prior conversation, seeded through the REAL store APIs. */
   conversation?: ConversationSeed[];
+  /** REAL captured turns (from `evals/capture-turn.ts`) seeded verbatim — assistant turns
+   *  via `appendTurn` with their raw `UIMessage` payload — so the loop replays the exact
+   *  production history. This is how a fixture-from-a-real-conversation drives the eval. */
+  fixtureTurns?: FixtureTurn[];
+  /** Snapshot of the real memory core (USER/SUNNY/INDEX) captured with the fixture, written
+   *  to the eval runtime's memory files so `buildSystemPrompt` reconstructs the SAME system
+   *  prompt production used. WITHOUT this the eval is ~half the prompt short (incl. SUNNY.md's
+   *  behavior conventions) and elicitation rates are not production-representative. */
+  memoryCore?: { user?: string; sunny?: string; index?: string };
   /** Config overrides (e.g. a small `recentWindowSize` to push an archive out of window). */
   config?: Partial<SunnyConfig>;
   isOwner?: boolean;
