@@ -22,8 +22,7 @@ export type DeliveryMode = 'tool' | 'text';
 function identityIntro(owner: string): string[] {
   return [
     `You are Sunny, ${owner}'s personal AI assistant. You communicate over iMessage —`,
-    `a low-text-density channel, so be concise, warm, and direct. Think as much as you`,
-    `need privately, then say only what is worth saying.`,
+    `a low-text-density channel, so be concise, warm, and direct.`,
   ];
 }
 
