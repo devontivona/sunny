@@ -19,6 +19,58 @@ export interface TopicDoc {
   content: string;
 }
 
+export interface ToolParam {
+  name: string;
+  type: string;
+  required: boolean;
+  description?: string;
+}
+
+export interface ToolEntry {
+  name: string;
+  purpose: string;
+  ownerOnly: boolean;
+  params: ToolParam[];
+}
+
+export interface ToolsView {
+  tools: ToolEntry[];
+}
+
+export interface CredentialEntry {
+  name: string;
+  /** `op://vault/item/field` reference — a pointer, never the value. */
+  reference: string;
+  purpose: string | null;
+}
+
+export interface CredentialsView {
+  credentials: CredentialEntry[];
+}
+
+export interface SkillEntry {
+  name: string;
+  description: string;
+  /** 'authored' (self-written, trusted) or 'installed' (third-party). */
+  trust: string;
+  source: string | null;
+}
+
+export interface SkillsView {
+  skills: SkillEntry[];
+}
+
+export interface SkillDetail {
+  name: string;
+  description: string;
+  trust: string;
+  source: string | null;
+  /** The rendered SKILL.md body (markdown). */
+  body: string;
+  /** Dir-relative paths of every file in the skill (incl. SKILL.md). */
+  files: string[];
+}
+
 export interface TurnUsage {
   in: number | null;
   out: number | null;
@@ -66,6 +118,24 @@ export interface SearchHit {
   timestamp: string;
   senderName: string | null;
   text: string;
+}
+
+export interface JobRunView {
+  id: string;
+  /** Humanized run name: 'Background job' | 'Scheduled job' | raw function. */
+  kind: string;
+  name: string;
+  status: string;
+  createdAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  durationMs: number | null;
+  stepCount: number;
+  failedSteps: number;
+}
+
+export interface JobsView {
+  jobs: JobRunView[];
 }
 
 export interface ScheduleRunView {

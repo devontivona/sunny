@@ -27,7 +27,13 @@ import { LangfuseSpanProcessor } from '@langfuse/otel';
 import type { SpanProcessor, ReadableSpan, Span } from '@opentelemetry/sdk-trace-base';
 import type { AttributeValue } from '@opentelemetry/api';
 import { defaultRedactor, type Redactor } from './redact.js';
+import { telemetryEnabled } from './enabled.js';
 import { logger } from '../logger.js';
+
+// Re-export so existing importers (e.g. the agent loop) keep their path; the env-only
+// check lives in `enabled.js` so workflow/sandbox code can import it without the
+// heavy OTel/Langfuse deps above.
+export { telemetryEnabled };
 
 const log = logger('observability:otel');
 
@@ -87,16 +93,6 @@ export class RedactingSpanProcessor implements SpanProcessor {
     }
     return undefined;
   }
-}
-
-/**
- * Tracing is on when Langfuse credentials are present and not explicitly
- * disabled. Used both to decide whether to start the SDK and to gate the
- * per-call `experimental_telemetry.isEnabled` flag.
- */
-export function telemetryEnabled(): boolean {
-  if (process.env.SUNNY_OTEL_DISABLED === '1') return false;
-  return Boolean(process.env.LANGFUSE_PUBLIC_KEY && process.env.LANGFUSE_SECRET_KEY);
 }
 
 /** Start the OTel SDK + Langfuse exporter. Idempotent; no-op when disabled. */

@@ -18,7 +18,12 @@ export function createScheduleTools(db: Db, ownerThreadId: string, timezone: str
       `expression (evaluated in the user's timezone, ${timezone}). prompt = what you should ` +
       'do when it fires. The result is delivered to the user automatically.',
     inputSchema: z.object({
-      kind: z.enum(['once', 'interval', 'cron']),
+      kind: z
+        .enum(['once', 'interval', 'cron'])
+        .describe(
+          "'once' (one-time, ISO timestamp) · 'interval' (recurring duration) · 'cron' (5-field " +
+            'cron expression).',
+        ),
       spec: z
         .string()
         .describe("once: ISO timestamp · interval: duration (e.g. '2h') · cron: '0 9 * * *'"),
@@ -59,7 +64,9 @@ export function createScheduleTools(db: Db, ownerThreadId: string, timezone: str
 
   const schedule_delete = tool({
     description: 'Delete (cancel) a schedule by its id.',
-    inputSchema: z.object({ id: z.string() }),
+    inputSchema: z.object({
+      id: z.string().describe('The schedule id to cancel (from schedule_list).'),
+    }),
     execute: async ({ id }) => {
       const ok = await deleteSchedule(db, id);
       return ok ? `Deleted schedule ${id}.` : `No schedule with id ${id}.`;

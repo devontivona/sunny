@@ -239,6 +239,17 @@ export default defineEventHandler(async (event) => {
         }
         case path === 'conversation/search':
           return await data.search(String(query.q ?? ''));
+        case path === 'tools':
+          return data.tools();
+        case path === 'credentials':
+          return data.credentials();
+        case path === 'skills':
+          return data.skills();
+        case path.startsWith('skills/'): {
+          const name = decodeURIComponent(path.slice('skills/'.length));
+          const detail = data.skill(name);
+          return detail ?? json(404, { error: 'skill not found' });
+        }
         case path === 'media': {
           // Authenticated media serving (messaging-media D-MM9): stream a row's
           // i-th renderable image from disk. Confined to the media root — never a
@@ -263,6 +274,8 @@ export default defineEventHandler(async (event) => {
         }
         case path === 'schedules':
           return { schedules: await data.schedules() };
+        case path === 'jobs':
+          return await data.jobs();
         case path === 'activity':
           return await data.activity();
         case path === 'health':

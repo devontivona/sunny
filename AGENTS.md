@@ -57,6 +57,51 @@ Two layers split on the determinism/cost axis (design `testing-and-evals`):
 - **Fixtures** — typed builders in `tests/factories.ts` (deterministic; **no faker**).
   Property-based tests (`fast-check`) cover the pure normalizers only.
 
+### Reproduce loop/prompt/model bugs from REAL conversations, not synthetic inputs
+
+Agent-behavior bugs (delivery, elicitation, recovery, summarization) usually depend on
+the *full* real context — token scale, the tool-call/reasoning trajectory, accumulated
+scratch — that a hand-written input does not reproduce. A real case: a recovery-ghosting
+bug returned empty **every time** on the captured 145k-token trajectory but **never** on
+a minimal synthetic one, so a synthetic "regression test" guarded nothing. So when you
+change the loop, a prompt, or model wiring, work fixture-first:
+
+1. **Capture the offending turn from production** and save its input as a fixture —
+   `langfuse-cli` (the `langfuse` skill: `npx langfuse-cli api traces get <id>`, base
+   URL from `LANGFUSE_BASE_URL`) or query Postgres directly. Examples already in the
+   repo: `evals/cases/fixtures/recoveryGhostTrajectory.json` (a full captured trajectory
+   + scratch) and the `RealMiss` entries in `evals/cases/fixtures/realMisses.ts`.
+2. **Write the test/eval against that fixture and watch it FAIL first** — reproduce the
+   bug before touching code. A test you never saw red proves nothing.
+3. Make the change; confirm the same test goes green. Keep the fixture as the guard.
+
+Fixtures are the owner's own data, lightly redacted (see `realMisses.ts`). Trim oversized
+tool-result payloads only *after* confirming the trimmed fixture still reproduces.
+
+### Powered evals from real conversations (for stochastic behaviors)
+
+A deterministic regression test works for a reproducible bug. But behaviors like
+**elicitation** (does the model call `send_message` vs. leave the reply in scratch?) are
+**~50/50 stochastic** — a single run proves nothing, and a 2–3 run A/B is noise. To move
+these you need a *rate*, measured the same way Langfuse's eval structure does it:
+**dataset item from a real trace → repeated experiment runs → score → compare runs.** Our
+file-based harness mirrors that:
+
+1. **Capture** the real turn from Postgres (the source of truth — verbatim `UIMessage`
+   payloads with scratch + every tool part): `npx tsx evals/capture-turn.ts <threadId>
+   [--input-id <msgId>]`. Use the `langfuse` skill to *find* which turns missed
+   (`delivery-recovery` traces; their `langfuseSessionId` is the `threadId`).
+2. **Seed it** into an eval case via `setup.fixtureTurns` (`evals/cases/elicitationReal.ts`).
+   The harness replays it through the **real loop** (`runEvalCase`), so the model faces the
+   exact production history (the scratch/`send_message` ratio that drives the behavior) —
+   not a single stubbed model call.
+3. **Run at high `-n`** (≥10) to get a stable pass-rate; `evals/run.ts` already does N-rep
+   scoring + a `baseline.json` diff. **Establish the baseline rate first**, then A/B a change
+   and compare rates — never read a 2-run result as signal.
+
+Don't measure a prompt/loop change against synthetic elicitation cases — they pass while
+production misses ~50%, the same blind spot as a synthetic regression test.
+
 ### Definition of done (every PR)
 
 Before pushing, the deterministic suite must be green locally:
@@ -77,7 +122,7 @@ What the *same PR* must include, by change type:
 | New/changed DB query, schema, or migration | Integration test against PGlite (incl. recall/FTS if touched) |
 | New/changed **agent behavior** (prompt, loop, tool, model, memory wiring) | Add/extend an eval case **and** run `npm run eval`, pasting the scorecard delta |
 | New gateway/transport seam or normalization | Unit test (normalization) + integration test if it touches the store |
-| Bug fix | A regression test that fails before the fix and passes after |
+| Bug fix | A regression test that fails before the fix and passes after. For loop/prompt/model bugs, derive the fixture from a **real captured turn** (Langfuse/PG), not a synthetic input — see "Reproduce … from REAL conversations" |
 | Docs/config-only, no behavior change | None — state "no behavior change" in the PR |
 
 Checklist (mirrored in `.github/pull_request_template.md`):

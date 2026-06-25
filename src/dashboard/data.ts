@@ -1,9 +1,13 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { messages, scheduleRuns, schedules } from '../db/schema.js';
 import type { SunnyConfig } from '../config/index.js';
 import { loadCore, memoryPaths, readTopic, sanitizeTopic } from '../memory/index.js';
+import { listCredentials } from '../credentials/index.js';
+import { loadAllSkills, parseSkill, sanitizeSkillName } from '../skills/index.js';
+import { toolCatalog } from '../agent/tools/catalog.js';
 import { renderableMedia, type AttachmentKind } from '../gateway/media.js';
 
 /**
@@ -47,6 +51,72 @@ export class DashboardData {
     const safe = sanitizeTopic(name);
     const content = readTopic(memoryPaths(this.config.runtimeDir), safe);
     return content === null ? null : { name: safe, content };
+  }
+
+  // --- Capabilities (tools / credentials / skills) -------------------------
+  // Observe-only directories (web-dashboard agent-tooling delta). Data-driven
+  // from the live tool catalog, credential registry, and skill loader — no
+  // values, no controls. Capabilities added by later tasks surface here for free.
+
+  /** Registered tools: name + purpose + owner-only flag + input parameters. */
+  tools(): { tools: ReturnType<typeof toolCatalog> } {
+    return { tools: toolCatalog(this.config) };
+  }
+
+  /** The credential registry: names → `op://` references + purposes. References
+   *  are pointers, never values (D-CR2/D-CR5) — no secret is ever served. */
+  credentials(): { credentials: { name: string; reference: string; purpose: string | null }[] } {
+    return {
+      credentials: listCredentials(this.config.runtimeDir).map((c) => ({
+        name: c.name,
+        reference: c.reference,
+        purpose: c.purpose ?? null,
+      })),
+    };
+  }
+
+  /** All skills across every root (primary + owned source repos), with description,
+   *  trust tier, and source/provenance. */
+  skills(): {
+    skills: { name: string; description: string; trust: string; source: string | null }[];
+  } {
+    return {
+      skills: loadAllSkills(this.config).map((s) => ({
+        name: s.name,
+        description: s.description,
+        trust: s.trust,
+        source: s.source ?? null,
+      })),
+    };
+  }
+
+  /** One skill in full: its metadata, the rendered SKILL.md body, and the other
+   *  files in its directory (scripts/, references/, assets/). Resolves across all
+   *  roots via the skill's own SKILL.md path. Observe-only. */
+  skill(name: string): {
+    name: string;
+    description: string;
+    trust: string;
+    source: string | null;
+    body: string;
+    files: string[];
+  } | null {
+    let slug: string;
+    try {
+      slug = sanitizeSkillName(name);
+    } catch {
+      return null;
+    }
+    const record = loadAllSkills(this.config).find((r) => sanitizeSkillName(r.name) === slug);
+    if (!record) return null;
+    return {
+      name: record.name,
+      description: record.description,
+      trust: record.trust,
+      source: record.source ?? null,
+      body: parseSkill(readFileSync(record.file, 'utf8')).body,
+      files: listSkillFiles(dirname(record.file)),
+    };
   }
 
   // --- Conversation --------------------------------------------------------
@@ -161,6 +231,61 @@ export class DashboardData {
     return out;
   }
 
+  // --- Durable jobs (WDK runs) ---------------------------------------------
+  // Observe-only view of the Workflow DevKit world: background jobs (start_job →
+  // runJob) and scheduled runs (runScheduledJob) are durable workflow runs recorded
+  // in the `workflow.*` schema. The dashboard surfaces them so a job that hangs or
+  // fails is visible (previously there was no signal anywhere). Read-only; the WDK
+  // tables aren't in the app's drizzle schema, so this reads them with raw SQL.
+
+  async jobs(limit = 30): Promise<{
+    jobs: {
+      id: string;
+      kind: string;
+      name: string;
+      status: string;
+      createdAt: string;
+      startedAt: string | null;
+      completedAt: string | null;
+      durationMs: number | null;
+      stepCount: number;
+      failedSteps: number;
+    }[];
+  }> {
+    const res = await this.db.execute(sql`
+      select r.id, r.name, r.status, r.created_at, r.started_at, r.completed_at,
+        (select count(*)::int from workflow.workflow_steps s where s.run_id = r.id) as step_count,
+        (select count(*)::int from workflow.workflow_steps s
+           where s.run_id = r.id and s.status = 'failed') as failed_steps
+      from workflow.workflow_runs r
+      order by r.created_at desc
+      limit ${limit}
+    `);
+    const rows = (res as unknown as { rows: Record<string, unknown>[] }).rows ?? [];
+    const iso = (v: unknown) => (v ? new Date(v as string).toISOString() : null);
+    return {
+      jobs: rows.map((r) => {
+        const startedAt = iso(r.started_at);
+        const completedAt = iso(r.completed_at);
+        return {
+          id: String(r.id),
+          kind: jobKind(String(r.name)),
+          name: String(r.name),
+          status: String(r.status),
+          createdAt: iso(r.created_at) ?? new Date(0).toISOString(),
+          startedAt,
+          completedAt,
+          durationMs:
+            startedAt && completedAt
+              ? new Date(completedAt).getTime() - new Date(startedAt).getTime()
+              : null,
+          stepCount: Number(r.step_count ?? 0),
+          failedSteps: Number(r.failed_steps ?? 0),
+        };
+      }),
+    };
+  }
+
   // --- Activity & health ---------------------------------------------------
 
   async activity(limit = 50) {
@@ -242,6 +367,30 @@ export class DashboardData {
 }
 
 // --- helpers ---------------------------------------------------------------
+
+/** List every file in a skill directory as sorted, dir-relative paths (e.g.
+ *  `SKILL.md`, `scripts/build.sh`, `assets/theme.css`) — so the dashboard can show
+ *  what else ships with a skill beyond SKILL.md. */
+function listSkillFiles(dir: string): string[] {
+  const out: string[] = [];
+  const walk = (rel: string) => {
+    for (const entry of readdirSync(join(dir, rel), { withFileTypes: true })) {
+      if (entry.name === '.git') continue;
+      const r = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) walk(r);
+      else if (entry.isFile()) out.push(r);
+    }
+  };
+  walk('');
+  return out.sort();
+}
+
+/** Humanize a WDK run name (`workflow//./workflows/job//runJob`) for display. */
+function jobKind(name: string): string {
+  if (name.endsWith('runJob')) return 'Background job';
+  if (name.endsWith('runScheduledJob')) return 'Scheduled job';
+  return name.split('//').filter(Boolean).pop() ?? name;
+}
 
 /** Parse `- name — summary` / `name: summary` lines from INDEX.md. */
 function parseIndexSummaries(index: string): Map<string, string> {

@@ -16,6 +16,14 @@ export const ConfigSchema = z.object({
   thinking: z.enum(['adaptive', 'off']).default('adaptive'),
   /** Reasoning effort for agentic turns when thinking is on (D-PS3). */
   effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).default('high'),
+  /**
+   * How replies are delivered (D-MG8): `tool` — the model speaks only via the
+   * `send_message` tool (a missed call is recovered by the recovery pass); `text` —
+   * the model's reply text IS the message (delivered directly as bubbles), and it
+   * calls `stay_silent` to say nothing. `text` removes the send_message friction
+   * that makes the model over-choose silence.
+   */
+  deliveryMode: z.enum(['tool', 'text']).default('tool'),
   /** Devon's timezone (used by scheduling later). */
   timezone: z.string().default('America/New_York'),
   /** Owner identity allowlist — phone numbers / emails (messaging-gateway D-MG6, task 2.4). */
@@ -37,6 +45,22 @@ export const ConfigSchema = z.object({
       indexMaxChars: z.number().int().positive().default(2000),
     })
     .default({ userMaxChars: 8000, sunnyMaxChars: 6000, indexMaxChars: 2000 }),
+  /** Always-on skills index budget (agent-skills D-SK2) + optional dedicated repo (D-SK8). */
+  skills: z
+    .object({
+      /** Max skills shown in the always-on index (rest are dropped, names retained later). */
+      maxSkills: z.number().int().positive().default(20),
+      /** Max chars per skill description in the index. */
+      descriptionMaxChars: z.number().int().positive().default(280),
+      /** Primary canonical skill repo (owner/repo or URL): the WRITABLE store of record
+       *  for self-authored skills, cloned to `~/.sunny/skills/authored` (D-SK8). */
+      repo: z.string().optional(),
+      /** Additional OWNED skill repos (owner/repo or URL): read-only sources cloned to
+       *  `~/.sunny/skills/trusted/<slug>` and ff-synced alongside the primary (D-SK8). Add
+       *  more anytime; Sunny never writes to these. */
+      repos: z.array(z.string()).default([]),
+    })
+    .default({ maxSkills: 20, descriptionMaxChars: 280, repos: [] }),
   server: z
     .object({
       /** HTTP webhook listener port (task 2.2). */
@@ -56,6 +80,7 @@ const DEFAULT_CONFIG_JSON = `{
   "modelId": "claude-opus-4-8",
   "recoveryModelId": "claude-haiku-4-5",
   "effort": "high",
+  "deliveryMode": "tool",
   "timezone": "America/New_York",
   "owner": {
     "name": "Devon",
@@ -67,6 +92,10 @@ const DEFAULT_CONFIG_JSON = `{
     "userMaxChars": 8000,
     "sunnyMaxChars": 6000,
     "indexMaxChars": 2000
+  },
+  "skills": {
+    "maxSkills": 20,
+    "descriptionMaxChars": 280
   },
   "server": {
     "port": 8787,

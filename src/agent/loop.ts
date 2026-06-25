@@ -12,7 +12,10 @@ import type { SunnyConfig } from '../config/index.js';
 import type { ChannelEvent, Gateway } from '../gateway/types.js';
 import type { ConversationStore } from '../gateway/store.js';
 import type { Db } from '../db/client.js';
+import type { CredentialResolver } from '../credentials/index.js';
 import { loadCore, memoryPaths } from '../memory/index.js';
+import { loadAllSkills, renderSkillIndex } from '../skills/index.js';
+import { AGENT_STEP_LIMIT } from './limits.js';
 import { logger } from '../logger.js';
 import { telemetryEnabled } from '../observability/instrumentation.js';
 import { ensureConsolidationSchedule } from '../scheduler/index.js';
@@ -32,6 +35,8 @@ import {
 } from './turn.js';
 import { createMemoryTools } from './tools/memory.js';
 import { createScheduleTools } from './tools/schedule.js';
+import { createCredentialTools } from './tools/credentialManage.js';
+import { createBashTools } from './tools/bash.js';
 import { createSendMessageTool, type SendCounter } from './tools/sendMessage.js';
 import { createStaySilentTool, type SilenceFlag } from './tools/staySilent.js';
 import { createStartJobTool, type StartJob } from './tools/startJob.js';
@@ -53,6 +58,13 @@ export interface AgentRunnerDeps {
    * `start_job`. Production omits it and the tool uses the real WDK `start`.
    */
   start?: StartJob;
+  /**
+   * Credential resolver (credentials D-CR2). Production builds it from
+   * `OP_SERVICE_ACCOUNT_TOKEN`; tools resolve a credential by name via the registry
+   * (`resolveByName`, D-CR5). Absent when no token is configured — `credential_manage`
+   * register then records without verifying, and credentialed tools are unavailable.
+   */
+  credentials?: CredentialResolver;
   /**
    * Test/eval seam: override the cheap model used by the delivery-recovery pass
    * (D-MG8). Production omits it and uses `getRecoveryModel(config)` (Haiku).
@@ -109,7 +121,12 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
     // between turns anyway. Verify via cachedIn / cacheWriteIn in the turn log.
     const instructions: SystemModelMessage = {
       role: 'system',
-      content: buildSystemPrompt(config, loadCore(paths), deliveryMode),
+      content: buildSystemPrompt(
+        config,
+        loadCore(paths),
+        deliveryMode,
+        renderSkillIndex(loadAllSkills(config), config.skills),
+      ),
       providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
     };
     // The prompt must end with a user message (Anthropic rejects ending on an
@@ -137,13 +154,24 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
       ...(event.isOwner && !event.isGroup
         ? createScheduleTools(db, event.threadId, config.timezone)
         : {}),
+      // Skill authoring is a skill over bash + the `skill` helper (D-SK4), not a
+      // tool — so there's nothing to register here; it rides the bash/file tools below.
+      // Credential registry: owner DMs only (D-CR5). resolver verifies on register.
+      ...(event.isOwner && !event.isGroup ? createCredentialTools(config, deps.credentials) : {}),
+      // Host tools (bash, file_read): owner DMs only — real host access, attended
+      // only until command-permissioning lands (security-permissions; D-TA2).
+      ...(event.isOwner && !event.isGroup ? createBashTools(config, deps.credentials) : {}),
       ...memoryTools,
     };
+    let stepNo = 0;
     const agent = new ToolLoopAgent({
       model,
       instructions,
       tools,
-      stopWhen: stepCountIs(20),
+      // No work cap — loop until the model stops calling tools on its own; the high
+      // limit is only a runaway backstop (D: lifted the old 20-step cap that cut off
+      // real multi-step work like building + hosting a site).
+      stopWhen: stepCountIs(AGENT_STEP_LIMIT),
       providerOptions: anthropicProviderOptions(config),
       // OpenTelemetry → Langfuse (D-OB1): emit LLM/tool/step spans for this turn.
       // The trajectory IS this trace (D-OB2). `langfuseSessionId` groups a thread's
@@ -174,6 +202,26 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
           content: event.isGroup && e.senderName ? `${e.senderName}: ${e.text}` : e.text,
         }));
         return { messages: [...stepMessages, ...extra] };
+      },
+      // Live per-step trace — see the loop as it runs (each model step + its tool
+      // calls/results), not just the end-of-turn summary. Credential values are
+      // already masked by the tools; tool inputs carry only references/names.
+      onStepFinish: (step) => {
+        stepNo += 1;
+        const calls = step.toolCalls.flatMap((c) =>
+          c ? [`${c.toolName}(${previewArg(c.input)})`] : [],
+        );
+        const results = step.toolResults.flatMap((r) =>
+          r ? [`${r.toolName} → ${previewArg((r as { output?: unknown }).output)}`] : [],
+        );
+        log.info('turn step', {
+          threadId: event.threadId,
+          step: stepNo,
+          finish: step.finishReason,
+          ...(calls.length ? { calls } : {}),
+          ...(results.length ? { results } : {}),
+          ...(step.text.trim() ? { text: previewArg(step.text) } : {}),
+        });
       },
     });
 
@@ -240,9 +288,16 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
               await gateway.send(event.threadId, { text: recoveryText }, { persist: false });
               parts = [...parts, sendMessagePart(recoveryText, 'recovery-0')];
               delivered = 'send_message';
+            } else {
+              // The backstop is the last line of defense; an empty result means the
+              // user is GHOSTED despite the turn having written a reply. That must never
+              // happen silently — surface it as a critical error (the prompt should make
+              // an empty composition impossible; if this fires, the prompt regressed).
+              log.error('CRITICAL: delivery recovery returned empty — user ghosted', {
+                threadId: event.threadId,
+                scratchLen: scratch.length,
+              });
             }
-            // Empty result → the backstop had nothing to send; leave it as
-            // fallback_text (recovered=true) so the rare no-send miss stays visible.
           } catch (err) {
             log.error('recovery pass failed', { threadId: event.threadId, err: String(err) });
           }
@@ -294,6 +349,21 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
       });
     }
   };
+}
+
+/** Compact one-line preview of a tool input/result/text for the live step trace. */
+function previewArg(v: unknown, max = 140): string {
+  let s: string;
+  if (typeof v === 'string') s = v;
+  else {
+    try {
+      s = JSON.stringify(v) ?? String(v);
+    } catch {
+      s = String(v);
+    }
+  }
+  s = s.replace(/\s+/g, ' ').trim();
+  return s.length > max ? `${s.slice(0, max)}…` : s;
 }
 
 /** Per-turn observability: tools used, delivery path, tokens, latency. */

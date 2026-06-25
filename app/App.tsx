@@ -8,8 +8,12 @@ import { Loading, Takeover } from './components/ui';
 import { Home } from './pages/Home';
 import { CoreDoc } from './pages/CoreDoc';
 import { Memory } from './pages/Memory';
+import { Tools } from './pages/Tools';
+import { Credentials } from './pages/Credentials';
+import { Skills } from './pages/Skills';
 import { Conversation } from './pages/Conversation';
 import { Schedules } from './pages/Schedules';
+import { Jobs } from './pages/Jobs';
 import { Activity, Health } from './pages/Activity';
 
 type Auth = { status: 'loading' } | { status: 'resolved'; state: AuthState };
@@ -26,10 +30,18 @@ function RouteView() {
       return <CoreDoc which="user" />;
     case 'memory':
       return <Memory topic={second ?? null} />;
+    case 'tools':
+      return <Tools />;
+    case 'credentials':
+      return <Credentials />;
+    case 'skills':
+      return <Skills name={second ? decodeURIComponent(second) : null} />;
     case 'conversation':
       return <Conversation threadId={second ? decodeURIComponent(second) : null} />;
     case 'schedules':
       return <Schedules />;
+    case 'jobs':
+      return <Jobs />;
     case 'activity':
       return <Activity />;
     case 'health':

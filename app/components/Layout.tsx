@@ -13,8 +13,12 @@ export const NAV: NavItem[] = [
   { path: 'sunny', label: 'SUNNY.md' },
   { path: 'user', label: 'USER.md' },
   { path: 'memory', label: 'Memory' },
+  { path: 'tools', label: 'Tools' },
+  { path: 'credentials', label: 'Credentials' },
+  { path: 'skills', label: 'Skills' },
   { path: 'conversation', label: 'Conversation' },
   { path: 'schedules', label: 'Schedules' },
+  { path: 'jobs', label: 'Jobs' },
   { path: 'activity', label: 'Activity' },
   { path: 'health', label: 'Health' },
 ];
