@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { and, desc, eq } from 'drizzle-orm';
 import {
   defineEventHandler,
@@ -15,6 +16,11 @@ import { getRuntime } from '../../../../src/runtime.js';
 import { messages } from '../../../../src/db/schema.js';
 import { logger } from '../../../../src/logger.js';
 import { DashboardData } from '../../../../src/dashboard/data.js';
+import {
+  contentTypeForName,
+  isWithinMediaRoot,
+  renderableMedia,
+} from '../../../../src/gateway/media.js';
 import { AuthStore } from '../../../../src/dashboard/auth/store.js';
 import {
   constantTimeEqual,
@@ -243,6 +249,28 @@ export default defineEventHandler(async (event) => {
           const name = decodeURIComponent(path.slice('skills/'.length));
           const detail = data.skill(name);
           return detail ?? json(404, { error: 'skill not found' });
+        }
+        case path === 'media': {
+          // Authenticated media serving (messaging-media D-MM9): stream a row's
+          // i-th renderable image from disk. Confined to the media root — never a
+          // general file server — and only reachable past the auth gate above.
+          const msg = String(query.msg ?? '');
+          const i = Number(query.i ?? -1);
+          if (!msg || !Number.isInteger(i) || i < 0) return json(400, { error: 'bad media ref' });
+          const [row] = await db.select().from(messages).where(eq(messages.id, msg)).limit(1);
+          if (!row) return json(404, { error: 'not found' });
+          const ref = renderableMedia(row.payload)[i];
+          if (!ref?.disk || !isWithinMediaRoot(config.runtimeDir, ref.disk)) {
+            return json(404, { error: 'not found' });
+          }
+          try {
+            const bytes = readFileSync(ref.disk);
+            setResponseHeader(event, 'content-type', ref.mediaType || contentTypeForName(ref.disk));
+            setResponseHeader(event, 'cache-control', 'private, max-age=300');
+            return bytes;
+          } catch {
+            return json(404, { error: 'not found' });
+          }
         }
         case path === 'schedules':
           return { schedules: await data.schedules() };

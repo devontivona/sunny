@@ -7,6 +7,7 @@ import { loadConfig, type SunnyConfig } from './config/index.js';
 import { createDb, runMigrations, type Db } from './db/client.js';
 import { messages } from './db/schema.js';
 import { ConversationStore } from './gateway/store.js';
+import { cleanupOutbox, ensureMediaDirs } from './gateway/media.js';
 import { SendblueGateway } from './gateway/sendblue.js';
 import type { ChannelEvent, Gateway } from './gateway/types.js';
 import { initMemory } from './memory/index.js';
@@ -63,6 +64,13 @@ async function start(): Promise<Runtime> {
   await runMigrations(db);
   await initMemory(config);
   await initSkills(config);
+
+  // Media storage (messaging-media D-MM2/4): create + gitignore the media tree,
+  // and sweep the short-TTL public outbox hourly so hosted send-files don't pile
+  // up. Inbound media is retained durably (cleanup deferred).
+  ensureMediaDirs(config.runtimeDir);
+  cleanupOutbox(config.runtimeDir, Date.now());
+  setInterval(() => cleanupOutbox(config.runtimeDir, Date.now()), 60 * 60_000).unref();
 
   const store = new ConversationStore(db, config.recentWindowSize);
   const gateway = new SendblueGateway({ config, store });

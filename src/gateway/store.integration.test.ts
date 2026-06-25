@@ -98,6 +98,41 @@ describe('ConversationStore (integration, PGlite)', () => {
     });
   });
 
+  describe('inbound media refs + recovery (messaging-media D-MM1/2)', () => {
+    const ref = {
+      path: '/m/inbound/m1/0.jpg',
+      mediaType: 'image/jpeg',
+      kind: 'image' as const,
+      name: 'photo.jpg',
+      size: 1234,
+      direction: 'inbound' as const,
+    };
+
+    it('references persisted attachments in the stored user payload', async () => {
+      await store.appendInbound(makeChannelEvent({ messageId: 'm1', text: 'look' }), [ref]);
+      const [row] = await store.recentWindow(OWNER_THREAD);
+      const payload = row!.payload as { parts: Array<{ type: string; data?: typeof ref }> };
+      const att = payload.parts.find((p) => p.type === 'data-attachment');
+      expect(att?.data).toEqual(ref);
+      // The bytes are NOT in the payload — only a disk reference.
+      expect(JSON.stringify(payload)).not.toContain('base64');
+    });
+
+    it('repopulates event.attachments from the payload on recovery (not [])', async () => {
+      await store.appendInbound(makeChannelEvent({ messageId: 'm2', text: 'see this' }), [ref]);
+      const [ev] = await store.findUnprocessedInbound();
+      expect(ev?.attachments).toHaveLength(1);
+      expect(ev?.attachments[0]).toMatchObject({
+        filename: 'photo.jpg',
+        mimeType: 'image/jpeg',
+        kind: 'image',
+        size: 1234,
+      });
+      // Already on disk — nothing to re-fetch from an expired URL.
+      expect(ev?.attachments[0]?.fetchData).toBeUndefined();
+    });
+  });
+
   describe('appendOutbound — proactive / Tier-2 send (5.6)', () => {
     it('writes a standalone assistant row with the assistantSendPayload shape', async () => {
       await store.appendOutbound(OWNER_THREAD, 'out-1', 'your job finished');

@@ -8,6 +8,7 @@ import { loadCore, memoryPaths, readTopic, sanitizeTopic } from '../memory/index
 import { listCredentials } from '../credentials/index.js';
 import { loadAllSkills, parseSkill, sanitizeSkillName } from '../skills/index.js';
 import { toolCatalog } from '../agent/tools/catalog.js';
+import { renderableMedia, type AttachmentKind } from '../gateway/media.js';
 
 /**
  * Read-only data access for the dashboard (web-dashboard D-WD3/5). Reads the
@@ -466,10 +467,25 @@ function normalizeUsage(usage: unknown) {
   return { in: num(u.in), out: num(u.out), cached: num(u.cached), cacheWrite: num(u.cacheWrite) };
 }
 
+/**
+ * Renderable image attachments for a row (messaging-media D-MM9). Disk-backed
+ * media (inbound, or durable outbound copies) is served through the authenticated
+ * dashboard route, addressed by row id + index; an external URL is rendered as-is.
+ */
+function mediaAttachments(rowId: string, payload: unknown) {
+  const out: { kind: AttachmentKind; mediaType: string; name: string; src: string }[] = [];
+  renderableMedia(payload).forEach((m, i) => {
+    const src = m.disk ? `/dashboard/api/media?msg=${encodeURIComponent(rowId)}&i=${i}` : m.url;
+    if (src) out.push({ kind: m.kind, mediaType: m.mediaType, name: m.name, src });
+  });
+  return out;
+}
+
 /** Turn a stored message row into the dashboard's conversation shape (D-WD3). */
 function toConversationMessage(row: typeof messages.$inferSelect) {
   const parts = partsOf(row.payload);
   const meta = metaOf(row.payload);
+  const attachments = mediaAttachments(row.id, row.payload);
   if (row.role === 'user') {
     const text = parts
       .filter((p) => p.type === 'text' && p.text)
@@ -481,6 +497,7 @@ function toConversationMessage(row: typeof messages.$inferSelect) {
       timestamp: row.timestamp.toISOString(),
       senderName: row.senderName ?? null,
       delivered: [text || row.text].filter(Boolean),
+      attachments,
       scratch: null,
       delivery: null,
       steps: null,
@@ -502,6 +519,7 @@ function toConversationMessage(row: typeof messages.$inferSelect) {
     timestamp: row.timestamp.toISOString(),
     senderName: row.senderName ?? null,
     delivered: delivered.length > 0 ? delivered : row.text ? [row.text] : [],
+    attachments,
     scratch: scratch || null,
     delivery: typeof meta.delivered === 'string' ? meta.delivered : null,
     steps: typeof meta.steps === 'number' ? meta.steps : null,

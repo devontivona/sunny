@@ -1,5 +1,15 @@
+import { readFileSync } from 'node:fs';
 import { convertToModelMessages, type ModelMessage, type UIMessage } from 'ai';
 import type { StoredMessage } from '../gateway/store.js';
+import {
+  MEDIA,
+  dataUrl,
+  isHeic,
+  modelIngestKind,
+  prepareImageForModel,
+  type AttachmentRef,
+  type PreparedImage,
+} from '../gateway/media.js';
 
 /**
  * Pure turn helpers extracted from `loop.ts` (testability refactor D13, task 3.1).
@@ -109,12 +119,121 @@ export function groupSpeakerPrefix(senderName: string | undefined, isOwner: bool
  * `send_message`) — so the converted history reflects what actually happened.
  * Legacy pre-D-MG9 rows (no payload) get a minimal reconstruction.
  */
+export interface MediaResolveOptions {
+  /** Injectable byte reader (tests pass a fake; production reads from disk). */
+  readFile?: (path: string) => Buffer;
+  /** Injectable image preparer (tests fake it; production downscales via ImageMagick). */
+  prepareImage?: (bytes: Buffer, mediaType: string) => PreparedImage | null;
+  maxInlineCount?: number;
+  maxInlineBytes?: number;
+}
+
 export function toModelMessages(
   window: StoredMessage[],
   isGroup: boolean,
+  opts: MediaResolveOptions = {},
 ): Promise<ModelMessage[]> {
-  const ui = window.map((row) => rowToUIMessage(row, isGroup));
+  const ui = window.map((row) => resolveMedia(rowToUIMessage(row, isGroup), opts));
   return convertToModelMessages(ui, { ignoreIncompleteToolCalls: true });
+}
+
+/**
+ * Resolve a message's persisted media refs to model content (D-MM3). On user
+ * messages each `data-attachment` part becomes, best-effort: an inlined file part
+ * for an ingestible image/PDF, or a text note (`[attachment: …, saved at …]`) for
+ * anything the model can't ingest, an over-cap/over-size item, or one that failed
+ * to save — nothing is silently dropped. Non-user messages keep no media parts
+ * (outbound media is recorded in the send tool's output, not re-fed to the model).
+ */
+function resolveMedia(
+  msg: Omit<UIMessage, 'id'>,
+  opts: MediaResolveOptions,
+): Omit<UIMessage, 'id'> {
+  const hasAttachment = msg.parts.some((p) => p.type === 'data-attachment');
+  if (!hasAttachment) return msg;
+  if (msg.role !== 'user') {
+    return { ...msg, parts: msg.parts.filter((p) => p.type !== 'data-attachment') };
+  }
+  return { ...msg, parts: resolveInboundMediaParts(msg.parts, opts) };
+}
+
+export function resolveInboundMediaParts(
+  parts: UIMessage['parts'],
+  opts: MediaResolveOptions = {},
+): UIMessage['parts'] {
+  const read = opts.readFile ?? ((p: string) => readFileSync(p));
+  const prepare = opts.prepareImage ?? prepareImageForModel;
+  const maxCount = opts.maxInlineCount ?? MEDIA.maxInlineCount;
+  const maxBytes = opts.maxInlineBytes ?? MEDIA.maxInlineBytes;
+  let inlined = 0;
+  const out: UIMessage['parts'] = [];
+  for (const part of parts) {
+    if (part.type !== 'data-attachment') {
+      out.push(part);
+      continue;
+    }
+    const ref = (part as { data?: AttachmentRef }).data;
+    if (!ref) continue;
+    out.push(attachmentToPart(ref, { read, prepare, maxBytes, atCap: inlined >= maxCount }));
+    if (out[out.length - 1]?.type === 'file') inlined++;
+  }
+  return out;
+}
+
+function note(text: string): UIMessage['parts'][number] {
+  return { type: 'text', text } as UIMessage['parts'][number];
+}
+
+function filePart(mediaType: string, name: string, bytes: Buffer): UIMessage['parts'][number] {
+  return {
+    type: 'file',
+    mediaType,
+    filename: name,
+    url: dataUrl(bytes, mediaType),
+  } as UIMessage['parts'][number];
+}
+
+function attachmentToPart(
+  ref: AttachmentRef,
+  ctx: {
+    read: (p: string) => Buffer;
+    prepare: (bytes: Buffer, mediaType: string) => PreparedImage | null;
+    maxBytes: number;
+    atCap: boolean;
+  },
+): UIMessage['parts'][number] {
+  const at = ref.path ? `, saved at ${ref.path}` : '';
+  const head = `[attachment: ${ref.name} (${ref.mediaType})`;
+  if (ref.error || !ref.path)
+    return note(`${head} — could not be saved: ${ref.error ?? 'no file'}]`);
+  if (ctx.atCap) return note(`${head}${at} — not inlined (attachment limit reached)]`);
+
+  // Best-effort by type (D-MM3): images (incl. HEIC) are downscaled + re-encoded;
+  // PDFs inline as documents; everything else degrades to a saved-file note.
+  const ingest = modelIngestKind(ref.mediaType);
+  const image = ingest === 'image' || isHeic(ref.mediaType);
+  if (!ingest && !image) return note(`${head}${at}]`);
+
+  let bytes: Buffer;
+  try {
+    bytes = ctx.read(ref.path);
+  } catch {
+    return note(`${head}${at} — could not be read]`);
+  }
+
+  if (ingest === 'document') {
+    // PDF — inline as-is (don't recompress documents).
+    if (bytes.length > ctx.maxBytes)
+      return note(`${head}${at} — too large to inline (${bytes.length} bytes)]`);
+    return filePart(ref.mediaType, ref.name, bytes);
+  }
+
+  // Image: downscale + re-encode (transcodes HEIC, shrinks large photos).
+  const prepared = ctx.prepare(bytes, ref.mediaType);
+  if (!prepared) return note(`${head}${at} — could not convert to a viewable image]`);
+  if (prepared.bytes.length > ctx.maxBytes)
+    return note(`${head}${at} — too large to inline (${prepared.bytes.length} bytes)]`);
+  return filePart(prepared.mediaType, ref.name, prepared.bytes);
 }
 
 export function rowToUIMessage(row: StoredMessage, isGroup: boolean): Omit<UIMessage, 'id'> {
