@@ -6,6 +6,7 @@ import { messages, scheduleRuns, schedules } from '../db/schema.js';
 import type { SunnyConfig } from '../config/index.js';
 import { loadCore, memoryPaths, readTopic, sanitizeTopic } from '../memory/index.js';
 import { listCredentials } from '../credentials/index.js';
+import { listMcpServers, serverHost } from '../mcp/registry.js';
 import { loadAllSkills, parseSkill, sanitizeSkillName } from '../skills/index.js';
 import { toolCatalog } from '../agent/tools/catalog.js';
 
@@ -70,6 +71,41 @@ export class DashboardData {
         name: c.name,
         reference: c.reference,
         purpose: c.purpose ?? null,
+      })),
+    };
+  }
+
+  /** The MCP server registry (mcp D-MCP8): per server — name, host (NOT the
+   *  token-bearing URL), transport, the auth reference BY NAME (never a value),
+   *  enabled state, and the last-probed tool inventory. Data-driven from the registry,
+   *  so a server added via `mcp_manage` surfaces here automatically. Observe-only. */
+  mcpServers(): {
+    servers: {
+      name: string;
+      host: string;
+      transport: string;
+      auth: string | null;
+      enabled: boolean;
+      purpose: string | null;
+      probedAt: string | null;
+      tools: { name: string; description: string }[];
+    }[];
+  } {
+    return {
+      servers: listMcpServers(this.config.runtimeDir).map((s) => ({
+        name: s.name,
+        host: serverHost(s.url),
+        transport: s.transport,
+        auth:
+          s.auth?.kind === 'header'
+            ? `header → ${s.auth.credential}`
+            : s.auth?.kind === 'oauth'
+              ? 'oauth'
+              : null,
+        enabled: s.enabled,
+        purpose: s.purpose ?? null,
+        probedAt: s.probe?.at ?? null,
+        tools: s.probe?.tools ?? [],
       })),
     };
   }

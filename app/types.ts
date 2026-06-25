@@ -48,6 +48,30 @@ export interface CredentialsView {
   credentials: CredentialEntry[];
 }
 
+export interface McpToolInfo {
+  name: string;
+  description: string;
+}
+
+export interface McpServerView {
+  name: string;
+  /** Server host only — never the full token-bearing URL (D-MCP8). */
+  host: string;
+  transport: string;
+  /** Auth reference by name (e.g. `header → craft-token`) or `oauth`; never a value. */
+  auth: string | null;
+  enabled: boolean;
+  purpose: string | null;
+  /** ISO timestamp of the last probe, or null if never probed. */
+  probedAt: string | null;
+  /** Last-probed tool inventory (names + descriptions). */
+  tools: McpToolInfo[];
+}
+
+export interface McpServersView {
+  servers: McpServerView[];
+}
+
 export interface SkillEntry {
   name: string;
   description: string;
