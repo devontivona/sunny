@@ -209,6 +209,23 @@ function ScrollToLatest() {
   );
 }
 
+/** Keeps the view glued to the bottom as content streams. The library's resize
+ *  heuristic can drop the lock when content churns (the live view appearing, the
+ *  thread refetch on turn start/settle), so we actively re-assert: jump to bottom on
+ *  each new turn, and follow every streamed chunk while the user is still at the
+ *  bottom (if they scroll up we leave them be — the ↓ latest button brings them back). */
+function AutoStick({ runId, version }: { runId: string | null; version: number }) {
+  const { scrollToBottom, isAtBottom } = useStickToBottomContext();
+  useEffect(() => {
+    if (runId) void scrollToBottom();
+  }, [runId, scrollToBottom]);
+  useEffect(() => {
+    if (isAtBottom) void scrollToBottom();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [version]);
+  return null;
+}
+
 /** Nested thread page: breadcrumb, then the messages chronologically in a scroll
  *  region that auto-sticks to the bottom as the in-flight turn streams in (the
  *  newest message is always in view, with a jump-to-latest button when scrolled up). */
@@ -222,7 +239,7 @@ function ThreadPage({ threadId }: { threadId: string }) {
 
   // Stream this thread live over one persistent SSE connection opened on mount —
   // whatever turn runs now or next, with no run-id discovery and no polling gap.
-  const { message, run, lastDoneRunId } = useLiveThread(threadId);
+  const { message, run, lastDoneRunId, version } = useLiveThread(threadId);
   const runId = run?.runId ?? null;
   const [settledRun, setSettledRun] = useState<string | null>(null);
 
@@ -266,7 +283,8 @@ function ThreadPage({ threadId }: { threadId: string }) {
         <span className="font-normal text-fg-dim"> / {label}</span>
       </div>
       <StickToBottom className="relative min-h-0 flex-1" resize="smooth" initial="smooth">
-        <StickToBottom.Content className="flex flex-col">
+        <AutoStick runId={runId} version={version} />
+        <StickToBottom.Content className="flex flex-col pb-lg">
           {initialLoading && <Loading />}
           {state.status === 'error' && messages.length === 0 && <ErrorNote error={state.error} />}
           {!initialLoading && messages.length === 0 && !showLive && (

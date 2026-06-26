@@ -135,6 +135,9 @@ export interface LiveThreadState {
   /** The runId of the most recently completed turn — bumps on each `done` so the
    *  caller can refetch the persisted thread to settle. */
   lastDoneRunId: string | null;
+  /** Increments on every streamed chunk — a stable signal for "content grew", used to
+   *  keep the view scrolled to the bottom while streaming. */
+  version: number;
 }
 
 /**
@@ -147,6 +150,7 @@ export function useLiveThread(threadId: string | null): LiveThreadState {
   const [message, setMessage] = useState<UIMessage | null>(null);
   const [run, setRun] = useState<LiveRun | null>(null);
   const [lastDoneRunId, setLastDoneRunId] = useState<string | null>(null);
+  const [version, setVersion] = useState(0);
 
   useEffect(() => {
     setMessage(null);
@@ -205,6 +209,7 @@ export function useLiveThread(threadId: string | null): LiveThreadState {
     es.addEventListener('chunk', (e) => {
       try {
         controller?.enqueue(JSON.parse((e as MessageEvent).data) as UIMessageChunk);
+        if (!cancelled) setVersion((v) => v + 1);
       } catch {
         /* ignore a malformed frame */
       }
@@ -235,7 +240,7 @@ export function useLiveThread(threadId: string | null): LiveThreadState {
     };
   }, [threadId]);
 
-  return { message, run, lastDoneRunId };
+  return { message, run, lastDoneRunId, version };
 }
 
 /** Re-render every second while `running` so elapsed-time labels tick. The value
