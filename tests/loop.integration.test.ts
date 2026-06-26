@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { readUIMessageStream, type UIMessageChunk } from 'ai';
 import type { SteerHandle } from '../src/agent/dispatcher.js';
 import type { ChannelEvent } from '../src/gateway/types.js';
+import { getLiveBus } from '../src/observability/live.js';
 import { createTestDb, type TestDb } from './db.js';
 import { createTestRuntime, type TestRuntime } from './harness.js';
 import { makeChannelEvent } from './factories.js';
@@ -141,6 +143,55 @@ describe('agent loop end-to-end', () => {
     const ev2 = makeChannelEvent({ messageId: 'after-error', text: 'still there?' });
     await runOnce(rt2, ev2);
     expect(rt2.gateway.texts()).toEqual(['recovered']);
+  });
+
+  describe('live streaming (live-conversation-streaming)', () => {
+    beforeEach(() => {
+      // Fresh live bus per test (it is a global singleton in production); reset so
+      // we observe only this turn's run.
+      (globalThis as Record<symbol, unknown>)[Symbol.for('sunny.liveBus')] = undefined;
+    });
+
+    it('forwards the turn UIMessageChunks live; the folded message matches the persisted send', async () => {
+      const rt = createTestRuntime({ db: tdb.db, model: modelThatSends('streamed hi') });
+      const ev = makeChannelEvent({ text: 'stream please' });
+      await runOnce(rt, ev);
+
+      // The turn registered as an active run and finished cleanly.
+      const bus = getLiveBus();
+      const run = bus.activeTurns().find((r) => r.threadId === ev.threadId);
+      expect(run).toBeDefined();
+      expect(run!.kind).toBe('turn');
+      expect(run!.status).toBe('finished');
+      expect(run!.steps).toBeGreaterThan(0);
+
+      // A late subscriber replays the buffered chunks (the late-join path). Fold them
+      // with the same `readUIMessageStream` the client uses and confirm the streamed
+      // message carries the same send_message text that was delivered + persisted.
+      const chunks: UIMessageChunk[] = [];
+      let done = false;
+      bus.subscribeTurn(run!.runId, (e) => {
+        if (e.type === 'chunk') chunks.push(e.chunk);
+        if (e.type === 'done') done = true;
+      });
+      expect(done).toBe(true);
+      expect(chunks.length).toBeGreaterThan(0);
+
+      const stream = new ReadableStream<UIMessageChunk>({
+        start(c) {
+          for (const ch of chunks) c.enqueue(ch);
+          c.close();
+        },
+      });
+      let msg;
+      for await (const m of readUIMessageStream({ stream })) msg = m;
+      const sendText = (msg?.parts ?? [])
+        .filter((p) => p.type === 'tool-send_message')
+        .map((p) => (p as { input?: { text?: string } }).input?.text ?? '')
+        .join('');
+      expect(sendText).toContain('streamed hi');
+      expect(rt.gateway.texts()).toEqual(['streamed hi']); // same text was delivered
+    });
   });
 
   describe('text delivery mode (candidate design)', () => {

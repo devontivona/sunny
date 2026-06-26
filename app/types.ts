@@ -210,6 +210,31 @@ export interface Health {
   generatedAt: string;
 }
 
+// Live observability (live-conversation-streaming). A `LiveRun` is the unified
+// descriptor for an in-flight turn or job, mirrored from the server's
+// src/observability/live.ts. The live UIMessage itself is folded client-side from
+// the SSE chunk stream using the AI SDK's `readUIMessageStream` (see components/live.ts).
+
+export type RunKind = 'turn' | 'job';
+
+export interface LiveRun {
+  runId: string;
+  kind: RunKind;
+  threadId: string | null;
+  label: string;
+  status: 'running' | 'finished' | 'errored';
+  startedAt: string;
+  steps: number;
+  model: string | null;
+  effort: string | null;
+  usage: TurnUsage | null;
+  traceUrl: string | null;
+}
+
+export interface ActiveRunsView {
+  runs: LiveRun[];
+}
+
 export type AuthState =
   | { state: 'authenticated' }
   | { state: 'open' } // dev-open (DASHBOARD_DEV_OPEN=1): no gate

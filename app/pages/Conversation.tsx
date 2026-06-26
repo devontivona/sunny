@@ -1,9 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { apiGet } from '../api';
 import type { ConversationMessage, SearchHit, ThreadSummary } from '../types';
 import { Markdown } from '../components/Markdown';
 import { Link, LinkButton } from '../components/Link';
-import { ErrorNote, Loading, PageTitle, formatTime, useAsync } from '../components/ui';
+import { ErrorNote, Loading, Panel, PageTitle, formatTime, useAsync } from '../components/ui';
+import { useActiveRuns, useLiveRun } from '../components/live';
+import { RunView } from '../components/RunView';
 import { navigate } from '../router';
 
 // Conversation view (5.3): an index page (search + thread list) and a nested
@@ -38,9 +40,8 @@ function Bubble({ m }: { m: ConversationMessage }) {
           ))}
         </div>
       ) : (
-        !m.scratch && m.attachments.length === 0 && (
-          <div className="text-fg-dim italic">(silent turn)</div>
-        )
+        !m.scratch &&
+        m.attachments.length === 0 && <div className="text-fg-dim italic">(silent turn)</div>
       )}
       {m.attachments.length > 0 && (
         <div className="mt-xs flex flex-wrap gap-sm">
@@ -54,7 +55,13 @@ function Bubble({ m }: { m: ConversationMessage }) {
                 />
               </a>
             ) : (
-              <a key={i} href={a.src} target="_blank" rel="noreferrer" className="text-primary hover:underline">
+              <a
+                key={i}
+                href={a.src}
+                target="_blank"
+                rel="noreferrer"
+                className="text-primary hover:underline"
+              >
                 {a.name} ({a.mediaType})
               </a>
             ),
@@ -86,7 +93,9 @@ function ConversationIndex() {
   const results = useAsync<{ results: SearchHit[] }>(
     () =>
       searching
-        ? apiGet<{ results: SearchHit[] }>(`/conversation/search?q=${encodeURIComponent(submitted)}`)
+        ? apiGet<{ results: SearchHit[] }>(
+            `/conversation/search?q=${encodeURIComponent(submitted)}`,
+          )
         : Promise.resolve({ results: [] }),
     [submitted],
   );
@@ -155,7 +164,9 @@ function ConversationIndex() {
           {threads.data.threads.map((t) => (
             <li key={t.threadId} className="flex items-baseline justify-between gap-md">
               <span className="min-w-0 truncate">
-                <LinkButton onClick={() => navigate(`conversation/${encodeURIComponent(t.threadId)}`)}>
+                <LinkButton
+                  onClick={() => navigate(`conversation/${encodeURIComponent(t.threadId)}`)}
+                >
                   {t.label}
                 </LinkButton>
               </span>
@@ -170,27 +181,51 @@ function ConversationIndex() {
   );
 }
 
-/** Nested thread page: breadcrumb back to the index, then the messages (#5). */
+/** Nested thread page: breadcrumb back to the index, then the messages
+ *  newest-first (6.1), with the in-flight turn streamed live at the top (6.3). */
 function ThreadPage({ threadId }: { threadId: string }) {
   const state = useAsync<ThreadDetail>(
     () => apiGet<ThreadDetail>(`/conversation/thread?id=${encodeURIComponent(threadId)}`),
     [threadId],
   );
+  const reload = state.reload;
   const label = state.status === 'ready' ? state.data.label : '…';
+
+  // Is this thread live right now? Find an active TURN run for it, then stream it.
+  const active = useActiveRuns();
+  const liveTurn = active.find((r) => r.kind === 'turn' && r.threadId === threadId) ?? null;
+  const { message, run, done } = useLiveRun(liveTurn?.runId ?? null, 'turn');
+  const [settledRun, setSettledRun] = useState<string | null>(null);
+
+  // Settle to the persisted record: when the live turn finishes, refetch the thread
+  // (the turn becomes a normal bubble) and stop rendering the live trajectory so it
+  // isn't shown twice.
+  useEffect(() => {
+    if (done && liveTurn) {
+      setSettledRun(liveTurn.runId);
+      reload();
+    }
+  }, [done, liveTurn?.runId, reload]);
+
+  const showLive = liveTurn && message != null && settledRun !== liveTurn.runId;
+
   return (
     <div>
       <div className="mb-md font-bold text-fg">
         <Link to="conversation">Conversation</Link>
         <span className="font-normal text-fg-dim"> / {label}</span>
       </div>
+      {showLive && (
+        <Panel title="● Sunny is responding…">
+          <RunView message={message} run={run ?? liveTurn} />
+        </Panel>
+      )}
       {state.status === 'loading' && <Loading />}
       {state.status === 'error' && <ErrorNote error={state.error} />}
       {state.status === 'ready' &&
-        (state.data.messages.length === 0 ? (
-          <p className="text-fg-dim">No messages.</p>
-        ) : (
-          state.data.messages.map((m) => <Bubble key={m.id} m={m} />)
-        ))}
+        (state.data.messages.length === 0
+          ? !showLive && <p className="text-fg-dim">No messages.</p>
+          : [...state.data.messages].reverse().map((m) => <Bubble key={m.id} m={m} />))}
     </div>
   );
 }

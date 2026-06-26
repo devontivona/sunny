@@ -10,6 +10,7 @@ import { listMcpServers, serverHost } from '../mcp/registry.js';
 import { loadAllSkills, parseSkill, sanitizeSkillName } from '../skills/index.js';
 import { toolCatalog } from '../agent/tools/catalog.js';
 import { renderableMedia, type AttachmentKind } from '../gateway/media.js';
+import { getLiveBus, type LiveRun } from '../observability/live.js';
 
 /**
  * Read-only data access for the dashboard (web-dashboard D-WD3/5). Reads the
@@ -320,6 +321,48 @@ export class DashboardData {
         };
       }),
     };
+  }
+
+  // --- Live runs (active now) ----------------------------------------------
+  // The unified "what is Sunny doing right now" feed for the home indicator and
+  // the live views (live-conversation-streaming). Two sources, one shape:
+  // in-flight TURNS come from the in-process live bus (ephemeral, this process),
+  // and actively-running JOBS are derived from the durable WDK world (so a job
+  // that was running before a restart still shows as active). Read-only.
+
+  async activeRuns(): Promise<{ runs: LiveRun[] }> {
+    const turns = getLiveBus().activeTurns();
+    const jobs = await this.activeJobs();
+    return { runs: [...turns, ...jobs] };
+  }
+
+  private async activeJobs(): Promise<LiveRun[]> {
+    const res = await this.db.execute(sql`
+      select r.id, r.name, r.created_at, r.started_at,
+        (select count(*)::int from workflow.workflow_steps s where s.run_id = r.id) as step_count
+      from workflow.workflow_runs r
+      where r.status = 'running'
+      order by r.created_at desc
+      limit 20
+    `);
+    const rows = (res as unknown as { rows: Record<string, unknown>[] }).rows ?? [];
+    return rows.map((r) => {
+      const started = r.started_at ?? r.created_at;
+      return {
+        runId: String(r.id),
+        kind: 'job' as const,
+        threadId: null,
+        label: jobKind(String(r.name)),
+        status: 'running' as const,
+        startedAt: (started ? new Date(started as string) : new Date(0)).toISOString(),
+        steps: Number(r.step_count ?? 0),
+        // Jobs run on the same Opus model with high effort (workflows/job.ts).
+        model: 'claude-opus-4-8',
+        effort: 'high',
+        usage: null,
+        traceUrl: null,
+      };
+    });
   }
 
   // --- Activity & health ---------------------------------------------------

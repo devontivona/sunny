@@ -13,7 +13,11 @@ import {
   type H3Event,
 } from 'nitro/h3';
 import { auth as completeMcpOAuth } from '@ai-sdk/mcp';
+import { getRun } from 'workflow/api';
+import type { UIMessageChunk } from 'ai';
 import { getRuntime } from '../../../../src/runtime.js';
+import { getLiveBus, type LiveRun } from '../../../../src/observability/live.js';
+import { defaultRedactor } from '../../../../src/observability/redact.js';
 import { messages } from '../../../../src/db/schema.js';
 import { logger } from '../../../../src/logger.js';
 import { DashboardData } from '../../../../src/dashboard/data.js';
@@ -242,7 +246,10 @@ export default defineEventHandler(async (event) => {
     } catch (err) {
       log.error('mcp oauth callback failed', { serverName, err: String(err) });
       setResponseStatus(event, 502);
-      return approvalPage('Could not complete authorization — ask Sunny to connect it again.', false);
+      return approvalPage(
+        'Could not complete authorization — ask Sunny to connect it again.',
+        false,
+      );
     }
   }
 
@@ -323,6 +330,16 @@ export default defineEventHandler(async (event) => {
           return { schedules: await data.schedules() };
         case path === 'jobs':
           return await data.jobs();
+        // Live observability (live-conversation-streaming): the active-runs snapshot
+        // for the home indicator, and a read-only SSE stream of a run's UIMessageChunks
+        // for the live view. Both sit behind the same auth gate as everything below.
+        case path === 'live/active':
+          return await data.activeRuns();
+        case path === 'live/stream': {
+          const run = String(query.run ?? '');
+          if (!run) return json(400, { error: 'missing run id' });
+          return String(query.kind ?? 'turn') === 'job' ? liveStreamJob(run) : liveStreamTurn(run);
+        }
         case path === 'activity':
           return await data.activity();
         case path === 'health':
@@ -357,6 +374,161 @@ export default defineEventHandler(async (event) => {
     log.info('sent dashboard approval prompt to owner', { requestId, ownerThread });
   }
 });
+
+// === Live SSE (live-conversation-streaming) =================================
+
+const SSE_ENC = new TextEncoder();
+function sseFrame(name: string, data: unknown): Uint8Array {
+  return SSE_ENC.encode(`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`);
+}
+function sse(body: ReadableStream<Uint8Array>): Response {
+  return new Response(body, {
+    headers: {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache, no-transform',
+      connection: 'keep-alive',
+      // Disable proxy buffering so events flush immediately over the tunnel.
+      'x-accel-buffering': 'no',
+    },
+  });
+}
+
+/** Stream a Tier-1 turn's live chunks from the in-process bus: replay the buffered
+ *  chunks (late-join), then tail until the turn finishes. */
+function liveStreamTurn(runId: string): Response {
+  const bus = getLiveBus();
+  let unsub = () => {};
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      let closed = false;
+      const close = () => {
+        if (closed) return;
+        closed = true;
+        unsub();
+        try {
+          controller.close();
+        } catch {
+          /* already closed */
+        }
+      };
+      unsub = bus.subscribeTurn(runId, (ev) => {
+        if (closed) return;
+        try {
+          if (ev.type === 'chunk') controller.enqueue(sseFrame('chunk', ev.chunk));
+          else if (ev.type === 'status') controller.enqueue(sseFrame('status', ev.run));
+          else {
+            controller.enqueue(sseFrame('done', ev.run));
+            close();
+          }
+        } catch {
+          close();
+        }
+      });
+      // Unknown/already-reaped run: tell the client to fall back to the persisted
+      // record immediately rather than hang.
+      if (!bus.getTurn(runId)) {
+        try {
+          controller.enqueue(sseFrame('done', { runId }));
+        } catch {
+          /* ignore */
+        }
+        close();
+      }
+    },
+    cancel() {
+      unsub();
+    },
+  });
+  return sse(stream);
+}
+
+/** Stream a Tier-2 job's live chunks from its durable WDK run stream: replay the
+ *  last chunks (negative startIndex), then tail until the run completes. */
+function liveStreamJob(runId: string): Response {
+  const redactor = defaultRedactor();
+  let cancelled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const run = getRun<unknown>(runId);
+      const emit = (name: string, data: unknown) => {
+        if (cancelled) return;
+        try {
+          controller.enqueue(sseFrame(name, data));
+        } catch {
+          /* closed */
+        }
+      };
+      emit('status', await jobRunMeta(runId, 'running'));
+      try {
+        const reader = run.getReadable<UIMessageChunk>({ startIndex: -200 }).getReader();
+        try {
+          for (;;) {
+            if (cancelled) break;
+            const { done, value } = await reader.read();
+            if (done) break;
+            emit('chunk', redactor.redact(value));
+          }
+        } finally {
+          try {
+            await reader.cancel();
+          } catch {
+            /* ignore */
+          }
+        }
+      } catch (err) {
+        log.warn('live job stream read failed', { runId, err: String(err) });
+      }
+      let status: 'finished' | 'errored' = 'finished';
+      try {
+        status = (await run.status) === 'failed' ? 'errored' : 'finished';
+      } catch {
+        /* keep optimistic 'finished' */
+      }
+      emit('done', await jobRunMeta(runId, status));
+      if (!cancelled)
+        try {
+          controller.close();
+        } catch {
+          /* ignore */
+        }
+    },
+    cancel() {
+      cancelled = true;
+    },
+  });
+  return sse(stream);
+}
+
+/** Build a job's live descriptor from the WDK run (best-effort metadata). */
+async function jobRunMeta(runId: string, status: LiveRun['status']): Promise<LiveRun> {
+  const run = getRun<unknown>(runId);
+  let label = 'Background job';
+  let startedAt = new Date(0);
+  try {
+    const name = await run.workflowName;
+    label = name.endsWith('runScheduledJob') ? 'Scheduled job' : 'Background job';
+  } catch {
+    /* default label */
+  }
+  try {
+    startedAt = (await run.startedAt) ?? (await run.createdAt) ?? startedAt;
+  } catch {
+    /* default startedAt */
+  }
+  return {
+    runId,
+    kind: 'job',
+    threadId: null,
+    label,
+    status,
+    startedAt: startedAt.toISOString(),
+    steps: 0,
+    model: 'claude-opus-4-8',
+    effort: 'high',
+    usage: null,
+    traceUrl: null,
+  };
+}
 
 /**
  * Minimal owner-facing approval result page (no app assets needed). Matches the

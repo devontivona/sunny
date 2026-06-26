@@ -1,6 +1,10 @@
 import { apiGet } from '../api';
 import type { JobsView, JobRunView } from '../types';
 import { ErrorNote, Loading, PageTitle, StatusDot, formatTime, useAsync } from '../components/ui';
+import { Link, LinkButton } from '../components/Link';
+import { useLiveRun } from '../components/live';
+import { RunView } from '../components/RunView';
+import { navigate } from '../router';
 
 // Durable jobs (observability): background jobs (start_job → runJob) and scheduled
 // runs, read from the Workflow DevKit world. Observe-only — status, timing, and step
@@ -24,12 +28,19 @@ function formatDuration(ms: number | null): string {
 
 function JobRow({ j }: { j: JobRunView }) {
   const ok = j.status === 'completed';
+  const running = j.status === 'running';
   return (
     <div className="mb-md">
       <div className="flex items-baseline justify-between gap-md">
         <div className="flex items-baseline gap-sm">
           <StatusDot ok={ok} />
-          <span className="font-bold text-fg">{j.kind}</span>
+          {running ? (
+            <LinkButton onClick={() => navigate(`jobs/${encodeURIComponent(j.id)}`)}>
+              {j.kind}
+            </LinkButton>
+          ) : (
+            <span className="font-bold text-fg">{j.kind}</span>
+          )}
         </div>
         <span className={statusColor(j.status)}>{j.status}</span>
       </div>
@@ -48,7 +59,22 @@ function JobRow({ j }: { j: JobRunView }) {
   );
 }
 
-export function Jobs() {
+/** Live view of one actively-running job — the same trajectory UI as a turn
+ *  (8.1), streamed from the durable WDK run stream by run id. Observe-only. */
+function JobRunPage({ runId }: { runId: string }) {
+  const { message, run } = useLiveRun(runId, 'job');
+  return (
+    <div>
+      <div className="mb-md font-bold text-fg">
+        <Link to="jobs">Jobs</Link>
+        <span className="font-normal text-fg-dim"> / {run?.label ?? 'run'}</span>
+      </div>
+      <RunView message={message} run={run} />
+    </div>
+  );
+}
+
+function JobsList() {
   const state = useAsync<JobsView>(() => apiGet<JobsView>('/jobs'), []);
   return (
     <div>
@@ -63,4 +89,8 @@ export function Jobs() {
         ))}
     </div>
   );
+}
+
+export function Jobs({ runId }: { runId: string | null }) {
+  return runId ? <JobRunPage runId={runId} /> : <JobsList />;
 }
