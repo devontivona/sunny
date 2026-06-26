@@ -29,7 +29,7 @@ function Bubble({ m }: { m: ConversationMessage }) {
   // User messages stay as plain delivered text.
   const showParts = isSunny && m.parts != null && m.parts.length > 0;
   return (
-    <div className="mb-md">
+    <div className="mb-md min-w-0">
       <div className="mb-xs flex items-baseline gap-sm text-fg-dim">
         <span className={isSunny ? 'text-secondary' : 'text-primary'}>
           {isSunny ? 'サニー' : m.senderName || 'You'}
@@ -284,7 +284,10 @@ function ThreadPage({ threadId }: { threadId: string }) {
       </div>
       <StickToBottom className="relative min-h-0 flex-1" resize="smooth" initial="smooth">
         <AutoStick runId={runId} version={version} />
-        <StickToBottom.Content className="flex flex-col pb-lg">
+        {/* overflow-wrap:anywhere (inherited) breaks long unbroken strings (e.g. a
+            bare URL) so the chat never scrolls horizontally; min-w-0 on the children
+            lets flex items shrink rather than be forced wide. */}
+        <StickToBottom.Content className="flex flex-col pb-lg [overflow-wrap:anywhere]">
           {initialLoading && <Loading />}
           {state.status === 'error' && messages.length === 0 && <ErrorNote error={state.error} />}
           {!initialLoading && messages.length === 0 && !showLive && (
@@ -294,7 +297,7 @@ function ThreadPage({ threadId }: { threadId: string }) {
             <Bubble key={m.id} m={m} />
           ))}
           {showLive && (
-            <div className="mt-sm">
+            <div className="mt-sm min-w-0">
               <div className="mb-xs text-secondary">サニー · responding…</div>
               <RunView message={message} run={run} />
             </div>

@@ -16,6 +16,7 @@ type AnyPart = UIMessage['parts'][number];
 interface ToolPartShape {
   type: string;
   toolName?: string;
+  toolCallId?: string;
   state?: string;
   input?: unknown;
   output?: unknown;
@@ -159,11 +160,26 @@ function ToolPart({ part }: { part: ToolPartShape }) {
   // as a tool call — it IS Sunny speaking.
   if (name === 'send_message') {
     const text = (part.input as { text?: string } | undefined)?.text;
-    return text ? (
-      <div className="my-xs text-fg">
-        <Markdown>{text}</Markdown>
+    if (!text) return null;
+    // The delivery-recovery backstop coerces its send into the same shape as a real
+    // send_message (to teach the model), but it keeps a `recovery-*` toolCallId — the
+    // one tell. Surface it so a recovered (elicitation-miss) reply is visible.
+    const recovered = part.toolCallId?.startsWith('recovery') ?? false;
+    return (
+      <div className="my-xs flex items-baseline gap-xs text-fg">
+        {recovered && (
+          <span
+            className="shrink-0 text-error"
+            title="Delivered via the recovery backstop (the model wrote text but didn't call send_message)"
+          >
+            [R]
+          </span>
+        )}
+        <div className="min-w-0 flex-1">
+          <Markdown>{text}</Markdown>
+        </div>
       </div>
-    ) : null;
+    );
   }
 
   const isError = part.state === 'output-error';
