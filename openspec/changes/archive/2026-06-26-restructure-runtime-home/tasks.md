@@ -16,7 +16,7 @@
 
 - [x] 3.1 Move the authored write root: `skillsPaths().root` (`src/skills/index.ts:61`) resolves to `<authored>/skills`; verify `writeSkill`/`deleteSkill`/seed target it and `commitSkillChange` still runs in the clone root.
 - [x] 3.2 Restructure the `devontivona/skills` repo contents under a top-level `skills/<name>/` directory; commit and push.
-- [ ] 3.3 Re-point/refresh the local `authored/` clone against the restructured repo so it materializes as `authored/skills/<name>/`; confirm all authored skills load.
+- [x] 3.3 Re-point/refresh the local `authored/` clone against the restructured repo so it materializes as `authored/skills/<name>/`; confirm all authored skills load.
 - [x] 3.4 Remove the root-level multi-skill layout detection from the loader; keep single-skill (root `SKILL.md`) and nested (`skills/<name>/`). (Strictly after 3.2/3.3.)
 - [x] 3.5 Confirm the `installed/` recursive loader (`loadInstalledSkills`) and `trusted/<slug>` sync are unaffected by 3.1–3.4.
 
@@ -36,7 +36,7 @@
 
 - [x] 6.1 Write the migration procedure (guarded: only act when `~/.sunny/.git` is the top-level repo): create `state/`, `git mv`/move `memory/` (+ `topics/`), `credentials.json`, `sites/` into it; relocate `.git` to back `state/`; preserve the original `.git` until verification.
 - [x] 6.2 Create the private `devontivona/sunny-state` repo; set it as `stateDir`'s remote; initial commit + push.
-- [ ] 6.3 Verify post-migration invariants: `~/.sunny` has no top-level `.git`; `state` tree clean; a memory edit lands in `state` history; authored skill round-trips to `devontivona/skills`.
+- [x] 6.3 Verify post-migration invariants: `~/.sunny` has no top-level `.git`; `state` tree clean; a memory edit lands in `state` history; authored skill round-trips to `devontivona/skills`.
 
 ## 7. Tests & verification
 
