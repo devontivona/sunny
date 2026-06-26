@@ -1,6 +1,8 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { createClient, type Client } from '@1password/sdk';
+import { stateDir } from '../config/index.js';
+import { commitState } from '../state/index.js';
 import { logger } from '../logger.js';
 
 const log = logger('credentials');
@@ -136,9 +138,11 @@ export function resolverFromEnv(): CredentialResolver | null {
 
 // --- credential registry (D-CR5) -------------------------------------------
 // The symbolic name → `op://` reference mapping. References + metadata only,
-// NEVER values. Lives in `~/.sunny/credentials.json` (in the `~/.sunny` git repo),
-// owner-reviewable and editable. Tools/skills refer to a credential by name; the
-// value is resolved in the tool layer at point of use.
+// NEVER values. Lives in `~/.sunny/state/credentials.json`, tracked by the `state`
+// git repo (runtime-home) and committed on every write, so it's owner-reviewable,
+// editable, and backed up (only `op://` references leave the host, never secret
+// values). Tools/skills refer to a credential by name; the value is resolved in the
+// tool layer at point of use.
 
 export interface CredentialEntry {
   reference: string;
@@ -149,7 +153,7 @@ export interface CredentialEntry {
 export type CredentialRegistry = Record<string, CredentialEntry>;
 
 export function credentialsPath(runtimeDir: string): string {
-  return join(runtimeDir, 'credentials.json');
+  return join(stateDir(runtimeDir), 'credentials.json');
 }
 
 /** Normalize a symbolic credential name to a stable registry key. */
@@ -203,7 +207,7 @@ export function registerCredential(
   reference: string,
   meta: { purpose?: string; addedBy?: string } = {},
 ): Promise<CredentialEntry> {
-  return serializeRegistry(() => {
+  return serializeRegistry(async () => {
     const key = normalizeCredentialName(name);
     const ref = reference.trim();
     if (!isOpReference(ref)) throw new Error(`not a valid op:// reference: ${ref}`);
@@ -214,9 +218,12 @@ export function registerCredential(
       ...(meta.addedBy ? { addedBy: meta.addedBy } : {}),
     };
     registry[key] = entry;
-    writeFileSync(credentialsPath(runtimeDir), `${JSON.stringify(registry, null, 2)}\n`, {
-      mode: 0o644,
-    });
+    const file = credentialsPath(runtimeDir);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, `${JSON.stringify(registry, null, 2)}\n`, { mode: 0o644 });
+    // Commit the registry update to the `state` repo (runtime-home). Best-effort:
+    // never fails the registration, even with no repo.
+    await commitState(runtimeDir, `credentials: register ${key}`);
     return entry;
   });
 }

@@ -1,6 +1,6 @@
 /**
  * Bundled first-party seed skills (agent-skills D-SK5). Written into the authored root
- * `~/.sunny/skills/authored/<name>/` at init **if absent** (like the memory core seeds), so a
+ * `~/.sunny/skills/authored/skills/<name>/` at init **if absent** (like the memory core seeds), so a
  * fresh host gets them with no manual step. The user/Sunny can edit or delete them
  * afterward (a deleted seed re-appears on next start — same posture as the memory
  * core). Untrusted third-party skills are a separate lane: installed via `npx skills`
@@ -85,7 +85,7 @@ description: Write, edit, and delete your own skills so you get better over time
 
 # Authoring your own skills
 
-A skill is a DIRECTORY under ~/.sunny/skills/authored/<name>/, not a single file:
+A skill is a DIRECTORY under ~/.sunny/skills/authored/skills/<name>/, not a single file:
 
     <name>/
       SKILL.md        (required) frontmatter + the procedure
@@ -113,21 +113,21 @@ SKILL.md format:
 A small helper ships inside THIS skill at scripts/skill.mjs. Run it with node from your default
 working directory (~/.sunny). It does validate → commit → push in one step:
 
-    node skills/authored/skill-authoring/scripts/skill.mjs <command>
+    node skills/authored/skills/skill-authoring/scripts/skill.mjs <command>
 
 ## Creating a skill
 
 1. Scaffold it (writes a draft SKILL.md):
 
-       bash(command: 'node skills/authored/skill-authoring/scripts/skill.mjs new my-skill -d "what this does and when to use it"')
+       bash(command: 'node skills/authored/skills/skill-authoring/scripts/skill.mjs new my-skill -d "what this does and when to use it"')
 
 2. Write the procedure into SKILL.md, and add any scripts/ references/ assets/ files with your
    normal file tools (write files, bash: mkdir/cp/curl, etc.). Put everything UNDER the skill's
-   directory: ~/.sunny/skills/authored/my-skill/
+   directory: ~/.sunny/skills/authored/skills/my-skill/
 
 3. Persist it — validates, commits, and pushes to the canonical skill repo in one step:
 
-       bash(command: 'node skills/authored/skill-authoring/scripts/skill.mjs save my-skill')
+       bash(command: 'node skills/authored/skills/skill-authoring/scripts/skill.mjs save my-skill')
 
 4. Tell the owner you created it (send_message). It is auto-discovered on your next turn.
 
@@ -135,18 +135,18 @@ working directory (~/.sunny). It does validate → commit → push in one step:
 
 Edit any of its files, then run 'skill save' again:
 
-    node skills/authored/skill-authoring/scripts/skill.mjs save my-skill
+    node skills/authored/skills/skill-authoring/scripts/skill.mjs save my-skill
 
 ## Deleting a skill
 
-    node skills/authored/skill-authoring/scripts/skill.mjs rm my-skill
+    node skills/authored/skills/skill-authoring/scripts/skill.mjs rm my-skill
 
 ## Pulling the latest skills from the repo
 
 Skills auto-sync from the canonical repo every 10 minutes, so this is rarely needed — but if
 you know the repo just changed and want the update now:
 
-    node skills/authored/skill-authoring/scripts/skill.mjs sync
+    node skills/authored/skills/skill-authoring/scripts/skill.mjs sync
 
 It fast-forwards only. If it reports the repo has "diverged", tell the owner — do NOT try to
 merge or force it yourself.
@@ -324,7 +324,7 @@ style preference. Ask only what you genuinely need — infer the rest.
 
 ## 2. Pick a design style
 
-Styles live next to this skill in assets/styles/ (i.e. ~/.sunny/skills/authored/website-builder/assets/styles/).
+Styles live next to this skill in assets/styles/ (i.e. ~/.sunny/skills/authored/skills/website-builder/assets/styles/).
 
 - Read assets/styles/INDEX.md first — it is one line per style.
 - If the owner named or implied a style, use it. Otherwise recommend one and say why in a sentence.
@@ -344,7 +344,7 @@ Styles live next to this skill in assets/styles/ (i.e. ~/.sunny/skills/authored/
 
 ## 4. Write it to disk
 
-Write to a working directory under the runtime home, e.g. ~/.sunny/sites/<slug>/index.html
+Write to a working directory under the runtime home, e.g. ~/.sunny/state/sites/<slug>/index.html
 (create the folder). One file is enough; add an assets/ subfolder only for real images you have.
 
 ## 5. Host it with devbox

@@ -13,8 +13,8 @@
 //   skill rm   <name>                           remove the skill → commit → push
 //
 // This file is BUNDLED INTO the `skill-authoring` seed skill: `initSkills` installs
-// it at ~/.sunny/skills/authored/skill-authoring/scripts/skill.mjs, so it travels with the
-// skill (into the canonical skill repo on push) and needs no global install — the
+// it at ~/.sunny/skills/authored/skills/skill-authoring/scripts/skill.mjs, so it travels
+// with the skill (into the canonical skill repo on push) and needs no global install — the
 // skill body invokes it with `node`. Plain Node + git only (no build step, no tsx)
 // so it runs on any host as-is. It is the deterministic counterpart of the in-process
 // helpers in `src/skills/index.ts`; the small validation/slug logic below is
@@ -92,11 +92,19 @@ function runtimeDir() {
   return process.env.SUNNY_HOME ?? join(homedir(), '.sunny');
 }
 
-/** The PRIMARY (writable) skill root — the canonical-repo clone (D-SK8). Self-authoring
- *  only ever writes here; `trusted/` (owned mirrors) and `installed/` (third-party) are
- *  read-only/untrusted and never touched by this helper. Mirrors `skillsPaths` in index.ts. */
-function authoredRoot() {
+/** The authored tier's CLONE/repository root — `~/.sunny/skills/authored`, the cwd for
+ *  its git ops (commit/push/sync). Mirrors `authoredRoot` in index.ts. */
+function cloneRoot() {
   return join(runtimeDir(), 'skills', 'authored');
+}
+
+/** The PRIMARY (writable) skill root — `~/.sunny/skills/authored/skills` (D-SK8). The
+ *  canonical repo uses the spec `skills/<name>/SKILL.md` layout, so self-authored skills
+ *  are written here (and committed/pushed from {@link cloneRoot}). `trusted/` (owned
+ *  mirrors) and `installed/` (third-party) are read-only/untrusted and never touched by
+ *  this helper. Mirrors `skillsPaths` in index.ts. */
+function authoredRoot() {
+  return join(cloneRoot(), 'skills');
 }
 
 function git(args, cwd) {
@@ -112,21 +120,20 @@ function hasRemote(cwd) {
 }
 
 /**
- * Stage + commit the skills tree, and push when the working copy is its own repo
- * (a clone of the canonical skill repo, D-SK8) with a remote configured. Mirrors
- * `commitSkillChange` in src/skills/index.ts. Returns what happened so the caller
- * can report it. Best-effort push: offline → committed locally.
+ * Stage + commit the authored skills tree, and push when a remote is configured.
+ * All git ops run in the authored CLONE root (the skill files live one level down
+ * under `skills/`, but the repo is the clone root). Mirrors `commitSkillChange` in
+ * src/skills/index.ts. Returns what happened so the caller can report it. Best-effort
+ * push: offline → committed locally.
  */
-function gitPersist(dir, message) {
-  const root = join(dir, 'skills', 'authored');
-  const ownRepo = existsSync(join(root, '.git'));
-  const cwd = ownRepo ? root : dir;
-  if (!ownRepo && !existsSync(join(dir, '.git'))) {
-    return { committed: false, pushed: false, note: 'no git repo — saved to disk only' };
+function gitPersist(_dir, message) {
+  const root = cloneRoot();
+  if (!existsSync(join(root, '.git'))) {
+    return { committed: false, pushed: false, note: 'no git clone — saved to disk only' };
   }
-  git(['add', '-A', ...(ownRepo ? [] : ['skills/authored'])], cwd);
+  git(['add', '-A'], root);
   try {
-    git(['commit', '-q', '-m', message], cwd);
+    git(['commit', '-q', '-m', message], root);
   } catch (err) {
     const blob = `${err?.stdout ?? ''}${err?.stderr ?? ''}${err?.message ?? ''}`;
     if (/nothing to commit/i.test(blob))
@@ -134,7 +141,7 @@ function gitPersist(dir, message) {
     throw err;
   }
   let pushed = false;
-  if (ownRepo && hasRemote(root)) {
+  if (hasRemote(root)) {
     try {
       git(['push', '--quiet'], root);
       pushed = true;
@@ -210,7 +217,7 @@ function gitErrMsg(err) {
  *  `syncSkillRepo` in src/skills/index.ts — never auto-merges; reports divergence
  *  for the owner to reconcile. On-demand counterpart of the hourly background sync. */
 function cmdSync() {
-  const root = authoredRoot();
+  const root = cloneRoot();
   if (!existsSync(join(root, '.git'))) fail('skills dir is not a git clone — nothing to sync');
   try {
     git(['fetch', '--quiet'], root);

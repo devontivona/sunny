@@ -55,10 +55,21 @@ function pathsForRoot(root: string): SkillsPaths {
   };
 }
 
-/** Paths for the PRIMARY (writable) skill root: `~/.sunny/skills/authored` (D-SK8) —
- *  self-authored skills + curated first-party seeds, the canonical-repo clone. */
+/** The authored tier's CLONE/repository root: `~/.sunny/skills/authored` (D-SK8,
+ *  runtime-home) — a clone of the canonical skills repo, and the cwd for its git
+ *  operations (sync/commit/push). The repo uses the spec layout, so the SKILL.md
+ *  files live one level down under `skills/` (see {@link skillsPaths}). The loader
+ *  scans this root and nested-detects `skills/<name>/`. */
+export function authoredRoot(runtimeDir: string): string {
+  return join(runtimeDir, 'skills', 'authored');
+}
+
+/** Paths for the PRIMARY (writable) skill root: `~/.sunny/skills/authored/skills`
+ *  (D-SK8, runtime-home). The canonical repo packages skills under a top-level
+ *  `skills/<name>/SKILL.md` so other agents can `npx skills add` it, so self-authored
+ *  skills are WRITTEN here (committed + pushed from the clone root {@link authoredRoot}). */
 export function skillsPaths(runtimeDir: string): SkillsPaths {
-  return pathsForRoot(join(runtimeDir, 'skills', 'authored'));
+  return pathsForRoot(join(authoredRoot(runtimeDir), 'skills'));
 }
 
 /** Directory holding read-only clones of additional owned skill repos (D-SK8):
@@ -101,7 +112,9 @@ function skillRoots(
   config: SunnyConfig,
 ): { paths: SkillsPaths; origin?: string; trust: TrustTier }[] {
   const roots: { paths: SkillsPaths; origin?: string; trust: TrustTier }[] = [
-    { paths: skillsPaths(config.runtimeDir), trust: 'authored' },
+    // The authored tier is loaded from its CLONE root (the repo root), so the loader
+    // nested-detects `skills/<name>/` — the spec layout the repo is packaged in.
+    { paths: pathsForRoot(authoredRoot(config.runtimeDir)), trust: 'authored' },
   ];
   for (const repo of config.skills.repos ?? []) {
     roots.push({
@@ -199,11 +212,13 @@ function readSkillRecord(file: string, trust: TrustTier, origin?: string): Skill
   };
 }
 
-/** Read all valid skill records from ONE root, sorted by name. Auto-detects the
- *  repo layout: a single-skill repo (a `SKILL.md` at the root) vs a collection —
- *  `<name>/SKILL.md` subdirectories and/or a conventional `skills/<name>/SKILL.md`
- *  container (so a repo can ship its skill alongside other files). `trust` is the
- *  root's tier (by location); `origin` marks provenance for owned sources. */
+/** Read all valid skill records from ONE clean-layout repo root, sorted by name.
+ *  Recognizes exactly the two spec layouts (runtime-home): a single-skill repo (a
+ *  `SKILL.md` at the root) and a multi-skill repo (`skills/<name>/SKILL.md`). Skill
+ *  folders placed directly at the repo root (`<name>/SKILL.md` with no `skills/`
+ *  parent) are NOT recognized — that arrangement isn't part of the spec. `trust` is
+ *  the root's tier (by location); `origin` marks provenance for owned sources. The
+ *  `installed/` tier is loaded separately ({@link loadInstalledSkills}). */
 export function loadSkills(
   paths: SkillsPaths,
   trust: TrustTier = 'authored',
@@ -217,22 +232,15 @@ export function loadSkills(
     const rec = readSkillRecord(rootSkill, trust, origin);
     if (rec) records.push(rec);
   } else {
-    // Collection: one skill per subdirectory — either directly under the root
-    // (`<name>/SKILL.md`) or inside a conventional `skills/` container
-    // (`skills/<name>/SKILL.md`, the agentskills.io / npx layout a repo uses when it
-    // ships the skill alongside other files). Deduped by name within the root.
-    const containers = [paths.root];
+    // Multi-skill repo: one skill per subdirectory inside the conventional `skills/`
+    // container (`skills/<name>/SKILL.md`, the agentskills.io / `npx skills` layout),
+    // so a repo can ship its skills alongside other files.
     const skillsContainer = join(paths.root, 'skills');
-    if (existsSync(skillsContainer)) containers.push(skillsContainer);
-    const seen = new Set<string>();
-    for (const base of containers) {
-      for (const entry of readdirSync(base, { withFileTypes: true })) {
+    if (existsSync(skillsContainer)) {
+      for (const entry of readdirSync(skillsContainer, { withFileTypes: true })) {
         if (!entry.isDirectory() || entry.name === '.git') continue;
-        const rec = readSkillRecord(join(base, entry.name, 'SKILL.md'), trust, origin);
-        if (rec && !seen.has(rec.name)) {
-          seen.add(rec.name);
-          records.push(rec);
-        }
+        const rec = readSkillRecord(join(skillsContainer, entry.name, 'SKILL.md'), trust, origin);
+        if (rec) records.push(rec);
       }
     }
   }
@@ -420,12 +428,13 @@ async function git(root: string, args: string[]): Promise<string> {
 async function syncSkillRepo(config: SunnyConfig): Promise<SkillSyncResult> {
   const repo = config.skills.repo;
   if (!repo) return { status: 'skipped', reason: 'no skills.repo configured' };
-  const root = skillsPaths(config.runtimeDir).root;
+  const root = authoredRoot(config.runtimeDir);
   try {
     if (!existsSync(join(root, '.git'))) {
-      if (readdirSync(root).length > 0) {
+      if (existsSync(root) && readdirSync(root).length > 0) {
         return { status: 'skipped', reason: 'skills dir has content but is not a clone' };
       }
+      mkdirSync(dirname(root), { recursive: true });
       await exec('git', ['clone', '--quiet', repoUrl(repo), root]);
       log.info('cloned skill repo', { repo });
       return { status: 'cloned' };
@@ -454,7 +463,7 @@ async function syncSkillRepo(config: SunnyConfig): Promise<SkillSyncResult> {
 }
 
 /**
- * Sync one OWNED, read-only source repo into `~/.sunny/skill-sources/<slug>` (D-SK8):
+ * Sync one OWNED, read-only source repo into `~/.sunny/skills/trusted/<slug>` (D-SK8):
  * clone if absent, else `fetch` + **fast-forward only**. Sunny never writes to these,
  * so they should always ff cleanly; a non-ff (someone hand-edited the clone) is left
  * untouched and logged. Best-effort and non-fatal.
@@ -513,9 +522,20 @@ const SKILL_SYNC_MS = 10 * 60_000; // every 10 min — reads are live so the nex
 export function startSkillSync(deps: {
   config: SunnyConfig;
   onDiverged?: (detail: string) => void;
+  /** Best-effort work to run on each tick — e.g. the `state` repo push, batched onto
+   *  this cadence rather than per-write (runtime-home, task 2.4). Failures are the
+   *  callback's own concern; they never interrupt the skill sync. */
+  onTick?: () => Promise<void>;
 }): void {
   let warnedDiverged = false;
   async function tick(): Promise<void> {
+    if (deps.onTick) {
+      try {
+        await deps.onTick();
+      } catch (err) {
+        log.warn('skill-sync onTick failed (non-fatal)', { err: String(err) });
+      }
+    }
     const r = await syncSkillRepo(deps.config);
     if (r.status === 'diverged') {
       if (!warnedDiverged) {
@@ -544,14 +564,19 @@ export function startSkillSync(deps: {
  *  bundled seeds only fill gaps. Seeds/edits are committed (and pushed) so Sunny's
  *  improvements round-trip to the canonical repo. */
 export async function initSkills(config: SunnyConfig): Promise<void> {
-  const paths = skillsPaths(config.runtimeDir);
-  mkdirSync(paths.root, { recursive: true });
-  // The third-party install root (D-SK5): create it so `npx skills` has somewhere to land
-  // and the loader has a stable untrusted root to scan, even before anything is installed.
+  // The skill tiers are siblings under `~/.sunny/skills/` (runtime-home). Create the
+  // container + the third-party install root (so `npx skills` has somewhere to land
+  // and the loader has a stable untrusted root to scan, even before anything installs).
+  mkdirSync(join(config.runtimeDir, 'skills'), { recursive: true });
   mkdirSync(installedDir(config.runtimeDir), { recursive: true });
+  // Clone the canonical repo into `authored/` FIRST, while it's still empty (cloning
+  // into a non-empty dir fails) — only then materialize the write root inside it.
   await syncSkillRepo(config);
   // Clone/sync owned read-only source repos (D-SK8) so their skills are available too.
   await syncSourceRepos(config);
+
+  const paths = skillsPaths(config.runtimeDir);
+  mkdirSync(paths.root, { recursive: true });
 
   let changed = 0;
   for (const seed of SEED_SKILLS) {
@@ -591,27 +616,27 @@ function seedAssetPath(src: string): string {
   return fileURLToPath(new URL(`./seed-assets/${src}`, import.meta.url));
 }
 
-/** Commit a skill change to the ~/.sunny repo (D-SK8). Local only — pushing to a
- *  dedicated remote needs git creds (deferred to credentials/security). Non-fatal:
- *  a no-op commit (nothing changed) or a missing repo is logged, not thrown. */
 /** Commit a skill change, and push it to the canonical repo when one is configured
- *  (D-SK8). When `~/.sunny/skills/authored` is its own repo (a clone), commit + push there;
- *  otherwise fall back to committing under the `~/.sunny` repo (no-repo setups) — only the
- *  authored tier is committed; `trusted/` (clones) and `installed/` (third-party) are not.
- *  All git steps are best-effort and non-fatal (offline → committed locally). */
+ *  (D-SK8, runtime-home). All git ops run in the authored CLONE root
+ *  (`~/.sunny/skills/authored`) — the skill files live one level down under `skills/`,
+ *  but the repo (and its `.git`) is the clone root. Only the authored tier is
+ *  committed; `trusted/` (read-only clones) and `installed/` (third-party) are not.
+ *  Best-effort and non-fatal: with no clone there's nowhere to commit (skill stays on
+ *  disk); offline → committed locally and pushed on the next change/sync. */
 async function commitSkillChange(config: SunnyConfig, message: string): Promise<void> {
-  const root = skillsPaths(config.runtimeDir).root;
-  const ownRepo = existsSync(join(root, '.git'));
-  const cwd = ownRepo ? root : config.runtimeDir;
-  if (!ownRepo && !existsSync(join(config.runtimeDir, '.git'))) return;
+  const root = authoredRoot(config.runtimeDir);
+  if (!existsSync(join(root, '.git'))) {
+    log.warn('authored skills root is not a git clone — skill change left uncommitted', { root });
+    return;
+  }
   try {
-    await exec('git', ['add', '-A', ...(ownRepo ? [] : ['skills/authored'])], { cwd });
-    await exec('git', ['commit', '-q', '-m', message], { cwd });
+    await exec('git', ['add', '-A'], { cwd: root });
+    await exec('git', ['commit', '-q', '-m', message], { cwd: root });
   } catch (err) {
     log.warn('could not commit skill change (non-fatal)', { err: String(err) });
     return;
   }
-  if (ownRepo && config.skills.repo) {
+  if (config.skills.repo) {
     try {
       await exec('git', ['push', '--quiet'], { cwd: root });
     } catch (err) {

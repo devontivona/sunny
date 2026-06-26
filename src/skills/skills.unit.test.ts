@@ -3,13 +3,12 @@ import { join } from 'node:path';
 import { describe, it, expect } from 'vitest';
 import { makeConfig } from '../../tests/factories.js';
 import {
+  authoredRoot,
   composeSkill,
   deleteSkill,
   initSkills,
   loadAllSkills,
   loadSkillBody,
-  loadSkillIndex,
-  loadSkills,
   repoSlug,
   repoUrl,
   parseSkill,
@@ -103,11 +102,14 @@ describe('composeSkill', () => {
 });
 
 describe('write / load / delete round-trip', () => {
-  it('writes a skill, indexes it, loads its body, and deletes it', async () => {
+  it('writes a skill (under authored/skills), indexes it, loads its body, and deletes it', async () => {
     const config = makeConfig();
     const paths = skillsPaths(config.runtimeDir);
 
-    expect(loadSkills(paths)).toEqual([]);
+    // Authored writes land in the nested spec location and are discovered from the
+    // clone root via loadAllSkills (runtime-home); the write-root paths address the
+    // individual skill file (loadSkillBody).
+    expect(loadAllSkills(config)).toEqual([]);
 
     const res = await writeSkill(config, {
       name: 'deploy-site',
@@ -115,12 +117,16 @@ describe('write / load / delete round-trip', () => {
       body: 'run devbox up and share the url',
     });
     expect(res).toMatch(/wrote skill "deploy-site"/);
+    // The file is written one level down, under the spec `skills/<name>/` location.
+    expect(
+      existsSync(join(authoredRoot(config.runtimeDir), 'skills', 'deploy-site', 'SKILL.md')),
+    ).toBe(true);
 
-    const records = loadSkills(paths);
+    const records = loadAllSkills(config);
     expect(records.map((r) => r.name)).toEqual(['deploy-site']);
     expect(records[0]?.trust).toBe('authored');
 
-    const index = loadSkillIndex(paths, config.skills);
+    const index = renderSkillIndex(loadAllSkills(config), config.skills);
     expect(index).toContain('deploy-site: ship the static site with devbox');
 
     expect(loadSkillBody(paths, 'deploy-site')).toBe('run devbox up and share the url');
@@ -128,7 +134,7 @@ describe('write / load / delete round-trip', () => {
 
     const del = await deleteSkill(config, 'deploy-site');
     expect(del).toMatch(/deleted skill "deploy-site"/);
-    expect(loadSkills(paths)).toEqual([]);
+    expect(loadAllSkills(config)).toEqual([]);
   });
 
   it('rejects an incomplete skill', async () => {
@@ -150,14 +156,13 @@ describe('repoUrl', () => {
 describe('initSkills seeding', () => {
   it('seeds bundled skills on a fresh runtime, idempotently', async () => {
     const config = makeConfig();
-    const paths = skillsPaths(config.runtimeDir);
 
     await initSkills(config);
-    expect(loadSkills(paths).map((s) => s.name)).toContain('email');
-    const after = loadSkills(paths).length;
+    expect(loadAllSkills(config).map((s) => s.name)).toContain('email');
+    const after = loadAllSkills(config).length;
 
     await initSkills(config); // running again seeds nothing new
-    expect(loadSkills(paths).length).toBe(after);
+    expect(loadAllSkills(config).length).toBe(after);
   });
 
   it('seeds the browse skill with its reference assets', async () => {
@@ -166,7 +171,7 @@ describe('initSkills seeding', () => {
 
     await initSkills(config);
 
-    const browse = loadSkills(paths).find((s) => s.name === 'browse');
+    const browse = loadAllSkills(config).find((s) => s.name === 'browse');
     expect(browse?.description).toMatch(/agent-browser/);
     // Deeper engine + per-site docs travel with the skill (progressive disclosure).
     const dir = paths.skillDir('browse');
@@ -216,9 +221,13 @@ describe('loadAllSkills (multi-root owned repos)', () => {
     const sources = join(config.runtimeDir, 'skills', 'trusted');
     // single-skill repo: SKILL.md at the clone root
     writeSkillFile(join(sources, repoSlug('owner/devbox')), 'devbox', 'host sites');
-    // collection repo: one skill per subdir
-    writeSkillFile(join(sources, repoSlug('owner/pack'), 'alpha'), 'alpha', 'skill alpha');
-    writeSkillFile(join(sources, repoSlug('owner/pack'), 'beta'), 'beta', 'skill beta');
+    // collection repo: one skill per subdir under the spec `skills/<name>/` container
+    writeSkillFile(
+      join(sources, repoSlug('owner/pack'), 'skills', 'alpha'),
+      'alpha',
+      'skill alpha',
+    );
+    writeSkillFile(join(sources, repoSlug('owner/pack'), 'skills', 'beta'), 'beta', 'skill beta');
 
     const all = loadAllSkills(config);
     const byName = new Map(all.map((s) => [s.name, s]));
@@ -246,6 +255,22 @@ describe('loadAllSkills (multi-root owned repos)', () => {
     const devbox = loadAllSkills(config).find((s) => s.name === 'devbox');
     expect(devbox?.trust).toBe('authored');
     expect(devbox?.source).toBe('owner/devbox');
+  });
+
+  it('does NOT load a root-level multi-skill layout (<name>/SKILL.md with no skills/ parent)', async () => {
+    const config = makeConfig({
+      skills: { maxSkills: 20, descriptionMaxChars: 280, repos: ['owner/legacy'] },
+    });
+    // A repo that drops skill folders directly at its root — the non-spec layout the
+    // loader no longer recognizes (runtime-home D6).
+    const repoRoot = join(config.runtimeDir, 'skills', 'trusted', repoSlug('owner/legacy'));
+    writeSkillFile(join(repoRoot, 'rootlevel'), 'rootlevel', 'should not load');
+    // A single-skill repo (SKILL.md at the root) and the nested layout still load.
+    writeSkillFile(join(repoRoot, 'skills', 'nested'), 'nested', 'should load');
+
+    const names = loadAllSkills(config).map((s) => s.name);
+    expect(names).toContain('nested');
+    expect(names).not.toContain('rootlevel');
   });
 
   it('lets the primary win a name conflict with a source repo', async () => {
