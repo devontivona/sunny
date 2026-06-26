@@ -127,6 +127,117 @@ export function useLiveRun(runId: string | null, kind: RunKind): LiveRunState {
   return { message, run, done };
 }
 
+export interface LiveThreadState {
+  /** The in-flight turn's message, folded from the chunk stream (null between turns). */
+  message: UIMessage | null;
+  /** The current turn's descriptor. */
+  run: LiveRun | null;
+  /** The runId of the most recently completed turn — bumps on each `done` so the
+   *  caller can refetch the persisted thread to settle. */
+  lastDoneRunId: string | null;
+}
+
+/**
+ * Subscribe to a whole thread's live activity over one SSE connection. Streams
+ * whatever turn is running now and every later turn on the thread — so a page that
+ * is already open begins streaming the next message instantly (no run-id discovery,
+ * no polling gap). The fold resets when a new turn starts (status with a new runId).
+ */
+export function useLiveThread(threadId: string | null): LiveThreadState {
+  const [message, setMessage] = useState<UIMessage | null>(null);
+  const [run, setRun] = useState<LiveRun | null>(null);
+  const [lastDoneRunId, setLastDoneRunId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setMessage(null);
+    setRun(null);
+    if (!threadId) return;
+
+    let cancelled = false;
+    let currentRunId: string | null = null;
+    let controller: ReadableStreamDefaultController<UIMessageChunk> | null = null;
+    let foldId = 0;
+
+    // (Re)start a fold pipeline for a new turn: a fresh ReadableStream fed by chunk
+    // events, consumed by readUIMessageStream into a live UIMessage.
+    const startFold = () => {
+      const myFold = ++foldId;
+      const stream = new ReadableStream<UIMessageChunk>({
+        start(c) {
+          controller = c;
+        },
+      });
+      void (async () => {
+        try {
+          for await (const m of readUIMessageStream({ stream })) {
+            if (!cancelled && myFold === foldId) setMessage(m);
+          }
+        } catch {
+          /* stream reset/closed */
+        }
+      })();
+    };
+
+    const url = `/dashboard/api/live/stream?thread=${encodeURIComponent(threadId)}`;
+    const es = new EventSource(url, { withCredentials: true });
+
+    es.addEventListener('status', (e) => {
+      let r: LiveRun;
+      try {
+        r = JSON.parse((e as MessageEvent).data) as LiveRun;
+      } catch {
+        return;
+      }
+      if (cancelled) return;
+      if (r.runId !== currentRunId) {
+        // New turn: reset the fold so chunks don't concatenate across turns.
+        try {
+          controller?.close();
+        } catch {
+          /* ignore */
+        }
+        currentRunId = r.runId;
+        setMessage(null);
+        startFold();
+      }
+      setRun(r);
+    });
+    es.addEventListener('chunk', (e) => {
+      try {
+        controller?.enqueue(JSON.parse((e as MessageEvent).data) as UIMessageChunk);
+      } catch {
+        /* ignore a malformed frame */
+      }
+    });
+    es.addEventListener('done', (e) => {
+      try {
+        if (!cancelled) setRun(JSON.parse((e as MessageEvent).data) as LiveRun);
+      } catch {
+        /* ignore */
+      }
+      if (!cancelled && currentRunId) setLastDoneRunId(currentRunId);
+      try {
+        controller?.close();
+      } catch {
+        /* ignore */
+      }
+      // Keep the EventSource open for the next turn on this thread.
+    });
+
+    return () => {
+      cancelled = true;
+      es.close();
+      try {
+        controller?.close();
+      } catch {
+        /* ignore */
+      }
+    };
+  }, [threadId]);
+
+  return { message, run, lastDoneRunId };
+}
+
 /** Re-render every second while `running` so elapsed-time labels tick. The value
  *  stops advancing once `running` is false (the interval clears). */
 export function useNow(running: boolean): number {

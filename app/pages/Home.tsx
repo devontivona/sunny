@@ -1,5 +1,5 @@
 import { NAV } from '../components/Layout';
-import { LinkButton } from '../components/Link';
+import { Link, LinkButton } from '../components/Link';
 import { navigate } from '../router';
 import { useActiveRuns } from '../components/live';
 import type { LiveRun } from '../types';
@@ -20,16 +20,17 @@ function runHref(r: LiveRun): string {
 function ActiveNow() {
   const live = useActiveRuns().filter((r) => r.status === 'running');
   if (live.length === 0) return null;
+  // Each active run is a real hyperlink (not a button) straight to its live view —
+  // unambiguously clickable, cmd-clickable, and independent of any JS handler.
   return (
     <div className="mb-md">
       <div className="text-warning">● Sunny is active now</div>
       <ul className="mt-xs">
         {live.map((r) => (
-          <li key={r.runId} className="flex items-baseline gap-sm">
-            <span className="w-24 shrink-0 text-fg-dim">
-              {r.kind === 'turn' ? 'conversation' : 'job'}
-            </span>
-            <LinkButton onClick={() => navigate(runHref(r))}>{r.label}</LinkButton>
+          <li key={r.runId}>
+            <Link to={runHref(r)} className="text-primary hover:underline">
+              → {r.kind === 'turn' ? 'conversation' : 'job'} · {r.label} (live)
+            </Link>
           </li>
         ))}
       </ul>

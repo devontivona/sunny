@@ -337,9 +337,17 @@ export default defineEventHandler(async (event) => {
         case path === 'live/active':
           return await data.activeRuns();
         case path === 'live/stream': {
-          const run = String(query.run ?? '');
-          if (!run) return json(400, { error: 'missing run id' });
           const stream = createEventStream(event);
+          // Thread-scoped subscription (the Conversation page): stream whatever turn
+          // is/becomes active on the thread, so an open page needs no run id and has
+          // no polling gap.
+          const thread = String(query.thread ?? '');
+          if (thread) {
+            startThreadStream(stream, thread);
+            return stream.send();
+          }
+          const run = String(query.run ?? '');
+          if (!run) return json(400, { error: 'missing run or thread id' });
           if (String(query.kind ?? 'turn') === 'job') void startJobStream(stream, run);
           else startTurnStream(stream, run);
           return stream.send();
@@ -408,6 +416,26 @@ function startTurnStream(stream: LiveStream, runId: string): void {
   if (!bus.getTurn(runId)) {
     void stream.push({ event: 'done', data: JSON.stringify({ runId }) }).then(() => stream.close());
   }
+}
+
+/** Stream a whole thread's live turns over SSE (the Conversation page): replays a
+ *  currently-running turn, then streams it and every later turn on the thread. Stays
+ *  open across turns — `done` is forwarded but the connection is NOT closed, so the
+ *  next message on the thread streams instantly without a reconnect. */
+function startThreadStream(stream: LiveStream, threadId: string): void {
+  const bus = getLiveBus();
+  let closed = false;
+  const unsub = bus.subscribeThread(threadId, (ev) => {
+    if (closed) return;
+    if (ev.type === 'chunk') void stream.push({ event: 'chunk', data: JSON.stringify(ev.chunk) });
+    else if (ev.type === 'status')
+      void stream.push({ event: 'status', data: JSON.stringify(ev.run) });
+    else void stream.push({ event: 'done', data: JSON.stringify(ev.run) });
+  });
+  stream.onClosed(() => {
+    closed = true;
+    unsub();
+  });
 }
 
 /** Stream a Tier-2 job's live chunks from its durable WDK run stream over SSE:

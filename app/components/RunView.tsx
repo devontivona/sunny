@@ -115,12 +115,33 @@ function ToolPart({ part }: { part: ToolPartShape }) {
 }
 
 /** Render a list of `UIMessagePart`s as a trajectory. Shared by the live stream
- *  (`RunView`) and persisted turns (`Bubble`) so both show the same expanded view. */
+ *  (`RunView`) and persisted turns (`Bubble`) so both show the same expanded view.
+ *
+ *  Steps are shown newest-first — consistent with the newest-first thread ordering,
+ *  so the most recent activity is always at the top. Parts are grouped into step
+ *  blocks at `step-start` boundaries and the block order is reversed; within a step
+ *  parts stay in natural order so a tool call still reads with its result. */
 export function MessageParts({ parts }: { parts: readonly AnyPart[] }) {
+  const groups: AnyPart[][] = [];
+  for (const part of parts) {
+    if (part.type === 'step-start') {
+      groups.push([]);
+    } else {
+      const last = groups[groups.length - 1];
+      if (last) last.push(part);
+      else groups.push([part]);
+    }
+  }
+  const ordered = groups.filter((g) => g.length > 0).reverse();
   return (
     <>
-      {parts.map((part, i) => (
-        <Part key={i} part={part} />
+      {ordered.map((group, gi) => (
+        <div key={gi}>
+          {gi > 0 && <div className="my-sm border-t border-border" aria-hidden />}
+          {group.map((part, i) => (
+            <Part key={i} part={part} />
+          ))}
+        </div>
       ))}
     </>
   );

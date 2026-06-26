@@ -4,7 +4,7 @@ import type { ConversationMessage, SearchHit, ThreadSummary } from '../types';
 import { Markdown } from '../components/Markdown';
 import { Link, LinkButton } from '../components/Link';
 import { ErrorNote, Loading, Panel, PageTitle, formatTime, useAsync } from '../components/ui';
-import { useActiveRuns, useLiveRun } from '../components/live';
+import { useLiveThread } from '../components/live';
 import { RunView, MessageParts } from '../components/RunView';
 import { navigate } from '../router';
 
@@ -203,23 +203,22 @@ function ThreadPage({ threadId }: { threadId: string }) {
   const reload = state.reload;
   const label = state.status === 'ready' ? state.data.label : '…';
 
-  // Is this thread live right now? Find an active TURN run for it, then stream it.
-  const active = useActiveRuns();
-  const liveTurn = active.find((r) => r.kind === 'turn' && r.threadId === threadId) ?? null;
-  const { message, run, done } = useLiveRun(liveTurn?.runId ?? null, 'turn');
+  // Stream this thread live over one persistent SSE connection — whatever turn runs
+  // now or next, with no run-id discovery and no polling gap (so a message sent
+  // while the page is open starts streaming immediately).
+  const { message, run, lastDoneRunId } = useLiveThread(threadId);
   const [settledRun, setSettledRun] = useState<string | null>(null);
 
-  // Settle to the persisted record: when the live turn finishes, refetch the thread
-  // (the turn becomes a normal bubble) and stop rendering the live trajectory so it
-  // isn't shown twice.
+  // Settle to the persisted record: when a turn finishes, refetch the thread (the
+  // turn becomes a normal per-step bubble) and stop rendering the live trajectory.
   useEffect(() => {
-    if (done && liveTurn) {
-      setSettledRun(liveTurn.runId);
+    if (lastDoneRunId && lastDoneRunId !== settledRun) {
+      setSettledRun(lastDoneRunId);
       reload();
     }
-  }, [done, liveTurn?.runId, reload]);
+  }, [lastDoneRunId, settledRun, reload]);
 
-  const showLive = liveTurn && message != null && settledRun !== liveTurn.runId;
+  const showLive = run != null && message != null && settledRun !== run.runId;
 
   return (
     <div>
@@ -229,7 +228,7 @@ function ThreadPage({ threadId }: { threadId: string }) {
       </div>
       {showLive && (
         <Panel title="● Sunny is responding…">
-          <RunView message={message} run={run ?? liveTurn} />
+          <RunView message={message} run={run} />
         </Panel>
       )}
       {state.status === 'loading' && <Loading />}

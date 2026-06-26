@@ -86,6 +86,10 @@ const REAP_INTERVAL_MS = 30_000;
 
 export class LiveBus {
   private readonly turns = new Map<string, TurnEntry>();
+  /** Subscribers following a whole thread (the Conversation page): they receive
+   *  events for whatever turn is running on that thread, across turns — so an
+   *  already-open page streams the next turn instantly, with no polling gap. */
+  private readonly threadSubs = new Map<string, Set<Subscriber>>();
 
   constructor(private readonly redactor: Redactor = defaultRedactor()) {
     // Periodic reap of finished/stale runs. Unref'd so it never holds the process
@@ -122,6 +126,10 @@ export class LiveBus {
       updatedAt: now,
       finishedAt: 0,
     });
+    // Tell any open thread subscribers that a new turn started (so a page already
+    // open on this thread begins streaming immediately).
+    const entry = this.turns.get(init.runId);
+    if (entry) this.emit(entry, { type: 'status', run: entry.run });
   }
 
   /** Forward one `UIMessageChunk` for a turn: redact, buffer (bounded), advance the
@@ -178,6 +186,36 @@ export class LiveBus {
     };
   }
 
+  /**
+   * Subscribe to a whole thread's live events (the Conversation page). Replays the
+   * thread's currently-running turn (if any) for immediate catch-up, then streams
+   * events for that turn and every later turn on the thread — so an already-open
+   * page begins streaming the next message with no polling gap. Returns unsubscribe.
+   */
+  subscribeThread(threadId: string, fn: Subscriber): () => void {
+    let set = this.threadSubs.get(threadId);
+    if (!set) {
+      set = new Set();
+      this.threadSubs.set(threadId, set);
+    }
+    set.add(fn);
+    // Replay only a currently-running turn (a finished one is already the persisted
+    // bubble; replaying it would just flicker the live view).
+    const running = [...this.turns.values()]
+      .filter((e) => e.run.threadId === threadId && e.run.status === 'running')
+      .sort((a, b) => b.updatedAt - a.updatedAt)[0];
+    if (running) {
+      fn({ type: 'status', run: running.run });
+      for (const chunk of running.buffer) fn({ type: 'chunk', chunk });
+    }
+    return () => {
+      const s = this.threadSubs.get(threadId);
+      if (!s) return;
+      s.delete(fn);
+      if (s.size === 0) this.threadSubs.delete(threadId);
+    };
+  }
+
   /** Snapshot of currently-active (running or just-finished) turns. */
   activeTurns(): LiveRun[] {
     return [...this.turns.values()].map((e) => e.run);
@@ -194,6 +232,17 @@ export class LiveBus {
         fn(event);
       } catch {
         // A failing subscriber must not break the publish path or sibling readers.
+      }
+    }
+    // Also deliver to anyone following the whole thread this run belongs to.
+    const threadSet = entry.run.threadId ? this.threadSubs.get(entry.run.threadId) : undefined;
+    if (threadSet) {
+      for (const fn of threadSet) {
+        try {
+          fn(event);
+        } catch {
+          // isolate subscriber failures
+        }
       }
     }
   }

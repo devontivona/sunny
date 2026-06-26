@@ -67,6 +67,67 @@ describe('LiveBus — publish & subscribe', () => {
   });
 });
 
+describe('LiveBus — thread subscription (already-open page)', () => {
+  it('delivers a turn that starts AFTER the thread subscription (no polling gap)', () => {
+    const bus = new LiveBus(createRedactor());
+    const { events, fn } = collect();
+    // Page already open on the thread; nothing running yet.
+    bus.subscribeThread('t1', fn);
+    expect(events).toHaveLength(0);
+    // A message arrives and a turn starts — the open subscriber learns immediately.
+    register(bus, 'r1', 't1');
+    bus.publishTurnChunk('r1', chunk({ type: 'text-delta', id: 'a', delta: 'hi' }));
+    bus.finishTurn('r1', 'finished');
+    expect(events[0]).toMatchObject({ type: 'status', run: { runId: 'r1' } });
+    expect(events.some((e) => e.type === 'chunk')).toBe(true);
+    expect(events.some((e) => e.type === 'done')).toBe(true);
+  });
+
+  it('replays a currently-running turn to a late thread subscriber', () => {
+    const bus = new LiveBus(createRedactor());
+    register(bus, 'r1', 't1');
+    bus.publishTurnChunk('r1', chunk({ type: 'text-delta', id: 'a', delta: 'mid' }));
+    const { events, fn } = collect();
+    bus.subscribeThread('t1', fn);
+    expect(events[0]).toMatchObject({ type: 'status', run: { runId: 'r1' } });
+    expect(events.some((e) => e.type === 'chunk')).toBe(true);
+  });
+
+  it('follows the thread across turns (next turn streams without re-subscribing)', () => {
+    const bus = new LiveBus(createRedactor());
+    const { events, fn } = collect();
+    bus.subscribeThread('t1', fn);
+    register(bus, 'r1', 't1');
+    bus.finishTurn('r1', 'finished');
+    register(bus, 'r2', 't1');
+    bus.publishTurnChunk('r2', chunk({ type: 'text-delta', id: 'b', delta: 'next' }));
+    const runIds = events
+      .filter((e): e is Extract<LiveEvent, { type: 'status' }> => e.type === 'status')
+      .map((e) => e.run.runId);
+    expect(runIds).toContain('r1');
+    expect(runIds).toContain('r2');
+  });
+
+  it('does not deliver events for other threads', () => {
+    const bus = new LiveBus(createRedactor());
+    const { events, fn } = collect();
+    bus.subscribeThread('t1', fn);
+    register(bus, 'r9', 't2');
+    bus.publishTurnChunk('r9', chunk({ type: 'text-delta', id: 'a', delta: 'x' }));
+    expect(events).toHaveLength(0);
+  });
+
+  it('stops delivering after unsubscribe', () => {
+    const bus = new LiveBus(createRedactor());
+    const { events, fn } = collect();
+    const unsub = bus.subscribeThread('t1', fn);
+    unsub();
+    register(bus, 'r1', 't1');
+    bus.publishTurnChunk('r1', chunk({ type: 'text-delta', id: 'a', delta: 'x' }));
+    expect(events).toHaveLength(0);
+  });
+});
+
 describe('LiveBus — lifecycle', () => {
   it('marks a run finished, emits done, and carries final steps/usage', () => {
     const bus = new LiveBus(createRedactor());
