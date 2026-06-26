@@ -1,89 +1,90 @@
 ## Context
 
-The dashboard (React 19 SPA + Nitro server, single unified Vite dev process) renders the Conversation page from a one-shot `apiGet('/conversation/thread?id=…')` against `server/routes/dashboard/api/[...].ts` → `DashboardData.thread()`, which reads the `messages` table (ordered `timestamp DESC, limit 50`) and projects each row's `payload` (an AI SDK `UIMessage`) into a `ConversationMessage` (`delivered[]`, `scratch`, `usage`, `steps`, …). It is static and oldest-first within a fetched page; nothing updates while Sunny works.
+The dashboard (React 19 SPA + Nitro server, single unified Vite dev process) renders the Conversation page from a one-shot `apiGet('/conversation/thread?id=…')` against `server/routes/dashboard/api/[...].ts` → `DashboardData.thread()`, which reads the `messages` table (`timestamp DESC, limit 50`) and projects each row's `payload` (an AI SDK `UIMessage`) into a `ConversationMessage`. It is static and oldest-first; nothing updates while Sunny works.
 
-Sunny's activity is produced in two places, **both inside one long-lived worker process**:
-- **Tier-1 turns** — `src/agent/dispatcher.ts` → `src/agent/loop.ts` (`createAgentRunner`). The loop calls `gateway.startTyping(threadId)`, runs a `ToolLoopAgent` (AI SDK v6, `claude-opus-4-8`), **consumes the `UIMessageStream` to completion**, extracts parts, then `store.appendTurn(...)` persists the whole `UIMessage` at the end. Persistence is end-of-turn only.
-- **Tier-2 jobs** — `workflows/job.ts` / `workflows/scheduledJob.ts`, durable WDK workflows where each LLM/tool call is a durable step. Runs are recorded in `workflow.workflow_runs` / `workflow.workflow_steps`; the dashboard's `Jobs.tsx` reads them after the fact.
+Two facts shape this design:
 
-There is **no event bus, WebSocket, SSE, or polling** today; every page uses the `useAsync` one-shot fetch hook (`app/components/ui.tsx`). Observability already exists via Langfuse/OTel with `langfuseSessionId = threadId`, and a redaction layer keeps secrets out of every sink. The only live signal to the owner is the iMessage typing indicator.
+- **Sunny already speaks `UIMessage`.** The persisted `messages.payload` is an AI SDK `UIMessage`, and `src/agent/loop.ts` already produces the turn by consuming `result.toUIMessageStream()` with `readUIMessageStream(...)` (loop.ts:260). The AI SDK `UIMessagePart` union (`text`, `tool-*`, `reasoning`, `step-start`) is exactly the per-step / tool-call shape the proposal needs. So we adopt `UIMessageChunk` as the live wire and `UIMessage` as the render model rather than inventing a parallel event schema.
+- **The Workflow DevKit gives durable, resumable streams — but only on workflow runs.** Every WDK run has a durable default stream: a step writes chunks via `getWritable<T>()`, and an HTTP route reads them via `getRun(id).getReadable({ startIndex })` (negative `startIndex` replays the last N chunks for late-join/reconnect). It is event-sourced into the Postgres workflow world (no Redis), survives process restart, and `@workflow/ai` ships a `WorkflowChatTransport` that does the reconnect-by-`x-workflow-run-id` handshake. **Streams cannot exist standalone** — they are exclusively tied to a workflow run.
 
-This design adds a read-only live observability path: tap the activity Sunny already produces, publish it on an in-process bus, expose it over SSE behind the existing dashboard auth gate, and rework the Conversation page (and the running-job view, and a home indicator) to consume it.
+Sunny's activity is produced in **one long-lived worker process**, across two tiers:
+- **Tier-1 turns** — `dispatcher.ts` → `loop.ts`, run **in-process** (deliberately, for latency and to keep the byte-stable cached system prefix). These are **not** workflow runs, so WDK durable streams cannot reach them without wrapping each turn in a durable workflow (rejected — see Non-Goals).
+- **Tier-2 jobs** — `workflows/job.ts` / `workflows/scheduledJob.ts`, **are** WDK workflow runs, so they get durable resumable streams for free.
+
+There is no event bus / WebSocket / SSE / polling today; every page uses the `useAsync` one-shot fetch hook. Observability already exists via Langfuse/OTel with a redaction layer. This design adds a read-only live path that reuses the AI SDK UI primitives, leans on WDK streams where they apply, and bridges only the in-process gap with a thin custom seam.
 
 ## Goals / Non-Goals
 
 **Goals:**
 - Reverse the Conversation view to most-recent-first, with the in-flight turn pinned at the top.
-- Render each turn as a trajectory: thinking/scratch, tool calls (name + args), tool results/errors, step boundaries.
-- Stream in-flight turn and job activity to the open view with no manual refresh, then settle to the persisted record on completion.
-- Show a home-page "active now" indicator that deep-links to the live run; reuse the same live run view for actively-running Tier-2 jobs.
-- Surface live debug state per run: status, elapsed, step count, live token usage (incl. cache read/write), active model/effort, link to the Langfuse trace.
+- Render each turn/job as a trajectory using AI SDK `UIMessage` parts: thinking/scratch, tool calls (name + args), results/errors, step boundaries.
+- Stream in-flight turn and job activity to the open view with no manual refresh, then settle to the persisted record.
+- Home-page "active now" indicator deep-linking to the live run; reuse the same live run view for actively-running Tier-2 jobs.
+- Per-run live debug state: status, elapsed, step count, live token usage (incl. cache read/write), model/effort, Langfuse trace link.
 - Stay strictly observe-only and leak no secrets.
 
 **Non-Goals:**
-- No control affordances (send/cancel/retry/edit) — out of scope and forbidden by the `web-dashboard` observe-only invariant.
-- No new persistence / DB migration; live events are ephemeral and derived from existing activity.
-- No change to what trajectories capture, to delivery logic, or to the byte-stable cached system prefix.
-- No live streaming of the Health/Schedules pages in this change (Activity gains in-flight run state only); broader live-health is deferred.
-- No cross-process transport (LISTEN/NOTIFY) now — single-process in-memory bus is sufficient; the seam is abstracted so it can be swapped later.
+- No control affordances (send/cancel/retry/edit).
+- **Do not make Tier-1 turns durable workflow runs.** The two-tier design keeps conversational turns in-process for latency and cached-prefix stability; adding per-turn durability just for observability is out of scope. (Chosen: hybrid transport — see Decisions.)
+- No new persistence / DB migration for turns; turn live events are ephemeral.
+- No change to delivery logic, to what trajectories capture, or to the cached system prefix.
+- No live Health/Schedules streaming in this change (Activity gains in-flight run state only).
+- No `useChat` as the page-level abstraction (the dashboard is multi-thread, observational, and never sends) — we reuse its primitives, not the hook itself.
 
 ## Decisions
 
-### Decision: In-process `LiveBus` event bus on the runtime singleton
-A single `LiveBus` (thin wrapper over Node `EventEmitter`) is created once in `src/runtime.ts` and held on the runtime singleton, alongside the gateway/scheduler/store. Both the agent loop and the job runners publish to it; the SSE route subscribes to it.
+### Decision: `UIMessage` / `UIMessageChunk` is the canonical wire and render model
+The live wire carries AI SDK `UIMessageChunk`s; the front-end folds them into `UIMessage`s with `readUIMessageStream` and renders the `UIMessagePart` union with shared part components. The persisted `payload` is the same `UIMessage`, so the static view and the live view share one renderer.
 
-- **Why:** turns and jobs share one long-lived process, so an in-memory bus reaches both with zero infra. It is inert when no one is listening (no cost on the hot path).
-- **HMR safety:** the bus lives on the runtime singleton that already survives back-end hot reload (the spec requires a front-end edit not to re-run durable startup), so subscribers aren't orphaned by HMR.
-- **Alternatives:** Postgres `LISTEN/NOTIFY` (rejected: overkill for one process, adds latency/DB load); WDK tables polled by the dashboard (rejected: coarse, no sub-step granularity, laggy). The `LiveBus` is defined behind a small interface so a future multi-process split can swap the transport without touching publishers.
+- **Why:** the loop already emits a `UIMessageStream`; parts already model thinking/tool-call/result/step-start; the persisted record is already a `UIMessage`. A bespoke event union would re-derive all of this and create a second schema to keep in sync. This is the single biggest reuse win.
+- **Consequence:** the earlier "custom event union" idea is dropped. Run-level metadata not expressible as message parts (status, elapsed, live usage, model/effort, trace link) rides alongside via `UIMessage.metadata` and the active-runs registry, not a separate event grammar.
 
-### Decision: Tap the existing AI SDK stream; publish parts as they arrive
-The loop already consumes the `UIMessageStream`. We tap that same consumption point in `loop.ts` to publish a live event per meaningful part (step-start, text-delta, tool-input/tool-call, tool-result/error, usage, status) **in addition to** the existing accumulation-and-`appendTurn`. No second model pass; publishing is a side-channel on data already flowing.
+### Decision: Tier-2 jobs stream over WDK durable resumable streams
+Jobs (already WDK runs) write `UIMessageChunk`s to the run's default stream from their steps via `getWritable()`; the dashboard reads them by run id via `getRun(jobRunId).getReadable({ startIndex })`, served to the browser as SSE. The client uses `WorkflowChatTransport` (or the same `readUIMessageStream` consumer) to attach/reconnect with `startIndex: -N` for late-join.
 
-- **Why:** zero added LLM cost, naturally ordered, and the event shape can mirror `UIMessage` parts so the client reconciles cleanly.
-- For **jobs**, publish from the job runner's stream consumption as **best-effort, non-durable side effects** (see Risks — WDK replay), keyed by the WDK run id.
-- **Coalescing:** text deltas are throttled/coalesced (e.g. batched on a short timer) before publish to avoid event floods; tool/step/status events are sent eagerly.
+- **Why:** durable, resumable, replayable, survives process restart, late-join for free — backed by the Postgres world we already run, **no Redis, no hand-built replay buffer**. Strictly better than an in-memory bus for the job half.
+- **Note:** write chunks from within steps (the SDK requires stream writes to happen in steps, not the deterministic workflow body); progress/log channels can use a named stream namespace if we want to separate them from the message stream.
+
+### Decision: Tier-1 turns stream over a thin in-process publish → SSE (same `UIMessageChunk` wire)
+Because in-process turns are not workflow runs, we keep a small in-process publish seam: tap the loop's existing `toUIMessageStream()` consumption and forward the same `UIMessageChunk`s to subscribers, exposed over SSE under `/dashboard/api/live`. It holds a **bounded per-turn replay buffer** for late-join (turns are not durable, so this is the one place we buffer ourselves). The seam lives on the runtime singleton (survives back-end HMR) and is inert when no one subscribes.
+
+- **Why:** turns deliberately avoid durability; this bridges only the in-process gap, reusing the AI SDK chunk wire so turns and jobs render identically. The seam is small and behind an interface, so if turns ever become durable runs it collapses into the WDK path.
+- **Alternatives rejected:** wrapping every turn in a durable workflow (adds latency, touches the cached-prefix design — a Non-Goal); a general LISTEN/NOTIFY bus (overkill for one process).
 
 ### Decision: Unified `Run` model + active-runs registry
-Introduce one `Run` concept covering both kinds: `{ runId, kind: 'turn' | 'job', threadId?, jobName?, label, status, startedAt, model, effort, steps, usage, traceUrl }`. Turn `runId` is minted at turn start (one active turn per thread, per the dispatcher's per-thread serialization); job `runId` is the WDK run id. The `LiveBus` maintains an in-memory **active-runs registry** (add on start, update on events, remove shortly after finish), which powers the home indicator and lets a late-joining client get a snapshot.
+One `Run` concept covers both kinds: `{ runId, kind: 'turn' | 'job', threadId?, jobName?, label, status, startedAt, model, effort, steps, usage, traceUrl }`. Turn `runId` is minted at turn start (one active turn per thread, per the dispatcher's serialization); job `runId` is the WDK run id (the same id used for `getReadable`). An in-memory active-runs registry (add on start, update on event/heartbeat, reap on finish or TTL) powers the home indicator and the connect-time snapshot. This unifies the home indicator, the Conversation live view, and the job view over the same component set.
 
-- **Why:** the Conversation live view, the running-job view, and the home indicator all need "what is active and what is its state" — one model serves all three and keeps the front-end components shared.
+### Decision: SSE for both tiers under `/dashboard/api/live`, behind the existing auth gate
+A streaming route (separate from the JSON catch-all) serves `text/event-stream` for turns (from the in-process seam) and proxies the WDK `getReadable` stream for jobs, plus a `/dashboard/api/live/active` JSON endpoint for the home indicator's first paint. All live routes sit behind the same session gate as `/dashboard/api/**`, and every chunk passes through the existing redaction layer before the wire.
 
-### Decision: Single multiplexed SSE stream under `/dashboard/api/live`
-Add one SSE endpoint (`text/event-stream`) that, on connect, emits a snapshot of active runs + a bounded per-run replay buffer, then tails the `LiveBus`. Events carry `runId`; the client filters by the run(s) it's displaying. A separate lightweight `/dashboard/api/live/active` JSON endpoint backs the home indicator's initial paint (then it shares the stream for updates).
+- **Why SSE over WebSocket:** one-way, read-only, rides plain HTTP through the cookie gate, auto-reconnects, natively supported by H3/Nitro. (For jobs, `WorkflowChatTransport`'s reconnect uses the same GET-by-run-id shape.)
 
-- **Why SSE over WebSocket:** the channel is one-way and read-only; SSE rides plain HTTP through the existing cookie-auth gate, auto-reconnects in the browser, and is natively supported by H3/Nitro streaming. WebSocket's duplex/extra infra buys nothing here.
-- **Why multiplexed (one stream) over per-run streams:** simpler connection lifecycle, one auth check, trivial home-indicator + multi-run support; the client already knows which runId it cares about. Per-run streams would multiply connections and reconnection logic.
-- **Auth:** the live routes sit behind the same session gate as the rest of `/dashboard/api/**`; an unauthenticated request gets the same denial as any other dashboard API call. Served via a dedicated streaming route so the existing JSON catch-all stays untouched.
-- **Redaction:** every event payload passes through the existing telemetry redaction before hitting the wire (defensive — tool args already exclude secret values by invariant, but `op://` refs/URLs are filtered the same as other sinks).
+### Decision: Reconciliation is nearly free
+Because the streamed `UIMessage` for a turn is the *same object* the loop persists via `appendTurn`, the live provisional turn and the stored turn converge by construction. On `finish`/run-completion the client may refetch the persisted thread to be safe, but there is no separate streamed-vs-stored schema to reconcile.
 
-### Decision: Reconcile by settling to the persisted record
-The streamed in-flight turn is a *provisional* object in the client. On `run-finished`, the client refetches the persisted thread via the existing `/conversation/thread` endpoint and replaces the provisional turn with the stored one. This guarantees the spec's "streamed state settles to the persisted record with no divergence," and makes late-join / dropped-event cases self-healing (the persisted record is the source of truth; the stream is an accelerator).
-
-- **Why:** avoids trying to make the stream perfectly lossless; the DB remains authoritative, the stream just makes it feel live.
-
-### Decision: Front-end — reverse order, pinned live turn, shared run-view component
-- Conversation thread view renders newest-first (the existing query already returns `timestamp DESC`; the page just renders top-down and prepends the in-flight provisional turn).
-- A new `useLiveRun(runId)` / `useActiveRuns()` hook wraps `EventSource`, parallel to `useAsync`, managing connect/reconnect/snapshot/tail.
-- A shared `<RunView>` (steps, tool calls, results, status/elapsed/usage/model, trace link) is used by both the Conversation in-flight turn and the running-job view, satisfying "reuse the live view for background jobs."
-- `Home.tsx` gains an active-runs banner (absent when idle) with deep links; `Jobs.tsx` links a running job into the shared run view.
+### Decision: Front-end reuses AI SDK primitives, not the `useChat` hook
+- Conversation thread renders newest-first (the query already returns `timestamp DESC`); the in-flight provisional turn is prepended.
+- A `useLiveRun(runId)` hook wraps either `EventSource` (turns) or `WorkflowChatTransport`/`getReadable` (jobs) and exposes the folded `UIMessage` + run metadata; a `useActiveRuns()` hook backs the home indicator. These sit parallel to the existing `useAsync`.
+- A shared `<RunView>` renders the `UIMessagePart` union plus the run status bar, used by both the Conversation in-flight turn and the job view.
 
 ## Risks / Trade-offs
 
-- **WDK durable replay double-emits job events** → publish job live events as best-effort, non-durable side effects (outside durable-step semantics), tag each event with a monotonic per-run sequence id, and have the client dedupe/replace by sequence. Worst case a replay re-emits and the client idempotently overwrites; the persisted record still settles correctly.
-- **Event flood from token/text deltas** → coalesce text deltas on a short timer and send a single rolling "in-progress text" rather than per-token events; the bus is a no-op when there are no subscribers, so idle turns cost nothing.
-- **Stale/false "active" indicator if a run dies without a finish event** (crash, process restart) → registry entries carry `startedAt` and a heartbeat/last-update; entries that go stale past a TTL are reaped, and the home indicator treats no recent update as "not active." On reconnect the client re-syncs from the snapshot.
-- **Future multi-process job execution would blind the in-memory bus** → the bus is behind a small publish/subscribe interface; swapping to Postgres `LISTEN/NOTIFY` later is localized to the bus implementation and SSE route, not the publishers or the front-end.
-- **Leaking secrets through tool args / errors on a new wire** → route all event payloads through the existing redaction layer; tool arguments never contain secret values by invariant (only `op://` refs), and the live wire is auth-gated identically to other dashboard data.
-- **SSE connections held open across HMR / many tabs** → the bus is a runtime singleton (survives back-end HMR); the SSE handler closes cleanly on client disconnect and there is a single multiplexed stream per tab, bounding connection count.
+- **Turns are not durable; a crash loses in-flight turn events** → acceptable: the persisted turn is the source of truth and the loop persists on completion; the in-process buffer only accelerates the live view. Jobs (the long-running case where durability matters most) are durable via WDK.
+- **Multiple dashboard tabs reading the same WDK job stream** → `getReadable` is expected to mint an independent event-sourced reader per call; verify multi-reader behavior during apply, and if needed fan out through the in-process seam instead of N direct `getReadable` calls.
+- **Writing live chunks from job steps adds step overhead / could replay on durable re-execution** → keep stream writes lightweight and idempotent; the SDK already scopes writes to steps, and `UIMessageChunk`s carry part ids so a replay overwrites rather than duplicates on the client.
+- **Two transports to maintain (SSE seam for turns, WDK stream for jobs)** → mitigated by the shared `UIMessageChunk` wire and shared `<RunView>`: only the attach/reconnect layer differs, behind `useLiveRun`.
+- **Secrets on a new wire** → all chunks pass the existing redaction layer; tool args contain only `op://` refs by invariant; live routes are auth-gated identically to other dashboard data.
+- **SSE connections across HMR / many tabs** → the in-process seam is a runtime singleton (survives back-end HMR); one multiplexed stream per tab bounds connections; handlers close on disconnect.
 
 ## Migration Plan
 
-- Purely **additive and read-only**: new `LiveBus`, new SSE + active-runs routes, new front-end hook/components, publish calls inserted at the loop's existing stream-consumption point and in the job runners. **No DB migration** (no new tables; events are ephemeral).
-- Deploy is a normal merge + devbox service restart (HMR can serve stale code after merges — restart the worker so the new bus + publishers initialize).
-- **Rollback:** remove the routes/components and the publish calls; the `LiveBus` is inert with no subscribers, and nothing in the persisted data model changed, so there is no data to migrate back.
+- **Additive and read-only.** New: live SSE + active-runs routes, `useLiveRun`/`useActiveRuns` hooks, shared `<RunView>`, an in-process publish seam tapped in `loop.ts`, and `getWritable()` chunk writes in the job workflows. **No DB migration** (turn events ephemeral; job streams use the existing workflow world).
+- Deploy = normal merge + devbox service restart (HMR can serve stale code post-merge — restart the worker so the seam + publishers initialize).
+- **Rollback:** remove the routes/components/hooks and the publish/`getWritable` calls; the seam is inert with no subscribers and no persisted schema changed.
 
 ## Open Questions
 
-- **Replay buffer bound:** how many recent events per active run to retain for a late-joining client (enough to reconstruct the in-flight turn without unbounded memory)? Start small (e.g. last N events or last step) and tune.
-- **Turn `runId` exposure:** should the persisted `UIMessage.metadata` also record the `runId`/`traceUrl` so a completed turn links to its trace from the static view too? Low-cost add; decide during apply.
-- **Idle stream lifecycle:** keep the multiplexed SSE connection open while idle (simpler, supports instant home-indicator updates) vs. open it lazily only when something is active. Leaning open-while-viewing-dashboard, closed otherwise.
+- **WDK multi-reader & retention:** confirm multiple concurrent `getReadable` readers on one job run, and how long a finished run's stream remains replayable (affects whether a just-finished job still renders live before settling to the static job view).
+- **Turn replay-buffer bound:** how many recent `UIMessageChunk`s per active turn to retain for late-join without unbounded memory (start small — e.g. current step — and tune).
+- **Persist `runId`/`traceUrl` into `UIMessage.metadata`:** low-cost add so completed turns/jobs link to their trace from the static view too; decide during apply.
+- **Idle stream lifecycle:** keep the multiplexed SSE open while the dashboard is viewed (instant home-indicator updates) vs. open lazily only when a run is active. Leaning open-while-viewing.
