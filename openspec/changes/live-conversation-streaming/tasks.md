@@ -32,8 +32,8 @@
 
 ## 6. Conversation view rework
 
-- [x] 6.1 Render the thread **reverse-chronological (newest first)**, top-down, in `app/pages/Conversation.tsx`.
-- [x] 6.2 Build a shared `<RunView>` that renders the `UIMessagePart` union (thinking/scratch `text`, `tool-*` calls + results/errors, `reasoning`, `step-start`) plus a live status bar (status, elapsed, step count, live token usage incl. cache read/write, model/effort, Langfuse trace link). Reused by turns and jobs. — `app/components/RunView.tsx`.
+- [x] 6.1 Render the thread as a **chronological, auto-stick-to-bottom chat** (`use-stick-to-bottom`) in `app/pages/Conversation.tsx`: messages oldest→newest in a scroll region pinned to the newest as it streams, with a "↓ latest" jump button when scrolled up. (Superseded the inverted newest-at-top layout — it read poorly as text streamed in. Required a full-height shell: `Layout` is now a `h-dvh` flex column with a pinned masthead and a scrolling `main`.)
+- [x] 6.2 Build a shared `<RunView>` / `<MessageParts>` that renders the `UIMessagePart` union (thinking/scratch `text`, `reasoning`, the delivered `send_message` text inline, and other `tool-*` calls) plus a live status bar (status, elapsed, step count, live token usage incl. cache read/write, model/effort, Langfuse trace link). Tool **arguments and results are pretty-printed JSON in a Base UI drawer** (not inline) to keep the thread uncluttered; no rule/divider lines (terminal aesthetic). Reused by turns and jobs. — `app/components/RunView.tsx`.
 - [x] 6.3 Pin the in-flight turn at the top via `useLiveRun`, updating live, then settling to the persisted turn; ensure no error when idle (most-recent persisted activity only).
 - [x] 6.4 Keep the view strictly observe-only — no send/cancel/retry/edit anywhere in the step UI.
 

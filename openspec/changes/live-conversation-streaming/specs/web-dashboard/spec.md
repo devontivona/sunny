@@ -1,16 +1,17 @@
 ## MODIFIED Requirements
 
 ### Requirement: Conversation view
-The dashboard SHALL show conversation from the message store, grouped by thread, in **reverse-chronological order (most-recent activity first)**, including each turn's role, timestamp, delivered text, and — for Sunny's turns — the retained private scratch from the stored `UIMessage` payload. Each of Sunny's turns SHALL be expandable into its **per-step activity**: model thinking/scratch, tool calls (tool name and arguments) and their results or errors, and step boundaries — so a turn is presented as a trajectory rather than a single delivered bubble. It SHALL render message images (inbound and outbound) inline in the thread, served through an authenticated dashboard route (never exposing media without the dashboard's auth gate). It SHALL support keyword search over message history. The view SHALL remain observe-only — rendering steps and tool activity SHALL NOT add any control to send, cancel, retry, or edit.
+The dashboard SHALL show conversation from the message store, grouped by thread, in **chronological order within a scroll region that automatically stays pinned to the bottom as new activity streams** — so the newest message (including an in-flight turn) remains in view without manual scrolling — and SHALL provide a control to jump back to the latest when the owner has scrolled up. It SHALL include each turn's role, timestamp, and delivered text, and SHALL render each of Sunny's turns as its **per-step activity** from the stored `UIMessage` parts: model thinking/scratch, the delivered messages, and tool calls (tool name, with full arguments and result/error available without cluttering the thread — e.g. behind an expandable panel with the payload formatted). It SHALL render message images (inbound and outbound) inline in the thread, served through an authenticated dashboard route (never exposing media without the dashboard's auth gate). It SHALL support keyword search over message history. The view SHALL remain observe-only — rendering steps and tool activity SHALL NOT add any control to send, cancel, retry, or edit.
 
-#### Scenario: View recent conversation, newest first
-- **WHEN** the owner opens the conversation page for a thread
-- **THEN** messages are shown with role and timestamp in reverse-chronological order, most recent at the top
-- **AND** Sunny's retained scratch (working context not delivered to the user) is viewable alongside its delivered messages
+#### Scenario: Conversation auto-scrolls to the newest activity
+- **WHEN** the owner opens the conversation page for a thread, or new activity streams while it is open
+- **THEN** messages are shown in chronological order and the view stays pinned to the newest message as it arrives
+- **AND** when the owner scrolls up, a control to jump back to the latest is offered
 
-#### Scenario: Turn expands into per-step activity
-- **WHEN** the owner expands one of Sunny's turns
-- **THEN** the turn's steps are shown, including model thinking/scratch, each tool call with its name and arguments, and each tool's result or error
+#### Scenario: Turn renders as per-step activity
+- **WHEN** the owner views one of Sunny's turns
+- **THEN** the turn's steps are shown, including model thinking/scratch, the delivered messages, and each tool call with its name
+- **AND** the full tool arguments and result (or error) are available in a formatted view without cluttering the thread
 
 #### Scenario: Message images are shown
 - **WHEN** a thread contains a message with an image attachment

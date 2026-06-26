@@ -4,7 +4,7 @@ When Sunny is actively working, the only signal Devon gets in iMessage is a typi
 
 ## What Changes
 
-- **Reverse the Conversation view to most-recent-first** so the newest activity (including the in-flight turn) is at the top without scrolling.
+- **Make the Conversation view a live, auto-scrolling chat**: messages render in chronological order inside a scroll region that automatically sticks to the bottom as new activity streams (so the newest message — including the in-flight turn — stays in view), with a "jump to latest" control when scrolled up. (Supersedes the initial idea of an inverted, newest-at-top layout, which read poorly as text streamed in.)
 - **Render per-step activity**, not just delivered messages: each turn expands into its steps — model thinking/scratch, tool calls (name + arguments) and their results/errors, and step boundaries — so a turn reads as a trajectory, not a single bubble.
 - **Stream active work live**: while a turn or job is running, the page receives incremental updates (new steps, tool starts/finishes, token deltas, the in-progress assistant text) and reflects them without manual refresh, then settles to the persisted record on completion.
 - **Live indicator on the home page**: when Sunny is actively streaming a turn or running a job, the home page shows an "active now" indicator with a shortcut that deep-links to the live Conversation (or job) view.

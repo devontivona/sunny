@@ -1,36 +1,59 @@
+import type { ReactNode } from 'react';
 import type { UIMessage } from 'ai';
+import { Dialog } from '@base-ui/react/dialog';
 import { Markdown } from './Markdown';
 import { useNow } from './live';
 import type { LiveRun } from '../types';
 
-// Shared live run view (live-conversation-streaming): renders a streaming
-// `UIMessage` as a trajectory — model scratch/thinking, each tool call with its
-// arguments and result/error, and step boundaries — under a status bar (status,
-// elapsed, steps, live token usage, model/effort). Reused by the Conversation
-// in-flight turn and the running-job view. Strictly observe-only: no controls.
+// Shared live run view (live-conversation-streaming): renders a `UIMessage` as a
+// trajectory — model scratch/thinking, each tool call (full args/result behind a
+// drawer so they don't clog the thread), and the delivered messages — under a
+// status bar. Reused by the Conversation in-flight turn and the running-job view.
+// Strictly observe-only: no controls. No rules/dividers (terminal aesthetic).
 
 type AnyPart = UIMessage['parts'][number];
 
 interface ToolPartShape {
   type: string;
   toolName?: string;
-  toolCallId?: string;
   state?: string;
   input?: unknown;
   output?: unknown;
   errorText?: string;
 }
 
-function preview(v: unknown, max = 280): string {
-  let s: string;
-  if (typeof v === 'string') s = v;
-  else
+/** Pretty-print a value as formatted JSON; if it's a JSON-encoded string, parse it
+ *  first so nested payloads read cleanly. Falls back to the raw string. */
+function pretty(v: unknown): string {
+  if (typeof v === 'string') {
     try {
-      s = JSON.stringify(v) ?? String(v);
+      return JSON.stringify(JSON.parse(v), null, 2);
     } catch {
-      s = String(v);
+      return v;
     }
-  s = s.replace(/\s+/g, ' ').trim();
+  }
+  try {
+    return JSON.stringify(v, null, 2) ?? String(v);
+  } catch {
+    return String(v);
+  }
+}
+
+/** Compact one-line preview for an inline hint (full value lives in the drawer). */
+function preview(v: unknown, max = 120): string {
+  const s = (
+    typeof v === 'string'
+      ? v
+      : (() => {
+          try {
+            return JSON.stringify(v) ?? String(v);
+          } catch {
+            return String(v);
+          }
+        })()
+  )
+    .replace(/\s+/g, ' ')
+    .trim();
   return s.length > max ? `${s.slice(0, max)}…` : s;
 }
 
@@ -87,61 +110,89 @@ function StatusBar({ run }: { run: LiveRun }) {
   );
 }
 
+interface DrawerSection {
+  label: string;
+  body: string;
+}
+
+/** A right-side slide-over (Base UI Dialog) that holds the full, pretty-printed
+ *  payload for a tool call, so the thread stays uncluttered. */
+function DetailDrawer({
+  trigger,
+  title,
+  sections,
+}: {
+  trigger: ReactNode;
+  title: string;
+  sections: DrawerSection[];
+}) {
+  return (
+    <Dialog.Root>
+      <Dialog.Trigger className="text-primary hover:underline">{trigger}</Dialog.Trigger>
+      <Dialog.Portal>
+        <Dialog.Backdrop className="fixed inset-0 bg-black/60 transition-opacity duration-150 data-[ending-style]:opacity-0 data-[starting-style]:opacity-0" />
+        <Dialog.Popup className="fixed right-0 top-0 z-10 flex h-dvh w-full max-w-[680px] flex-col bg-bg p-md transition-transform duration-200 ease-out data-[ending-style]:translate-x-full data-[starting-style]:translate-x-full">
+          <div className="mb-sm flex items-baseline justify-between gap-md">
+            <Dialog.Title className="font-bold text-fg">▸ {title}</Dialog.Title>
+            <Dialog.Close className="text-primary hover:underline">close ✕</Dialog.Close>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {sections.map((s) => (
+              <div key={s.label} className="mb-md">
+                <div className="mb-xs text-fg-dim">{s.label}</div>
+                <pre className="overflow-x-auto whitespace-pre-wrap break-words text-fg-muted">
+                  {s.body}
+                </pre>
+              </div>
+            ))}
+          </div>
+        </Dialog.Popup>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
 function ToolPart({ part }: { part: ToolPartShape }) {
   const name = part.toolName ?? (part.type.startsWith('tool-') ? part.type.slice(5) : part.type);
-  const state = part.state ?? '';
-  const stateColor =
-    state === 'output-error'
-      ? 'text-error'
-      : state.startsWith('input')
-        ? 'text-fg-dim'
-        : 'text-secondary';
+
+  // The delivered message: render the text as the conversation bubble itself, not
+  // as a tool call — it IS Sunny speaking.
+  if (name === 'send_message') {
+    const text = (part.input as { text?: string } | undefined)?.text;
+    return text ? (
+      <div className="my-xs text-fg">
+        <Markdown>{text}</Markdown>
+      </div>
+    ) : null;
+  }
+
+  const isError = part.state === 'output-error';
+  const sections: DrawerSection[] = [];
+  if (part.input != null) sections.push({ label: 'Input', body: pretty(part.input) });
+  if (part.output != null) sections.push({ label: 'Output', body: pretty(part.output) });
+  if (part.errorText) sections.push({ label: 'Error', body: String(part.errorText) });
+
   return (
     <div className="my-xs">
       <div className="flex items-baseline gap-sm">
         <span className="text-primary">▸ {name}</span>
-        {state && <span className={stateColor}>[{state}]</span>}
+        {isError && <span className="text-error">errored</span>}
+        {sections.length > 0 && <DetailDrawer trigger="details" title={name} sections={sections} />}
       </div>
       {part.input != null && preview(part.input) !== '{}' && (
-        <div className="pl-md text-fg-muted">{preview(part.input)}</div>
-      )}
-      {part.state === 'output-error' ? (
-        <div className="pl-md text-error">✗ {preview(part.errorText)}</div>
-      ) : (
-        part.output != null && <div className="pl-md text-fg-dim">→ {preview(part.output)}</div>
+        <div className="truncate pl-md text-fg-dim">{preview(part.input)}</div>
       )}
     </div>
   );
 }
 
-/** Render a list of `UIMessagePart`s as a trajectory. Shared by the live stream
- *  (`RunView`) and persisted turns (`Bubble`) so both show the same expanded view.
- *
- *  Steps are shown newest-first — consistent with the newest-first thread ordering,
- *  so the most recent activity is always at the top. Parts are grouped into step
- *  blocks at `step-start` boundaries and the block order is reversed; within a step
- *  parts stay in natural order so a tool call still reads with its result. */
+/** Render a list of `UIMessagePart`s as a trajectory, in chronological order.
+ *  Shared by the live stream (`RunView`) and persisted turns (`Bubble`). */
 export function MessageParts({ parts }: { parts: readonly AnyPart[] }) {
-  const groups: AnyPart[][] = [];
-  for (const part of parts) {
-    if (part.type === 'step-start') {
-      groups.push([]);
-    } else {
-      const last = groups[groups.length - 1];
-      if (last) last.push(part);
-      else groups.push([part]);
-    }
-  }
-  const ordered = groups.filter((g) => g.length > 0).reverse();
   return (
     <>
-      {ordered.map((group, gi) => (
-        <div key={gi}>
-          {gi > 0 && <div className="my-sm border-t border-border" aria-hidden />}
-          {group.map((part, i) => (
-            <Part key={i} part={part} />
-          ))}
-        </div>
+      {parts.map((part, i) => (
+        <Part key={i} part={part} />
       ))}
     </>
   );
@@ -162,12 +213,10 @@ function Part({ part }: { part: AnyPart }) {
       </div>
     ) : null;
   }
-  if (part.type === 'step-start') {
-    return <div className="my-sm border-t border-border" aria-hidden />;
-  }
   if (part.type === 'dynamic-tool' || part.type.startsWith('tool-')) {
     return <ToolPart part={part as unknown as ToolPartShape} />;
   }
+  // step-start and other markers render nothing (no rules — terminal aesthetic).
   return null;
 }
 

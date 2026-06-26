@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
+import { StickToBottom, useStickToBottomContext } from 'use-stick-to-bottom';
 import { apiGet } from '../api';
 import type { ConversationMessage, SearchHit, ThreadSummary } from '../types';
 import { Markdown } from '../components/Markdown';
 import { Link, LinkButton } from '../components/Link';
-import { ErrorNote, Loading, Panel, PageTitle, formatTime, useAsync } from '../components/ui';
+import { ErrorNote, Loading, PageTitle, formatTime, useAsync } from '../components/ui';
 import { useLiveThread } from '../components/live';
 import { RunView, MessageParts } from '../components/RunView';
 import { navigate } from '../router';
@@ -193,8 +194,24 @@ function ConversationIndex() {
   );
 }
 
-/** Nested thread page: breadcrumb back to the index, then the messages
- *  newest-first (6.1), with the in-flight turn streamed live at the top (6.3). */
+/** Floating "jump to latest" control — shown only when scrolled up from the bottom
+ *  (the auto-stick-to-bottom affordance). */
+function ScrollToLatest() {
+  const { isAtBottom, scrollToBottom } = useStickToBottomContext();
+  if (isAtBottom) return null;
+  return (
+    <button
+      onClick={() => void scrollToBottom()}
+      className="absolute bottom-md left-1/2 -translate-x-1/2 rounded-full bg-border px-sm text-fg hover:text-primary"
+    >
+      ↓ latest
+    </button>
+  );
+}
+
+/** Nested thread page: breadcrumb, then the messages chronologically in a scroll
+ *  region that auto-sticks to the bottom as the in-flight turn streams in (the
+ *  newest message is always in view, with a jump-to-latest button when scrolled up). */
 function ThreadPage({ threadId }: { threadId: string }) {
   const state = useAsync<ThreadDetail>(
     () => apiGet<ThreadDetail>(`/conversation/thread?id=${encodeURIComponent(threadId)}`),
@@ -221,22 +238,32 @@ function ThreadPage({ threadId }: { threadId: string }) {
   const showLive = run != null && message != null && settledRun !== run.runId;
 
   return (
-    <div>
+    <div className="flex min-h-0 flex-1 flex-col">
       <div className="mb-md font-bold text-fg">
         <Link to="conversation">Conversation</Link>
         <span className="font-normal text-fg-dim"> / {label}</span>
       </div>
-      {showLive && (
-        <Panel title="● Sunny is responding…">
-          <RunView message={message} run={run} />
-        </Panel>
-      )}
-      {state.status === 'loading' && <Loading />}
-      {state.status === 'error' && <ErrorNote error={state.error} />}
-      {state.status === 'ready' &&
-        (state.data.messages.length === 0
-          ? !showLive && <p className="text-fg-dim">No messages.</p>
-          : [...state.data.messages].reverse().map((m) => <Bubble key={m.id} m={m} />))}
+      <StickToBottom
+        className="relative min-h-0 flex-1 overflow-y-auto"
+        resize="smooth"
+        initial="smooth"
+      >
+        <StickToBottom.Content className="flex flex-col">
+          {state.status === 'loading' && <Loading />}
+          {state.status === 'error' && <ErrorNote error={state.error} />}
+          {state.status === 'ready' && state.data.messages.length === 0 && !showLive && (
+            <p className="text-fg-dim">No messages.</p>
+          )}
+          {state.status === 'ready' && state.data.messages.map((m) => <Bubble key={m.id} m={m} />)}
+          {showLive && (
+            <div className="mt-sm">
+              <div className="mb-xs text-secondary">サニー · responding…</div>
+              <RunView message={message} run={run} />
+            </div>
+          )}
+        </StickToBottom.Content>
+        <ScrollToLatest />
+      </StickToBottom>
     </div>
   );
 }
