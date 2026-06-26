@@ -12,6 +12,7 @@ import { SendblueGateway } from './gateway/sendblue.js';
 import type { ChannelEvent, Gateway } from './gateway/types.js';
 import { initMemory } from './memory/index.js';
 import { initSkills, startSkillSync } from './skills/index.js';
+import { pushState } from './state/index.js';
 import { resolverFromEnv } from './credentials/index.js';
 import { startScheduler } from './scheduler/index.js';
 import { logger } from './logger.js';
@@ -137,9 +138,12 @@ async function start(): Promise<Runtime> {
   // repo without a restart. initSkills synced once already; this is the ongoing
   // cadence (every 10 min, ff-only). Reads are live, so a pull lands for the next turn.
   // On divergence Sunny tells the owner once (via the owner's DM thread, if known).
+  // The same tick also pushes the `state` repo to its private remote best-effort
+  // (runtime-home, task 2.4): commits land per-write, network sync batches here.
   startSkillSync({
     config,
     onDiverged: (text) => void notifyOwner(db, gateway, text),
+    onTick: () => pushState(config),
   });
 
   log.info('runtime started');

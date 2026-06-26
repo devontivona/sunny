@@ -1,12 +1,7 @@
-import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { promisify } from 'node:util';
-import type { SunnyConfig } from '../config/index.js';
-import { logger } from '../logger.js';
-
-const log = logger('memory');
-const exec = promisify(execFile);
+import { stateDir, type SunnyConfig } from '../config/index.js';
+import { commitState, initStateRepo } from '../state/index.js';
 
 /** Core file ids the write tool may target by name (plus `topics/<name>`). */
 export type CoreFile = 'USER' | 'SUNNY' | 'INDEX';
@@ -21,7 +16,8 @@ export interface MemoryPaths {
 }
 
 export function memoryPaths(runtimeDir: string): MemoryPaths {
-  const root = join(runtimeDir, 'memory');
+  // Memory lives in the `state` repo (runtime-home): `~/.sunny/state/memory/`.
+  const root = join(stateDir(runtimeDir), 'memory');
   return {
     root,
     topicsDir: join(root, 'topics'),
@@ -63,20 +59,23 @@ export function readTopic(paths: MemoryPaths, name: string): string | null {
 }
 
 /**
- * Cold-start seeding (R11) + the single `~/.sunny` git repo (D-PS2, D6).
- * Creates memory/ and skills/ dirs, seeds starter core files if absent, and
- * git-inits `~/.sunny` so memory has history/backup.
+ * Cold-start seeding (R11) + the `state` git repo (runtime-home). Initialize (or
+ * clone) `~/.sunny/state/` FIRST so a fresh host with a configured private remote
+ * gets its existing memory back before we seed; then seed starter core files if
+ * absent and commit them. Memory now lives under `state/memory/`; skills/ and media/
+ * are independent siblings initialized elsewhere.
  */
 export async function initMemory(config: SunnyConfig): Promise<void> {
+  await initStateRepo(config);
+
   const paths = memoryPaths(config.runtimeDir);
   mkdirSync(paths.topicsDir, { recursive: true });
-  mkdirSync(join(config.runtimeDir, 'skills'), { recursive: true });
 
   seedIfAbsent(paths.USER, starterUser(config.owner.name));
   seedIfAbsent(paths.SUNNY, starterSunny());
   seedIfAbsent(paths.INDEX, starterIndex());
 
-  await ensureGitRepo(config.runtimeDir);
+  await commitState(config.runtimeDir, 'memory: seed core');
 }
 
 // --- Serialized writer (agent-memory R7 / D-MG / task 3.8) -----------------
@@ -126,7 +125,7 @@ export class MemoryOverflowError extends Error {
  * consolidation; topic docs are unbounded.
  */
 export function applyMemoryWrite(config: SunnyConfig, input: MemoryWriteInput): Promise<string> {
-  return serialize(() => {
+  return serialize(async () => {
     const paths = memoryPaths(config.runtimeDir);
     const { filePath, cap, label } = resolveTarget(paths, config, input.file);
 
@@ -139,6 +138,9 @@ export function applyMemoryWrite(config: SunnyConfig, input: MemoryWriteInput): 
 
     mkdirSync(join(filePath, '..'), { recursive: true });
     writeFileSync(filePath, next, { mode: 0o644 });
+    // Capture the edit in the `state` repo's history (runtime-home). Best-effort:
+    // never fails the write, even with no repo (committed on the periodic push).
+    await commitState(config.runtimeDir, `memory: ${input.action} ${label}`);
     return `ok: ${input.action} on ${label} (${next.length} chars)`;
   });
 }
@@ -199,18 +201,6 @@ function readIfExists(path: string): string {
 
 function seedIfAbsent(path: string, content: string): void {
   if (!existsSync(path)) writeFileSync(path, content, { mode: 0o644 });
-}
-
-async function ensureGitRepo(dir: string): Promise<void> {
-  if (existsSync(join(dir, '.git'))) return;
-  try {
-    await exec('git', ['init', '-q'], { cwd: dir });
-    await exec('git', ['add', '-A'], { cwd: dir });
-    await exec('git', ['commit', '-q', '-m', 'seed ~/.sunny memory'], { cwd: dir });
-    log.info('initialized ~/.sunny git repo');
-  } catch (err) {
-    log.warn('could not init ~/.sunny git repo (non-fatal)', { err: String(err) });
-  }
 }
 
 function starterUser(owner: string): string {

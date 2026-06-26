@@ -45,6 +45,18 @@ export const ConfigSchema = z.object({
       indexMaxChars: z.number().int().positive().default(2000),
     })
     .default({ userMaxChars: 8000, sunnyMaxChars: 6000, indexMaxChars: 2000 }),
+  /** Durable `state` repository (runtime-home). Names the owner-controlled PRIVATE
+   *  remote that backs `~/.sunny/state/` (memory + credentials + sites). Mirrors how
+   *  `skills.repo` bootstraps the skills clone: on a fresh host the state dir is cloned
+   *  from here; otherwise it's pushed to here on the periodic sync cadence. Optional —
+   *  with no remote, state is still committed locally (history, no offsite backup). */
+  state: z
+    .object({
+      /** PRIVATE state remote (owner/repo or URL). Never public — it carries memory
+       *  and `op://` references (no secret values, but still owner-private). */
+      repo: z.string().optional(),
+    })
+    .default({}),
   /** Always-on skills index budget (agent-skills D-SK2) + optional dedicated repo (D-SK8). */
   skills: z
     .object({
@@ -93,6 +105,7 @@ const DEFAULT_CONFIG_JSON = `{
     "sunnyMaxChars": 6000,
     "indexMaxChars": 2000
   },
+  "state": {},
   "skills": {
     "maxSkills": 20,
     "descriptionMaxChars": 280
@@ -104,15 +117,34 @@ const DEFAULT_CONFIG_JSON = `{
 }
 `;
 
-/** Resolve the runtime dir (`~/.sunny`, overridable via SUNNY_HOME). */
+/** Resolve the runtime dir (`~/.sunny`, overridable via SUNNY_HOME). A plain
+ *  namespace directory — NOT a git repo (runtime-home). `config.json` lives here as
+ *  local, unsynced bootstrap; durable state lives in the `state/` repo (see
+ *  {@link stateDir}) and skills/media are independent siblings. */
 export function runtimeDir(): string {
   return process.env.SUNNY_HOME ?? join(homedir(), '.sunny');
 }
 
+/** The `state` repository working tree (`~/.sunny/state`, runtime-home). A git repo
+ *  tracking durable, portable state — memory, the credential registry, and sites —
+ *  backed by an owner-controlled private remote (`config.state.repo`). A sibling of
+ *  `skills/` and `media/`, so no repo nests inside another's tracked tree. */
+export function stateDir(runtimeDir: string): string {
+  return join(runtimeDir, 'state');
+}
+
+/** Site working dirs (e.g. the website-builder skill's output): `~/.sunny/state/sites`,
+ *  tracked by the `state` repo. */
+export function sitesDir(runtimeDir: string): string {
+  return join(stateDir(runtimeDir), 'sites');
+}
+
 /**
  * Load `~/.sunny/config.json`, creating the runtime dir and seeding a default
- * config file on first run (D-PS5). The single `~/.sunny` git repo for
- * memory/skills is created later (Phase 2); for now we just need the dir + config.
+ * config file on first run (D-PS5). `config.json` is the LOCAL, UNSYNCED bootstrap
+ * (runtime-home): it names the `state` and `skills` remotes that Sunny clones from,
+ * so it must exist before any clone and is never tracked by the `state` repo. The
+ * `state/` repo and skill clones are materialized later (initMemory / initSkills).
  */
 export function loadConfig(): SunnyConfig {
   const dir = runtimeDir();
