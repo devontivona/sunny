@@ -11,6 +11,7 @@ import { loadAllSkills, parseSkill, sanitizeSkillName } from '../skills/index.js
 import { toolCatalog } from '../agent/tools/catalog.js';
 import { renderableMedia, type AttachmentKind } from '../gateway/media.js';
 import { getLiveBus, type LiveRun } from '../observability/live.js';
+import { defaultRedactor } from '../observability/redact.js';
 
 /**
  * Read-only data access for the dashboard (web-dashboard D-WD3/5). Reads the
@@ -581,6 +582,7 @@ function toConversationMessage(row: typeof messages.$inferSelect) {
       delivery: null,
       steps: null,
       usage: null,
+      parts: null,
     };
   }
   // Assistant: delivered = each send_message; scratch = private text parts.
@@ -603,5 +605,10 @@ function toConversationMessage(row: typeof messages.$inferSelect) {
     delivery: typeof meta.delivered === 'string' ? meta.delivered : null,
     steps: typeof meta.steps === 'number' ? meta.steps : null,
     usage: normalizeUsage(meta.usage),
+    // The full per-step trajectory (D live-conversation-streaming): the stored
+    // UIMessage parts (tool calls, results, scratch, step boundaries), redacted,
+    // so the dashboard renders historical turns in the same expanded view as the
+    // live stream. Tool args carry only references by invariant; redact defensively.
+    parts: defaultRedactor().redact(parts),
   };
 }

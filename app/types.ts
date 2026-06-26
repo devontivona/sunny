@@ -1,6 +1,12 @@
+import type { UIMessage } from 'ai';
+
 // JSON shapes returned by the dashboard's read-only API (src/dashboard/api/*).
 // Kept in sync by hand with the server transforms — the app and server build
 // under different tsconfigs, so they don't share a module.
+
+/** The AI SDK message parts (tool calls, results, text, step boundaries) — the
+ *  shape both the live stream and persisted turns render via `<MessageParts>`. */
+export type UIPart = UIMessage['parts'][number];
 
 export interface MemoryCore {
   sunny: string;
@@ -124,6 +130,10 @@ export interface ConversationMessage {
   delivery: string | null;
   steps: number | null;
   usage: TurnUsage | null;
+  /** Full per-step trajectory (assistant turns only): the stored UIMessage parts,
+   *  redacted. Rendered with the same `<MessageParts>` used for the live stream so
+   *  historical turns keep the expanded display. Null for user messages. */
+  parts: UIPart[] | null;
 }
 
 export interface ThreadSummary {

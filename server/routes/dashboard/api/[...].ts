@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { and, desc, eq } from 'drizzle-orm';
 import {
+  createEventStream,
   defineEventHandler,
   deleteCookie,
   getCookie,
@@ -338,7 +339,10 @@ export default defineEventHandler(async (event) => {
         case path === 'live/stream': {
           const run = String(query.run ?? '');
           if (!run) return json(400, { error: 'missing run id' });
-          return String(query.kind ?? 'turn') === 'job' ? liveStreamJob(run) : liveStreamTurn(run);
+          const stream = createEventStream(event);
+          if (String(query.kind ?? 'turn') === 'job') void startJobStream(stream, run);
+          else startTurnStream(stream, run);
+          return stream.send();
         }
         case path === 'activity':
           return await data.activity();
@@ -377,126 +381,75 @@ export default defineEventHandler(async (event) => {
 
 // === Live SSE (live-conversation-streaming) =================================
 
-const SSE_ENC = new TextEncoder();
-function sseFrame(name: string, data: unknown): Uint8Array {
-  return SSE_ENC.encode(`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`);
-}
-function sse(body: ReadableStream<Uint8Array>): Response {
-  return new Response(body, {
-    headers: {
-      'content-type': 'text/event-stream; charset=utf-8',
-      'cache-control': 'no-cache, no-transform',
-      connection: 'keep-alive',
-      // Disable proxy buffering so events flush immediately over the tunnel.
-      'x-accel-buffering': 'no',
-    },
-  });
-}
+type LiveStream = ReturnType<typeof createEventStream>;
 
-/** Stream a Tier-1 turn's live chunks from the in-process bus: replay the buffered
- *  chunks (late-join), then tail until the turn finishes. */
-function liveStreamTurn(runId: string): Response {
+/** Stream a Tier-1 turn's live chunks from the in-process bus over SSE: replay the
+ *  buffered chunks (late-join), then tail until the turn finishes. Uses h3's
+ *  `createEventStream` so headers/flushing/disconnect are handled by the framework
+ *  (a raw ReadableStream Response did not reliably flush through the dev pipeline). */
+function startTurnStream(stream: LiveStream, runId: string): void {
   const bus = getLiveBus();
-  let unsub = () => {};
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      let closed = false;
-      const close = () => {
-        if (closed) return;
-        closed = true;
-        unsub();
-        try {
-          controller.close();
-        } catch {
-          /* already closed */
-        }
-      };
-      unsub = bus.subscribeTurn(runId, (ev) => {
-        if (closed) return;
-        try {
-          if (ev.type === 'chunk') controller.enqueue(sseFrame('chunk', ev.chunk));
-          else if (ev.type === 'status') controller.enqueue(sseFrame('status', ev.run));
-          else {
-            controller.enqueue(sseFrame('done', ev.run));
-            close();
-          }
-        } catch {
-          close();
-        }
-      });
-      // Unknown/already-reaped run: tell the client to fall back to the persisted
-      // record immediately rather than hang.
-      if (!bus.getTurn(runId)) {
-        try {
-          controller.enqueue(sseFrame('done', { runId }));
-        } catch {
-          /* ignore */
-        }
-        close();
-      }
-    },
-    cancel() {
-      unsub();
-    },
+  let closed = false;
+  const unsub = bus.subscribeTurn(runId, (ev) => {
+    if (closed) return;
+    if (ev.type === 'chunk') void stream.push({ event: 'chunk', data: JSON.stringify(ev.chunk) });
+    else if (ev.type === 'status')
+      void stream.push({ event: 'status', data: JSON.stringify(ev.run) });
+    else {
+      void stream.push({ event: 'done', data: JSON.stringify(ev.run) }).then(() => stream.close());
+    }
   });
-  return sse(stream);
+  stream.onClosed(() => {
+    closed = true;
+    unsub();
+  });
+  // Unknown/already-reaped run: tell the client to fall back to the persisted record
+  // immediately rather than hang.
+  if (!bus.getTurn(runId)) {
+    void stream.push({ event: 'done', data: JSON.stringify({ runId }) }).then(() => stream.close());
+  }
 }
 
-/** Stream a Tier-2 job's live chunks from its durable WDK run stream: replay the
- *  last chunks (negative startIndex), then tail until the run completes. */
-function liveStreamJob(runId: string): Response {
+/** Stream a Tier-2 job's live chunks from its durable WDK run stream over SSE:
+ *  replay the last chunks (negative startIndex), then tail until the run completes. */
+async function startJobStream(stream: LiveStream, runId: string): Promise<void> {
   const redactor = defaultRedactor();
-  let cancelled = false;
-  const stream = new ReadableStream<Uint8Array>({
-    async start(controller) {
-      const run = getRun<unknown>(runId);
-      const emit = (name: string, data: unknown) => {
-        if (cancelled) return;
-        try {
-          controller.enqueue(sseFrame(name, data));
-        } catch {
-          /* closed */
-        }
-      };
-      emit('status', await jobRunMeta(runId, 'running'));
-      try {
-        const reader = run.getReadable<UIMessageChunk>({ startIndex: -200 }).getReader();
-        try {
-          for (;;) {
-            if (cancelled) break;
-            const { done, value } = await reader.read();
-            if (done) break;
-            emit('chunk', redactor.redact(value));
-          }
-        } finally {
-          try {
-            await reader.cancel();
-          } catch {
-            /* ignore */
-          }
-        }
-      } catch (err) {
-        log.warn('live job stream read failed', { runId, err: String(err) });
-      }
-      let status: 'finished' | 'errored' = 'finished';
-      try {
-        status = (await run.status) === 'failed' ? 'errored' : 'finished';
-      } catch {
-        /* keep optimistic 'finished' */
-      }
-      emit('done', await jobRunMeta(runId, status));
-      if (!cancelled)
-        try {
-          controller.close();
-        } catch {
-          /* ignore */
-        }
-    },
-    cancel() {
-      cancelled = true;
-    },
+  let closed = false;
+  stream.onClosed(() => {
+    closed = true;
   });
-  return sse(stream);
+  await stream.push({ event: 'status', data: JSON.stringify(await jobRunMeta(runId, 'running')) });
+  try {
+    const reader = getRun<unknown>(runId)
+      .getReadable<UIMessageChunk>({ startIndex: -200 })
+      .getReader();
+    try {
+      for (;;) {
+        if (closed) break;
+        const { done, value } = await reader.read();
+        if (done) break;
+        await stream.push({ event: 'chunk', data: JSON.stringify(redactor.redact(value)) });
+      }
+    } finally {
+      try {
+        await reader.cancel();
+      } catch {
+        /* ignore */
+      }
+    }
+  } catch (err) {
+    log.warn('live job stream read failed', { runId, err: String(err) });
+  }
+  let status: 'finished' | 'errored' = 'finished';
+  try {
+    status = (await getRun<unknown>(runId).status) === 'failed' ? 'errored' : 'finished';
+  } catch {
+    /* keep optimistic 'finished' */
+  }
+  if (!closed) {
+    await stream.push({ event: 'done', data: JSON.stringify(await jobRunMeta(runId, status)) });
+    await stream.close();
+  }
 }
 
 /** Build a job's live descriptor from the WDK run (best-effort metadata). */

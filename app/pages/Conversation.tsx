@@ -5,7 +5,7 @@ import { Markdown } from '../components/Markdown';
 import { Link, LinkButton } from '../components/Link';
 import { ErrorNote, Loading, Panel, PageTitle, formatTime, useAsync } from '../components/ui';
 import { useActiveRuns, useLiveRun } from '../components/live';
-import { RunView } from '../components/RunView';
+import { RunView, MessageParts } from '../components/RunView';
 import { navigate } from '../router';
 
 // Conversation view (5.3): an index page (search + thread list) and a nested
@@ -22,6 +22,11 @@ interface ThreadDetail {
 
 function Bubble({ m }: { m: ConversationMessage }) {
   const isSunny = m.role === 'assistant';
+  // Assistant turns render the full per-step trajectory (tool calls, results,
+  // scratch, step boundaries) from the stored UIMessage parts — the same expanded
+  // view as the live stream — so a turn keeps its display after the stream ends.
+  // User messages stay as plain delivered text.
+  const showParts = isSunny && m.parts != null && m.parts.length > 0;
   return (
     <div className="mb-md">
       <div className="mb-xs flex items-baseline gap-sm text-fg-dim">
@@ -32,8 +37,15 @@ function Bubble({ m }: { m: ConversationMessage }) {
         {m.delivery && m.delivery !== 'send_message' && (
           <span className="text-warning">[{m.delivery}]</span>
         )}
+        {isSunny && m.steps != null && (
+          <span>
+            · {m.steps} step{m.steps === 1 ? '' : 's'}
+          </span>
+        )}
       </div>
-      {m.delivered.length > 0 ? (
+      {showParts ? (
+        <MessageParts parts={m.parts ?? []} />
+      ) : m.delivered.length > 0 ? (
         <div className="text-fg">
           {m.delivered.map((text, i) => (
             <Markdown key={i}>{text}</Markdown>
@@ -68,7 +80,7 @@ function Bubble({ m }: { m: ConversationMessage }) {
           )}
         </div>
       )}
-      {m.scratch && (
+      {!showParts && m.scratch && (
         <details className="mt-xs pl-md">
           <summary className="cursor-pointer list-none text-primary hover:underline [&::-webkit-details-marker]:hidden">
             › Retained scratch (private)

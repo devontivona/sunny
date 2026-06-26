@@ -114,6 +114,18 @@ function ToolPart({ part }: { part: ToolPartShape }) {
   );
 }
 
+/** Render a list of `UIMessagePart`s as a trajectory. Shared by the live stream
+ *  (`RunView`) and persisted turns (`Bubble`) so both show the same expanded view. */
+export function MessageParts({ parts }: { parts: readonly AnyPart[] }) {
+  return (
+    <>
+      {parts.map((part, i) => (
+        <Part key={i} part={part} />
+      ))}
+    </>
+  );
+}
+
 function Part({ part }: { part: AnyPart }) {
   if (part.type === 'text') {
     return part.text.trim() ? (
@@ -143,7 +155,7 @@ export function RunView({ message, run }: { message: UIMessage | null; run: Live
     <div>
       {run && <StatusBar run={run} />}
       {message && message.parts.length > 0 ? (
-        message.parts.map((part, i) => <Part key={i} part={part} />)
+        <MessageParts parts={message.parts} />
       ) : (
         <div className="text-fg-dim italic">waiting for activity…</div>
       )}
