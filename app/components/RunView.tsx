@@ -199,16 +199,20 @@ export function MessageParts({ parts }: { parts: readonly AnyPart[] }) {
 }
 
 function Part({ part }: { part: AnyPart }) {
+  // Regular model output (scratch) and reasoning are Sunny's private working text,
+  // not the delivered message — dim them so the delivered `send_message` (rendered
+  // at full prominence by ToolPart) clearly stands out. Opacity dims regardless of
+  // the markdown renderer's own element colors.
   if (part.type === 'text') {
     return part.text.trim() ? (
-      <div className="my-xs text-fg-muted">
+      <div className="my-xs opacity-60">
         <Markdown>{part.text}</Markdown>
       </div>
     ) : null;
   }
   if (part.type === 'reasoning') {
     return part.text.trim() ? (
-      <div className="my-xs text-fg-dim italic">
+      <div className="my-xs italic opacity-50">
         <Markdown>{part.text}</Markdown>
       </div>
     ) : null;

@@ -243,11 +243,7 @@ function ThreadPage({ threadId }: { threadId: string }) {
         <Link to="conversation">Conversation</Link>
         <span className="font-normal text-fg-dim"> / {label}</span>
       </div>
-      <StickToBottom
-        className="relative min-h-0 flex-1 overflow-y-auto"
-        resize="smooth"
-        initial="smooth"
-      >
+      <StickToBottom className="relative min-h-0 flex-1" resize="smooth" initial="smooth">
         <StickToBottom.Content className="flex flex-col">
           {state.status === 'loading' && <Loading />}
           {state.status === 'error' && <ErrorNote error={state.error} />}
