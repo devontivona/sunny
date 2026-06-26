@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { StickToBottom, useStickToBottomContext } from 'use-stick-to-bottom';
 import { apiGet } from '../api';
 import type { ConversationMessage, SearchHit, ThreadSummary } from '../types';
@@ -220,14 +220,21 @@ function ThreadPage({ threadId }: { threadId: string }) {
   const reload = state.reload;
   const label = state.status === 'ready' ? state.data.label : '…';
 
-  // Stream this thread live over one persistent SSE connection — whatever turn runs
-  // now or next, with no run-id discovery and no polling gap (so a message sent
-  // while the page is open starts streaming immediately).
+  // Stream this thread live over one persistent SSE connection opened on mount —
+  // whatever turn runs now or next, with no run-id discovery and no polling gap.
   const { message, run, lastDoneRunId } = useLiveThread(threadId);
+  const runId = run?.runId ?? null;
   const [settledRun, setSettledRun] = useState<string | null>(null);
 
-  // Settle to the persisted record: when a turn finishes, refetch the thread (the
-  // turn becomes a normal per-step bubble) and stop rendering the live trajectory.
+  // A turn just started: the user's triggering message is already persisted (the
+  // gateway stores inbound before dispatching), so refetch to show it immediately —
+  // otherwise the user's message wouldn't appear until the turn finished.
+  useEffect(() => {
+    if (runId) reload();
+  }, [runId, reload]);
+
+  // Settle when a turn finishes: refetch (the turn becomes a persisted per-step
+  // bubble) and stop rendering the live trajectory.
   useEffect(() => {
     if (lastDoneRunId && lastDoneRunId !== settledRun) {
       setSettledRun(lastDoneRunId);
@@ -235,7 +242,22 @@ function ThreadPage({ threadId }: { threadId: string }) {
     }
   }, [lastDoneRunId, settledRun, reload]);
 
-  const showLive = run != null && message != null && settledRun !== run.runId;
+  // Keep the last-loaded messages on screen during a background refetch (turn start /
+  // settle), so reloads don't blank the thread. Reset when switching threads.
+  const lastMsgs = useRef<ConversationMessage[]>([]);
+  const seenThread = useRef(threadId);
+  if (seenThread.current !== threadId) {
+    seenThread.current = threadId;
+    lastMsgs.current = [];
+  }
+  if (state.status === 'ready') lastMsgs.current = state.data.messages;
+  const messages = lastMsgs.current;
+
+  // Show the live trajectory as soon as the turn is RUNNING (the status event), not
+  // only once the first chunk lands — so "responding…" appears immediately even while
+  // the model is still thinking.
+  const showLive = run != null && run.status === 'running' && settledRun !== run.runId;
+  const initialLoading = state.status === 'loading' && messages.length === 0;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -245,12 +267,14 @@ function ThreadPage({ threadId }: { threadId: string }) {
       </div>
       <StickToBottom className="relative min-h-0 flex-1" resize="smooth" initial="smooth">
         <StickToBottom.Content className="flex flex-col">
-          {state.status === 'loading' && <Loading />}
-          {state.status === 'error' && <ErrorNote error={state.error} />}
-          {state.status === 'ready' && state.data.messages.length === 0 && !showLive && (
+          {initialLoading && <Loading />}
+          {state.status === 'error' && messages.length === 0 && <ErrorNote error={state.error} />}
+          {!initialLoading && messages.length === 0 && !showLive && (
             <p className="text-fg-dim">No messages.</p>
           )}
-          {state.status === 'ready' && state.data.messages.map((m) => <Bubble key={m.id} m={m} />)}
+          {messages.map((m) => (
+            <Bubble key={m.id} m={m} />
+          ))}
           {showLive && (
             <div className="mt-sm">
               <div className="mb-xs text-secondary">サニー · responding…</div>
