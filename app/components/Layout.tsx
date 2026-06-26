@@ -49,7 +49,7 @@ export function Layout({ children }: { children: ReactNode }) {
   return (
     <div className="flex h-dvh flex-col text-fg">
       <Masthead />
-      <main className="mx-auto flex w-full max-w-[900px] min-h-0 flex-1 flex-col overflow-y-auto px-md py-md">
+      <main className="mx-auto flex w-full max-w-[900px] min-h-0 flex-1 flex-col overflow-y-auto px-md">
         {children}
       </main>
     </div>

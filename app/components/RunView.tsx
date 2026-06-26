@@ -133,7 +133,7 @@ function DetailDrawer({
         <Dialog.Backdrop className="fixed inset-0 bg-black/60 transition-opacity duration-150 data-[ending-style]:opacity-0 data-[starting-style]:opacity-0" />
         <Dialog.Popup className="fixed right-0 top-0 z-10 flex h-dvh w-full max-w-[680px] flex-col bg-bg p-md transition-transform duration-200 ease-out data-[ending-style]:translate-x-full data-[starting-style]:translate-x-full">
           <div className="mb-sm flex items-baseline justify-between gap-md">
-            <Dialog.Title className="font-bold text-fg">▸ {title}</Dialog.Title>
+            <Dialog.Title className="font-bold text-secondary">{title}</Dialog.Title>
             <Dialog.Close className="text-primary hover:underline">close ✕</Dialog.Close>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto">
@@ -175,9 +175,11 @@ function ToolPart({ part }: { part: ToolPartShape }) {
   return (
     <div className="my-xs">
       <div className="flex items-baseline gap-sm">
-        <span className="text-primary">▸ {name}</span>
+        <span className="text-secondary">{name}</span>
         {isError && <span className="text-error">errored</span>}
-        {sections.length > 0 && <DetailDrawer trigger="details" title={name} sections={sections} />}
+        {sections.length > 0 && (
+          <DetailDrawer trigger={<>[&nbsp;details&nbsp;]</>} title={name} sections={sections} />
+        )}
       </div>
       {part.input != null && preview(part.input) !== '{}' && (
         <div className="truncate pl-md text-fg-dim">{preview(part.input)}</div>
