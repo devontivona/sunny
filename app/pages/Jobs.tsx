@@ -3,6 +3,7 @@ import type { JobsView, JobRunView } from '../types';
 import { ErrorNote, Loading, PageTitle, StatusDot, formatTime, useAsync } from '../components/ui';
 import { Link, LinkButton } from '../components/Link';
 import { useLiveRun } from '../components/live';
+import { LivePane } from '../components/LivePane';
 import { RunView } from '../components/RunView';
 import { navigate } from '../router';
 
@@ -56,18 +57,27 @@ function JobRow({ j }: { j: JobRunView }) {
   );
 }
 
-/** Live view of one actively-running job — the same trajectory UI as a turn
- *  (8.1), streamed from the durable WDK run stream by run id. Observe-only. */
+/** A job's run view — the same trajectory UI as a conversation turn (8.1), streamed
+ *  from the durable WDK run stream by run id (replays completed runs, tails live
+ *  ones). Uses the shared LivePane so it gets the same auto-stick-to-bottom, jump
+ *  button, and no-horizontal-scroll behavior as the Conversation thread. */
 function JobRunPage({ runId }: { runId: string }) {
-  const { message, run } = useLiveRun(runId, 'job');
+  const { message, run, version } = useLiveRun(runId, 'job');
   return (
-    <div>
-      <div className="mb-md font-bold text-fg">
-        <Link to="jobs">Jobs</Link>
-        <span className="font-normal text-fg-dim"> / {run?.label ?? 'run'}</span>
+    <LivePane
+      runId={runId}
+      version={version}
+      header={
+        <>
+          <Link to="jobs">Jobs</Link>
+          <span className="font-normal text-fg-dim"> / {run?.label ?? 'run'}</span>
+        </>
+      }
+    >
+      <div className="min-w-0">
+        <RunView message={message} run={run} />
       </div>
-      <RunView message={message} run={run} />
-    </div>
+    </LivePane>
   );
 }
 

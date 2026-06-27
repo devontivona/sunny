@@ -43,6 +43,9 @@ export interface LiveRunState {
   run: LiveRun | null;
   /** True once the run has reached a terminal state on the wire. */
   done: boolean;
+  /** Increments on every streamed chunk — a stable "content grew" signal for
+   *  keeping the view scrolled to the bottom while streaming. */
+  version: number;
 }
 
 /**
@@ -55,6 +58,7 @@ export function useLiveRun(runId: string | null, kind: RunKind): LiveRunState {
   const [message, setMessage] = useState<UIMessage | null>(null);
   const [run, setRun] = useState<LiveRun | null>(null);
   const [done, setDone] = useState(false);
+  const [version, setVersion] = useState(0);
 
   useEffect(() => {
     setMessage(null);
@@ -76,6 +80,7 @@ export function useLiveRun(runId: string | null, kind: RunKind): LiveRunState {
     es.addEventListener('chunk', (e) => {
       try {
         controller?.enqueue(JSON.parse((e as MessageEvent).data) as UIMessageChunk);
+        if (!cancelled) setVersion((v) => v + 1);
       } catch {
         /* ignore a malformed frame */
       }
@@ -124,7 +129,7 @@ export function useLiveRun(runId: string | null, kind: RunKind): LiveRunState {
     };
   }, [runId, kind]);
 
-  return { message, run, done };
+  return { message, run, done, version };
 }
 
 export interface LiveThreadState {

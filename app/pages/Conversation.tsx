@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { StickToBottom, useStickToBottomContext } from 'use-stick-to-bottom';
 import { apiGet } from '../api';
 import type { ConversationMessage, SearchHit, ThreadSummary } from '../types';
 import { Markdown } from '../components/Markdown';
 import { Link, LinkButton } from '../components/Link';
 import { ErrorNote, Loading, PageTitle, formatTime, useAsync } from '../components/ui';
 import { useLiveThread } from '../components/live';
+import { LivePane } from '../components/LivePane';
 import { RunView, MessageParts } from '../components/RunView';
 import { navigate } from '../router';
 
@@ -202,41 +202,8 @@ function ConversationIndex() {
   );
 }
 
-/** Floating "jump to latest" control — shown only when scrolled up from the bottom
- *  (the auto-stick-to-bottom affordance). */
-function ScrollToLatest() {
-  const { isAtBottom, scrollToBottom } = useStickToBottomContext();
-  if (isAtBottom) return null;
-  return (
-    <button
-      onClick={() => void scrollToBottom()}
-      className="absolute bottom-md left-1/2 -translate-x-1/2 rounded-full bg-border px-sm text-fg hover:text-primary"
-    >
-      ↓ latest
-    </button>
-  );
-}
-
-/** Keeps the view glued to the bottom as content streams. The library's resize
- *  heuristic can drop the lock when content churns (the live view appearing, the
- *  thread refetch on turn start/settle), so we actively re-assert: jump to bottom on
- *  each new turn, and follow every streamed chunk while the user is still at the
- *  bottom (if they scroll up we leave them be — the ↓ latest button brings them back). */
-function AutoStick({ runId, version }: { runId: string | null; version: number }) {
-  const { scrollToBottom, isAtBottom } = useStickToBottomContext();
-  useEffect(() => {
-    if (runId) void scrollToBottom();
-  }, [runId, scrollToBottom]);
-  useEffect(() => {
-    if (isAtBottom) void scrollToBottom();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [version]);
-  return null;
-}
-
-/** Nested thread page: breadcrumb, then the messages chronologically in a scroll
- *  region that auto-sticks to the bottom as the in-flight turn streams in (the
- *  newest message is always in view, with a jump-to-latest button when scrolled up). */
+/** Nested thread page: breadcrumb, then the messages chronologically in a shared
+ *  auto-stick-to-bottom pane (LivePane) that follows the in-flight turn as it streams. */
 function ThreadPage({ threadId }: { threadId: string }) {
   const state = useAsync<ThreadDetail>(
     () => apiGet<ThreadDetail>(`/conversation/thread?id=${encodeURIComponent(threadId)}`),
@@ -285,35 +252,31 @@ function ThreadPage({ threadId }: { threadId: string }) {
   const initialLoading = state.status === 'loading' && messages.length === 0;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="mb-md font-bold text-fg">
-        <Link to="conversation">Conversation</Link>
-        <span className="font-normal text-fg-dim"> / {label}</span>
-      </div>
-      <StickToBottom className="relative min-h-0 flex-1" resize="smooth" initial="smooth">
-        <AutoStick runId={runId} version={version} />
-        {/* overflow-wrap:anywhere (inherited) breaks long unbroken strings (e.g. a
-            bare URL) so the chat never scrolls horizontally; min-w-0 on the children
-            lets flex items shrink rather than be forced wide. */}
-        <StickToBottom.Content className="flex flex-col pb-lg [overflow-wrap:anywhere]">
-          {initialLoading && <Loading />}
-          {state.status === 'error' && messages.length === 0 && <ErrorNote error={state.error} />}
-          {!initialLoading && messages.length === 0 && !showLive && (
-            <p className="text-fg-dim">No messages.</p>
-          )}
-          {messages.map((m) => (
-            <Bubble key={m.id} m={m} />
-          ))}
-          {showLive && (
-            <div className="mt-sm min-w-0">
-              <div className="mb-xs text-secondary">サニー · responding…</div>
-              <RunView message={message} run={run} />
-            </div>
-          )}
-        </StickToBottom.Content>
-        <ScrollToLatest />
-      </StickToBottom>
-    </div>
+    <LivePane
+      runId={runId}
+      version={version}
+      header={
+        <>
+          <Link to="conversation">Conversation</Link>
+          <span className="font-normal text-fg-dim"> / {label}</span>
+        </>
+      }
+    >
+      {initialLoading && <Loading />}
+      {state.status === 'error' && messages.length === 0 && <ErrorNote error={state.error} />}
+      {!initialLoading && messages.length === 0 && !showLive && (
+        <p className="text-fg-dim">No messages.</p>
+      )}
+      {messages.map((m) => (
+        <Bubble key={m.id} m={m} />
+      ))}
+      {showLive && (
+        <div className="mt-sm min-w-0">
+          <div className="mb-xs text-secondary">サニー · responding…</div>
+          <RunView message={message} run={run} />
+        </div>
+      )}
+    </LivePane>
   );
 }
 
