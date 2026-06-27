@@ -91,6 +91,27 @@ devbox add langfuse -d "$PWD/deploy/langfuse" -c "PATH=/snap/bin:/usr/bin:/bin d
   `https://sunny.waywardlane.com/webhooks/sendblue` and the signing secret to
   `SENDBLUE_WEBHOOK_SECRET`. Health check: `/health`.
 
+### Programmatic test channel (drive full turns without iMessage)
+
+A second **loopback** channel for exercising the full pipeline (inbound → router → durable
+turn-run → delivery) over HTTP — for tests, scripts, and agent-driven live verification. It runs
+**alongside** Sendblue via `MultiChannelGateway` (routes by thread: `loopback:` threads → the test
+channel, everything else → iMessage), so enabling it doesn't take iMessage down. Opt-in with
+`SUNNY_TEST_CHANNEL=1` + a `SUNNY_TEST_SECRET`; default-off (production is the bare Sendblue
+gateway, byte-identical).
+
+```bash
+# Deterministic turn (mock model — free, exact reply via the getTurnModel seam):
+SUNNY_TEST_SECRET=<s> SUNNY_BASE_URL=https://sunny.waywardlane.com \
+  node scripts/test-channel.mjs "ping" --say "pong"
+# Real-model turn — prints Sunny's actual reply (drop --say):
+SUNNY_TEST_SECRET=<s> SUNNY_BASE_URL=… node scripts/test-channel.mjs "what's a DE1?"
+```
+
+Endpoints (header `x-test-secret`): `POST /test/inbound {text, threadId?, modelResponses?}` →
+`{cursor}`; `GET /test/outbound?threadId&afterSeq=cursor` → captured replies. Source:
+`src/gateway/{loopback,multiChannel}.ts`, `server/routes/test/`.
+
 ## Web dashboard (read-only)
 
 A **read-only** terminal-styled web dashboard served by the unified app (above) — a window

@@ -10,108 +10,32 @@ import {
   type AttachmentRef,
   type PreparedImage,
 } from '../gateway/media.js';
+import { groupSpeakerPrefix } from './delivery.js';
 
 /**
- * Pure turn helpers extracted from `loop.ts` (testability refactor D13, task 3.1).
+ * Stored-row → model-message conversion + inbound media resolution (D-MG9 / D-MM3).
  *
- * These hold the D-MG8 delivery logic and the D-MG9 stored-row → model-message
- * conversion as side-effect-free functions so they can be unit-tested directly,
- * without standing up the model, gateway, or DB. `runTurn` calls them; behavior
- * is unchanged.
+ * The side-effect-FREE delivery helpers (classification, steer folding, the persisted
+ * turn-record builder) live in `delivery.ts` so they stay Node-free and sandbox-safe
+ * for the durable workflow; they are re-exported here so existing `./turn.js` imports
+ * keep working. The functions that remain in this module read the filesystem (inbound
+ * media), so this module is NOT safe to import from workflow/orchestrator code.
  */
-
-/** How a turn's reply reached (or didn't reach) the user (D-MG8). */
-export type Delivery = 'send_message' | 'fallback_text' | 'silence';
-
-/**
- * Classify how a turn was delivered from three observable signals: how many times
- * `send_message` was called, whether the model affirmatively called `stay_silent`,
- * and whether any private scratch text exists.
- *
- * - `send_message` — the intended path: the model spoke via the tool.
- * - `silence` — a deliberate, valid choice: the model called `stay_silent`, OR it
- *   produced nothing at all (no send, no scratch).
- * - `fallback_text` — an elicitation MISS: the model wrote private scratch but
- *   called NEITHER `send_message` nor `stay_silent`. This is what triggers the
- *   recovery pass (and, if recovery is somehow skipped, what gets logged as the
- *   regression signal). Raw scratch is never delivered as-is.
- *
- * From the user's perspective `silence` and an unrecovered `fallback_text` both
- * mean "no message arrived"; they are kept distinct purely as telemetry.
- */
-export function classifyDelivery(sendCount: number, scratch: string, staySilent = false): Delivery {
-  if (sendCount > 0) return 'send_message';
-  if (staySilent) return 'silence';
-  if (scratch) return 'fallback_text';
-  return 'silence';
-}
-
-/**
- * Trim trailing non-user messages (assistant + tool) back to the last user
- * message. Anthropic rejects a prompt that ends on an assistant message, and the
- * stored window is insertion-ordered (D-MG9), so a turn record can leave trailing
- * assistant/tool messages. Returns a new array; does not mutate the input.
- */
-export function trimTrailingNonUser(messages: ModelMessage[]): ModelMessage[] {
-  const out = messages.slice();
-  while (out.length > 0 && out[out.length - 1]?.role !== 'user') {
-    out.pop();
-  }
-  return out;
-}
-
-/** The private scratchpad text of a turn: all `text` parts, joined and trimmed. */
-export function extractScratch(parts: UIMessage['parts']): string {
-  return parts
-    .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
-    .map((p) => p.text)
-    .join('\n')
-    .trim();
-}
-
-/**
- * Build a `tool-send_message` UIMessage part for a delivered message. Used to
- * record a recovery-pass send (which happens in a separate model call) into the
- * turn's history as a `send_message` tool call — the same shape the main loop
- * persists — so the next turn's context reinforces "speaking == send_message".
- */
-export function sendMessagePart(text: string, toolCallId: string): UIMessage['parts'][number] {
-  return {
-    type: 'tool-send_message',
-    toolCallId,
-    state: 'output-available',
-    input: { text },
-    output: 'delivered',
-  } as UIMessage['parts'][number];
-}
-
-/**
- * Split a reply into iMessage bubbles on blank lines (text delivery mode). A reply
- * with no blank line is one bubble; empty/whitespace yields no bubbles.
- */
-export function splitBubbles(text: string): string[] {
-  return text
-    .split(/\n\s*\n/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
-
-/** The delivered messages of a turn: the `text` input of each `send_message` call. */
-export function extractSends(parts: UIMessage['parts']): string[] {
-  return parts
-    .filter((p) => p.type === 'tool-send_message')
-    .map((p) => (p as { input?: { text?: string } }).input?.text)
-    .filter((t): t is string => !!t);
-}
-
-/**
- * Speaker prefix for a group user message (R1) — e.g. `Devon (owner): ` — so the
- * model can follow who said what. Empty string when there's no sender name.
- */
-export function groupSpeakerPrefix(senderName: string | undefined, isOwner: boolean): string {
-  if (!senderName) return '';
-  return `${senderName}${isOwner ? ' (owner)' : ''}: `;
-}
+export {
+  buildTurnRecord,
+  calledStaySilent,
+  classifyDelivery,
+  extractScratch,
+  extractSends,
+  groupSpeakerPrefix,
+  sendMessagePart,
+  splitBubbles,
+  steerMessageText,
+  trimTrailingNonUser,
+  usageOf,
+  type Delivery,
+  type TurnUsage,
+} from './delivery.js';
 
 /**
  * Convert the stored recent window (D-MG9) into model messages. Each row carries a
@@ -133,8 +57,23 @@ export function toModelMessages(
   isGroup: boolean,
   opts: MediaResolveOptions = {},
 ): Promise<ModelMessage[]> {
-  const ui = window.map((row) => resolveMedia(rowToUIMessage(row, isGroup), opts));
+  const ui = window.map((row) =>
+    stripReasoning(resolveMedia(rowToUIMessage(row, isGroup), opts)),
+  );
   return convertToModelMessages(ui, { ignoreIncompleteToolCalls: true });
+}
+
+/**
+ * Drop `reasoning` (extended-thinking) parts from a stored message before it is replayed
+ * as history. The durable agent's `collectUIMessages` persists thinking blocks; re-sending
+ * them in a later turn's prompt is REJECTED by Anthropic ("`thinking`/`redacted_thinking`
+ * blocks in the latest assistant message cannot be modified"). Thinking is private (D-MG8)
+ * and only meaningful within its own generation, so history carries none — the live turn
+ * manages its current-turn thinking itself. Also drops `step-start` UI markers (model-irrelevant).
+ */
+function stripReasoning(msg: Omit<UIMessage, 'id'>): Omit<UIMessage, 'id'> {
+  if (!msg.parts.some((p) => p.type === 'reasoning' || p.type === 'step-start')) return msg;
+  return { ...msg, parts: msg.parts.filter((p) => p.type !== 'reasoning' && p.type !== 'step-start') };
 }
 
 /**

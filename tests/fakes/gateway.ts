@@ -54,6 +54,9 @@ export class FakeGateway implements Gateway {
     await this.handler(event);
   }
 
+  /** Epoch-ms of the last send per thread (for the typing-suppression signal). */
+  private readonly sentAt = new Map<string, number>();
+
   async send(
     threadId: string,
     message: OutboundMessage,
@@ -65,11 +68,16 @@ export class FakeGateway implements Gateway {
       attachment: message.attachment,
       persist: opts?.persist ?? true,
     });
+    this.sentAt.set(threadId, Date.now());
     return {};
   }
 
   async startTyping(threadId: string): Promise<void> {
     this.typingStarted.push(threadId);
+  }
+
+  lastSentAt(threadId: string): number | undefined {
+    return this.sentAt.get(threadId);
   }
 
   async start(): Promise<void> {

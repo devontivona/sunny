@@ -1,5 +1,5 @@
 import { tool } from 'ai';
-import { z } from 'zod';
+import { STAY_SILENT_SPEC } from './sendMessageSpec.js';
 
 /** Mutable flag so the runner can detect a deliberate choice of silence (D-MG8). */
 export interface SilenceFlag {
@@ -17,13 +17,7 @@ export interface SilenceFlag {
  */
 export function createStaySilentTool(flag: SilenceFlag) {
   return tool({
-    description:
-      'Deliberately say nothing this turn. Call this when the latest message just closes the ' +
-      'loop — a 👍 or reaction, "ok", "thanks", "got it", "sounds good" — and there is ' +
-      'genuinely nothing useful to add. Calling stay_silent IS how you choose silence: it ends ' +
-      'the turn with no message delivered. Do not call it if there is something worth saying — ' +
-      'use send_message for that.',
-    inputSchema: z.object({}),
+    ...STAY_SILENT_SPEC,
     execute: async () => {
       flag.silent = true;
       return 'ok: staying silent';

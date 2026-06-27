@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, isNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, notInArray, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import type { Db } from '../db/client.js';
 import { messages } from '../db/schema.js';
@@ -109,6 +109,107 @@ export class ConversationStore {
       .update(messages)
       .set({ processedAt: new Date() })
       .where(and(eq(messages.channel, channel), eq(messages.messageId, messageId)));
+  }
+
+  /**
+   * Mark a precise set of inbound messages processed in one statement (durable-main-loop
+   * D5). The durable conversational run marks exactly the user messages it answered this
+   * turn — the window it read plus any steers folded mid-turn — so a message that lands in
+   * the gap between answering and marking stays unprocessed and is picked up next turn
+   * (rather than being marked answered when it wasn't). A no-op on an empty id list.
+   */
+  async markProcessedMany(channel: string, messageIds: string[]): Promise<void> {
+    if (messageIds.length === 0) return;
+    await this.db
+      .update(messages)
+      .set({ processedAt: new Date() })
+      .where(and(eq(messages.channel, channel), inArray(messages.messageId, messageIds)));
+  }
+
+  /**
+   * Mark a thread's inbound messages answered — scoped by `threadId` (which is channel-specific),
+   * so it works for ANY channel without the caller knowing the channel. Used by the durable turn,
+   * whose `messageIds` already come from thread-scoped reads (`windowUserIds`/`unansweredSteers`).
+   * (`hasUnansweredInbound` keys off `threadId` only, so a channel-mismatched mark leaves the
+   * message perpetually unanswered → a re-run loop; this avoids that.) A no-op on an empty list.
+   */
+  async markAnsweredForThread(threadId: string, messageIds: string[]): Promise<void> {
+    if (messageIds.length === 0) return;
+    await this.db
+      .update(messages)
+      .set({ processedAt: new Date() })
+      .where(and(eq(messages.threadId, threadId), inArray(messages.messageId, messageIds)));
+  }
+
+  /**
+   * Whether this thread has any inbound (user) message still awaiting a reply
+   * (durable-main-loop D5). The durable per-thread run uses this as its idempotency
+   * gate: it answers the window only while unanswered inbound exists, so a hook
+   * wake that carries nothing new (e.g. a steer already folded into the prior turn)
+   * does not trigger a redundant turn.
+   */
+  async hasUnansweredInbound(threadId: string): Promise<boolean> {
+    const [row] = await this.db
+      .select({ id: messages.messageId })
+      .from(messages)
+      .where(
+        and(
+          eq(messages.threadId, threadId),
+          eq(messages.role, 'user'),
+          isNull(messages.processedAt),
+        ),
+      )
+      .limit(1);
+    return !!row;
+  }
+
+  /**
+   * Unanswered (unprocessed) user messages on a thread, EXCLUDING a given set of ids,
+   * oldest-first (durable-main-loop, mid-turn steering). The durable run calls this from
+   * `prepareStep` to fold messages that arrived MID-TURN into the in-flight turn's next
+   * model step — passing the turn's already-in-prompt window ids + already-folded ids as
+   * `excludeIds`, so only genuinely new arrivals come back. Reading from the store (the
+   * durable source of truth the gateway persists to on arrival) keeps folding deterministic
+   * inside a `'use step'` and avoids a concurrent hook consumer (which would race the
+   * between-turn `await hook`). Capped at the window size.
+   */
+  async unansweredSteers(
+    threadId: string,
+    excludeIds: string[],
+  ): Promise<{ messageId: string; text: string; senderName?: string }[]> {
+    const conds = [
+      eq(messages.threadId, threadId),
+      eq(messages.role, 'user'),
+      isNull(messages.processedAt),
+    ];
+    if (excludeIds.length > 0) conds.push(notInArray(messages.messageId, excludeIds));
+    const rows = await this.db
+      .select({
+        messageId: messages.messageId,
+        text: messages.text,
+        senderName: messages.senderName,
+      })
+      .from(messages)
+      .where(and(...conds))
+      .orderBy(asc(messages.createdAt))
+      .limit(this.windowSize);
+    return rows.map((r) => ({
+      messageId: r.messageId,
+      text: r.text,
+      senderName: r.senderName ?? undefined,
+    }));
+  }
+
+  /** The message ids of this thread's recent window, oldest-first (durable-main-loop
+   *  D5) — the user-message ids the durable run marks processed after answering. */
+  async windowUserIds(threadId: string): Promise<string[]> {
+    const rows = await this.db
+      .select({ messageId: messages.messageId, role: messages.role })
+      .from(messages)
+      .where(eq(messages.threadId, threadId))
+      .orderBy(desc(messages.createdAt))
+      .limit(this.windowSize);
+    return rows.filter((r) => r.role === 'user').map((r) => r.messageId);
   }
 
   /**

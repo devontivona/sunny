@@ -57,6 +57,35 @@ Two layers split on the determinism/cost axis (design `testing-and-evals`):
 - **Fixtures** — typed builders in `tests/factories.ts` (deterministic; **no faker**).
   Property-based tests (`fast-check`) cover the pure normalizers only.
 
+### Drive full turns yourself — the loopback channel (don't ask the user to text)
+
+To LIVE-test end to end (inbound → router → durable turn-run → delivery) without iMessage,
+use the **loopback channel** instead of waiting on the user. It runs ALONGSIDE Sendblue
+(`MultiChannelGateway` routes by thread: `loopback:` threads → loopback, everything else →
+iMessage), so enabling it does **not** take iMessage down.
+
+- Run with `SUNNY_TEST_CHANNEL=1` (+ `SUNNY_TEST_SECRET` in `.env`); the shared devbox is
+  usually already in this mode (see the `sunny-devbox-worktree` memory).
+- Driver: `set -a; . .env; set +a; SUNNY_BASE_URL=https://sunny.waywardlane.com \`
+  `node scripts/test-channel.mjs "your message" [--say "deterministic reply"]`.
+  `--say` runs the turn against a mock model (free, exact reply) via the `getTurnModel` seam;
+  omit it for a real-model turn (prints Sunny's actual reply). Deterministic runs auto-use a
+  FRESH unique thread — `mockSequenceModel` indexes its responses by assistant-message count in
+  the prompt, so it only behaves on a thread with no history; real-model runs reuse the default
+  thread for continuity. Don't `--say` on a `--thread` that already has history (it'll pick the
+  wrong scripted response → may not deliver).
+- Raw HTTP (header `x-test-secret`): `POST /test/inbound {text, threadId?, modelResponses?}`
+  → `{cursor}`; `GET /test/outbound?threadId&afterSeq=cursor` → the captured replies.
+- Source: `src/gateway/loopback.ts`, `multiChannel.ts`, `server/routes/test/*`.
+
+### Run the durable workflow in tests — `@workflow/vitest` (Local World)
+
+Durable workflows (`workflows/*.ts`) run END-TO-END in-process via `npm run test:workflow`
+(`tests/workflow/*.workflow.test.ts`, the `@workflow/vitest` Local World — no Postgres). The
+harness (`tests/workflow/harness.ts`) injects a test runtime on the `getRuntime` globalThis key
+and mocks the model via the `getTurnModel`/`testModelResponses` seam. Use this — NOT a hand-
+modeled step boundary — to test `runConversation`/jobs (delivery, mid-turn folding, exactly-once).
+
 ### Reproduce loop/prompt/model bugs from REAL conversations, not synthetic inputs
 
 Agent-behavior bugs (delivery, elicitation, recovery, summarization) usually depend on

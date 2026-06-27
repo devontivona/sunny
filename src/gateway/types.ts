@@ -109,6 +109,13 @@ export interface Gateway {
   /** Show a typing indicator on a thread (no-op if unsupported). */
   startTyping(threadId: string): Promise<void>;
 
+  /**
+   * Epoch-ms of the most recent outbound delivery on a thread, or undefined if none this
+   * session. Lets a typing driver suppress the indicator right after a message lands (so it
+   * doesn't reappear during a turn's post-send housekeeping) — durable-main-loop typing fix.
+   */
+  lastSentAt?(threadId: string): number | undefined;
+
   /** Initialize the underlying transport. */
   start(): Promise<void>;
 

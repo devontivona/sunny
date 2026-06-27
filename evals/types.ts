@@ -1,7 +1,6 @@
 import type { Delivery } from '../src/agent/turn.js';
 import type { SunnyConfig } from '../src/config/index.js';
 import type { MemoryWriteInput } from '../src/memory/index.js';
-import type { RecordedStart } from '../tests/fakes/start.js';
 
 /** The behavioral dimensions the dataset covers (agent-evals spec). */
 export type Dimension = 'elicitation' | 'memory' | 'tool-selection';
@@ -13,10 +12,9 @@ export interface ToolCallRecord {
 }
 
 /**
- * The captured outcome of a turn — what graders read (design D7). Assembled from
- * the loop's native outputs (the persisted D-MG9 turn parts = `result.steps`'
- * tool calls, the `delivered` classification) plus the fake gateway's captured
- * outbound and the recording fake `start`. NOT database state.
+ * The captured outcome of a turn — what graders read (design D7). Assembled from the persisted
+ * D-MG9 turn parts (the turn's tool calls + the `delivered` classification) plus the fake
+ * gateway's captured outbound. NOT database state.
  */
 export interface Trajectory {
   /** Every tool call in the turn, in order (incl. `send_message`). */
@@ -27,8 +25,8 @@ export interface Trajectory {
   delivered: Delivery;
   /** Whether the delivery-recovery backstop fired to rescue a missed send (D-MG8). */
   recovered: boolean;
-  /** Durable jobs the model elected to start (recorded, not launched). */
-  startJobs: RecordedStart[];
+  /** The `start_job` tool calls the model elected to make (from the persisted turn parts). */
+  startJobs: ToolCallRecord[];
   /** The user-facing reply text (sends joined) — the judge's `output`. */
   finalText: string;
   /** The private scratchpad text (never delivered). */

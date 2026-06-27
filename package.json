@@ -17,9 +17,8 @@
     "test:all": "vitest run --project unit --project integration",
     "test:watch": "vitest --project unit --project integration",
     "coverage": "vitest run --project unit --project integration --coverage",
-    "eval": "tsx --env-file-if-exists=.env evals/run.ts",
-    "experiment:thinking": "tsx --env-file-if-exists=.env evals/experiments/thinking-ab.ts",
-    "experiment:delivery": "tsx --env-file-if-exists=.env evals/experiments/delivery-ab.ts",
+    "eval": "vitest run --config vitest.eval.config.ts evals/run.eval.test.ts",
+    "eval:suite": "vitest run --config vitest.eval.config.ts evals/suite.eval.test.ts",
     "db:setup-world": "workflow-postgres-setup",
     "format": "prettier --write \"src/**/*.ts\" \"server/**/*.ts\" \"plugins/**/*.ts\" \"workflows/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\"",
@@ -28,7 +27,8 @@
     "dashboard:typecheck": "tsc -p app/tsconfig.json --noEmit",
     "dashboard:build": "npm run design:lint && vite build",
     "dashboard:dev": "vite",
-    "dev:unified": "NITRO_VITE=1 vite --config vite.config.unified.ts"
+    "dev:unified": "NITRO_VITE=1 vite --config vite.config.unified.ts",
+    "test:workflow": "vitest run --config vitest.workflow.config.ts"
   },
   "dependencies": {
     "@1password/sdk": "^0.4.0",
@@ -68,6 +68,7 @@
     "@types/react-dom": "^19.1.0",
     "@vitejs/plugin-react": "^5.1.0",
     "@vitest/coverage-v8": "^4.1.9",
+    "@workflow/vitest": "^4.0.11",
     "agentation": "^3.0.2",
     "autoevals": "^0.0.132",
     "drizzle-kit": "^0.31.10",
