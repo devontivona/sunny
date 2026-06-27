@@ -80,8 +80,6 @@ interface TurnEntry {
 const MAX_BUFFER = 4000;
 /** Drop a finished run from the active set this long after it completes. */
 const FINISHED_TTL_MS = 60_000;
-/** Treat a running run with no updates for this long as dead (crash/abort) and reap. */
-const STALE_TTL_MS = 10 * 60_000;
 const REAP_INTERVAL_MS = 30_000;
 
 export class LiveBus {
@@ -97,7 +95,8 @@ export class LiveBus {
     setInterval(() => this.reap(), REAP_INTERVAL_MS).unref();
   }
 
-  /** Register a turn at its start. Idempotent on `runId`. */
+  /** Register a turn at its start. Idempotent on `runId` — a duplicate register is a
+   *  no-op so an existing entry's buffer/subscribers are never discarded. */
   registerTurn(init: {
     runId: string;
     threadId: string | null;
@@ -106,6 +105,7 @@ export class LiveBus {
     effort: string | null;
     traceUrl?: string | null;
   }): void {
+    if (this.turns.has(init.runId)) return;
     const now = Date.now();
     this.turns.set(init.runId, {
       run: {
@@ -250,12 +250,13 @@ export class LiveBus {
   private reap(): void {
     const now = Date.now();
     for (const [runId, entry] of this.turns) {
+      // Only reap FINISHED runs (after a short settle window). A running entry is
+      // always finished explicitly by the loop (success or error path), so within a
+      // process it never needs TTL reaping — and TTL-reaping a running turn would
+      // wrongly kill a long, quiet tool call (no chunks emitted for minutes, e.g. a
+      // long build) that is still executing. (On a process crash the in-memory bus is
+      // gone anyway, so there is nothing to reap.)
       if (entry.finishedAt && now - entry.finishedAt > FINISHED_TTL_MS) {
-        this.turns.delete(runId);
-      } else if (!entry.finishedAt && now - entry.updatedAt > STALE_TTL_MS) {
-        // A running run that went silent past the TTL: the process likely crashed
-        // mid-turn. Mark it errored, notify any stragglers, and drop it.
-        this.finishTurn(runId, 'errored');
         this.turns.delete(runId);
       }
     }

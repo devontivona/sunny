@@ -348,7 +348,8 @@ export default defineEventHandler(async (event) => {
           }
           const run = String(query.run ?? '');
           if (!run) return json(400, { error: 'missing run or thread id' });
-          if (String(query.kind ?? 'turn') === 'job') void startJobStream(stream, run);
+          if (String(query.kind ?? 'turn') === 'job')
+            void startJobStream(stream, run, getHeader(event, 'last-event-id'));
           else startTurnStream(stream, run);
           return stream.send();
         }
@@ -440,12 +441,28 @@ function startThreadStream(stream: LiveStream, threadId: string): void {
 
 /** Stream a Tier-2 job's live chunks from its durable WDK run stream over SSE:
  *  replay the last chunks (negative startIndex), then tail until the run completes. */
-async function startJobStream(stream: LiveStream, runId: string): Promise<void> {
+async function startJobStream(
+  stream: LiveStream,
+  runId: string,
+  lastEventId?: string,
+): Promise<void> {
   const redactor = defaultRedactor();
   let closed = false;
+  let reader: ReadableStreamDefaultReader<UIMessageChunk> | null = null;
   stream.onClosed(() => {
     closed = true;
+    // Cancel the durable-run reader promptly: otherwise a disconnected client keeps
+    // the WDK stream subscribed while it's blocked in read() (a long idle job would
+    // hold it until the next chunk / completion).
+    void reader?.cancel().catch(() => {});
   });
+  // Resume after the last chunk the client already received. EventSource sends the
+  // `Last-Event-ID` header on auto-reconnect, so a reconnect (e.g. a tunnel idle-drop
+  // during a long job) continues the fold instead of replaying+duplicating chunks the
+  // client already folded. A fresh connect starts at 0 (the client needs the opening
+  // chunks for readUIMessageStream to assemble the message).
+  const resumeFrom = lastEventId != null && /^\d+$/.test(lastEventId) ? Number(lastEventId) + 1 : 0;
+
   // Reflect the real run status on connect so a completed run viewed historically
   // doesn't flash "live".
   let initStatus: LiveRun['status'] = 'running';
@@ -457,18 +474,22 @@ async function startJobStream(stream: LiveStream, runId: string): Promise<void> 
   }
   await stream.push({ event: 'status', data: JSON.stringify(await jobRunMeta(runId, initStatus)) });
   try {
-    // Read from the START (not a negative startIndex): the client folds these chunks
-    // with readUIMessageStream, which needs the message's opening chunks to assemble
-    // coherently. A `-N` tail truncates the start on long jobs and breaks the view.
-    const reader = getRun<unknown>(runId)
-      .getReadable<UIMessageChunk>({ startIndex: 0 })
+    reader = getRun<unknown>(runId)
+      .getReadable<UIMessageChunk>({ startIndex: resumeFrom })
       .getReader();
+    let idx = resumeFrom;
     try {
       for (;;) {
         if (closed) break;
         const { done, value } = await reader.read();
         if (done) break;
-        await stream.push({ event: 'chunk', data: JSON.stringify(redactor.redact(value)) });
+        // `id` is the absolute chunk index, so a reconnect resumes right after it.
+        await stream.push({
+          id: String(idx),
+          event: 'chunk',
+          data: JSON.stringify(redactor.redact(value)),
+        });
+        idx++;
       }
     } finally {
       try {
