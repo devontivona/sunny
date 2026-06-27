@@ -297,7 +297,11 @@ export class ConversationStore {
       .select()
       .from(messages)
       .where(eq(messages.threadId, threadId))
-      .orderBy(desc(messages.createdAt))
+      // `createdAt` (defaultNow) can TIE when rows insert in the same instant (rapid inserts on a
+      // fast machine — flaked CI), and ties order arbitrarily. `messageId` is a stable secondary
+      // key so the window is deterministic. (For real traffic createdAt rarely ties; on a tie the
+      // two are effectively simultaneous, so any stable order is fine.)
+      .orderBy(desc(messages.createdAt), desc(messages.messageId))
       .limit(this.windowSize);
     return rows.reverse().map(toStored);
   }
