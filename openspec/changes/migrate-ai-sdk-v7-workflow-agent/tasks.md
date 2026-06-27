@@ -21,11 +21,12 @@
 - [ ] 4.1 Move OTel setup to `@ai-sdk/otel` `registerTelemetry(new OpenTelemetry(...))`; `experimental_telemetry`→`telemetry`. Re-attach `RedactingSpanProcessor` + `TracePromotingSpanProcessor` to the new pipeline.
 - [ ] 4.2 Re-confirm `TracePromotingSpanProcessor` against v7's emitted span attributes (trace name/session/user/input/output still promote); fix attribute-name drift.
 
-## 5. Langfuse trace cleanup (D4 — gated on evidence)
+## 5. Langfuse trace cleanup (D4 — source-confirmed the duplication PERSISTS in v7)
 
-- [ ] 5.1 Drive a live turn post-migration and INSPECT the trace (`langfuse-cli`): count `send_message` / `ai.streamText` spans vs runtime sends/steps. Determine whether WorkflowAgent's heavier step-journaling already eliminates the replay re-emission.
-- [ ] 5.2 If duplication persists: add an OTel `SpanProcessor`/`Sampler` that drops spans created within a `workflow.replay` context; verify one clean trace per turn. (And open an upstream `workflow` suppress-on-replay request.)
-- [ ] 5.3 Confirm the `durable-execution` "one trace per turn, no replay duplication" requirement holds.
+- [ ] 5.1 Drive a live turn post-migration and INSPECT the trace (`langfuse-cli`): count `send_message`/`ai.streamText` spans vs runtime sends/steps to CONFIRM the source prediction (agent-loop wrapper/tool spans re-emit per resume; only the `doStream` generation span is replay-safe).
+- [ ] 5.2 Add an OTel `SpanProcessor`/`Sampler` that drops spans created within a `workflow.replay` context (the runtime's per-resume wrapping span is the detect flag), re-hosted under `@ai-sdk/otel`/`registerTelemetry`; verify one clean trace per turn.
+- [ ] 5.3 Report the gap upstream on `vercel/ai` (ref #12164): WorkflowAgent re-emits agent-loop telemetry (wrapper/tool/step events) on every durable replay — only `doStreamStep`-internal spans are replay-safe; the callback dispatcher (`createRestrictedTelemetryDispatcher`) needs an `isReplaying` guard.
+- [ ] 5.4 Confirm the `durable-execution` "one trace per turn, no replay duplication" requirement holds.
 
 ## 6. Client streaming — evaluate retiring the LiveBus chunk-bridge (D3)
 
