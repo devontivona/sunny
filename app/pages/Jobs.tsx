@@ -28,19 +28,16 @@ function formatDuration(ms: number | null): string {
 
 function JobRow({ j }: { j: JobRunView }) {
   const ok = j.status === 'completed';
-  const running = j.status === 'running';
   return (
     <div className="mb-md">
       <div className="flex items-baseline justify-between gap-md">
         <div className="flex items-baseline gap-sm">
           <StatusDot ok={ok} />
-          {running ? (
-            <LinkButton onClick={() => navigate(`jobs/${encodeURIComponent(j.id)}`)}>
-              {j.kind}
-            </LinkButton>
-          ) : (
-            <span className="font-bold text-fg">{j.kind}</span>
-          )}
+          {/* Every job links to its run view — the durable WDK stream replays the
+              full trajectory for completed runs and tails live ones. */}
+          <LinkButton onClick={() => navigate(`jobs/${encodeURIComponent(j.id)}`)}>
+            {j.kind}
+          </LinkButton>
         </div>
         <span className={statusColor(j.status)}>{j.status}</span>
       </div>

@@ -446,10 +446,22 @@ async function startJobStream(stream: LiveStream, runId: string): Promise<void> 
   stream.onClosed(() => {
     closed = true;
   });
-  await stream.push({ event: 'status', data: JSON.stringify(await jobRunMeta(runId, 'running')) });
+  // Reflect the real run status on connect so a completed run viewed historically
+  // doesn't flash "live".
+  let initStatus: LiveRun['status'] = 'running';
   try {
+    const s = await getRun<unknown>(runId).status;
+    initStatus = s === 'failed' ? 'errored' : s === 'completed' ? 'finished' : 'running';
+  } catch {
+    /* default running */
+  }
+  await stream.push({ event: 'status', data: JSON.stringify(await jobRunMeta(runId, initStatus)) });
+  try {
+    // Read from the START (not a negative startIndex): the client folds these chunks
+    // with readUIMessageStream, which needs the message's opening chunks to assemble
+    // coherently. A `-N` tail truncates the start on long jobs and breaks the view.
     const reader = getRun<unknown>(runId)
-      .getReadable<UIMessageChunk>({ startIndex: -200 })
+      .getReadable<UIMessageChunk>({ startIndex: 0 })
       .getReader();
     try {
       for (;;) {

@@ -79,7 +79,9 @@ function StatusBar({ run }: { run: LiveRun }) {
   return (
     <div className="mb-sm flex flex-wrap items-baseline gap-x-md gap-y-xs text-fg-dim">
       <StatusBadge status={run.status} />
-      <span>{elapsedLabel(run.startedAt, now)}</span>
+      {/* Elapsed only makes sense for a live run; for a finished/historical run
+          `now - startedAt` would be misleading (e.g. hours later). */}
+      {run.status === 'running' && <span>{elapsedLabel(run.startedAt, now)}</span>}
       <span>
         {run.steps} step{run.steps === 1 ? '' : 's'}
       </span>
