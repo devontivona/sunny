@@ -331,6 +331,11 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
             threadId: event.threadId,
             scratchLen: scratch.length,
           });
+          // The miss happened — this turn took the backstop path ("de-poisoning"),
+          // so mark it recovered regardless of whether the pass below succeeds,
+          // returns empty, or throws. (This is the signal the dashboard's [R] and the
+          // Activity "Backstop" column read.)
+          recovered = true;
           try {
             const recoveryText = await runRecoveryPass({
               model: recoveryModel,
@@ -339,7 +344,6 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
               scratch,
               threadId: event.threadId,
             });
-            recovered = true;
             if (recoveryText) {
               // Deliver the composed message and record it in history as a
               // send_message tool call (the same shape the main loop persists), so a

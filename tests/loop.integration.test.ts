@@ -128,6 +128,25 @@ describe('agent loop end-to-end', () => {
     expect(meta?.recovered).toBe(true);
   });
 
+  it('miss → recovery pass THROWS → still recorded recovered=true (the miss happened)', async () => {
+    const rt = createTestRuntime({
+      db: tdb.db,
+      model: modelThatOnlyScratches('private reasoning the model forgot to send'),
+      recoveryModel: modelThatThrows(), // the backstop itself errors
+    });
+    const ev = makeChannelEvent({ text: 'what about X?' });
+    await runOnce(rt, ev);
+
+    expect(rt.gateway.texts()).toEqual([]); // nothing delivered (recovery errored)
+    const turn = (await lastTurn(rt, ev.threadId)).find((m) => m.role === 'assistant');
+    const meta = (turn!.payload as { metadata?: { recovered?: boolean; delivered?: string } })
+      .metadata;
+    // The turn took the backstop path, so it must still be flagged recovered — the
+    // signal the dashboard [R] / Activity "Backstop" column read.
+    expect(meta?.recovered).toBe(true);
+    expect(meta?.delivered).toBe('fallback_text');
+  });
+
   it('model error → user gets the error reply and the runner survives the next turn', async () => {
     const rt = createTestRuntime({ db: tdb.db, model: modelThatThrows() });
     const ev = makeChannelEvent({ text: 'boom' });
