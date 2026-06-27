@@ -19,6 +19,7 @@ import {
   type OutboundMediaResult,
 } from './media.js';
 import type { ConversationStore } from './store.js';
+import { runSerial } from './serial.js';
 import { isGroupThreadId } from './threadId.js';
 import type {
   ChannelCapabilities,
@@ -64,6 +65,12 @@ export class SendblueGateway implements Gateway {
   private readonly adapter: Adapter;
   /** Live thread handles by threadId, refreshed on every inbound message. */
   private readonly activeThreads = new Map<string, Thread>();
+  /** Epoch-ms of the last outbound delivery per thread (typing-suppression signal). */
+  private readonly sentAt = new Map<string, number>();
+  /** Per-thread send serialization: a turn may call send_message twice; each `execute` is a
+   *  separate durable step that can run concurrently, and two near-simultaneous REST sends can
+   *  arrive out of order. Chaining sends per thread guarantees in-order delivery. */
+  private readonly sendChain = new Map<string, Promise<unknown>>();
   private inboundHandler: InboundHandler | null = null;
   private started = false;
 
@@ -132,7 +139,17 @@ export class SendblueGateway implements Gateway {
     return this.chat.webhooks.sendblue(request);
   }
 
+  /** Deliver a message, SERIALIZED per thread (in-order), so back-to-back sends in one turn
+   *  can't arrive out of order. The actual delivery is {@link doSend}. */
   async send(
+    threadId: string,
+    message: OutboundMessage,
+    opts?: { persist?: boolean },
+  ): Promise<SendResult> {
+    return runSerial(this.sendChain, threadId, () => this.doSend(threadId, message, opts));
+  }
+
+  private async doSend(
     threadId: string,
     message: OutboundMessage,
     opts?: { persist?: boolean },
@@ -207,6 +224,9 @@ export class SendblueGateway implements Gateway {
       const sent = await this.adapter.postMessage(threadId, text);
       sentId = (sent as { id?: string })?.id ?? randomUUID();
     }
+    // Record the delivery time so the typing driver can suppress the indicator right
+    // after a message lands (durable-main-loop typing fix).
+    this.sentAt.set(threadId, Date.now());
     // The conversational loop persists its own per-turn record (D-MG9), so it
     // opts out here; proactive/Tier-2 sends persist a standalone outbound row.
     if (opts?.persist ?? true) {
@@ -256,6 +276,10 @@ export class SendblueGateway implements Gateway {
     } catch (err) {
       log.debug('startTyping failed (non-fatal)', { threadId, err: String(err) });
     }
+  }
+
+  lastSentAt(threadId: string): number | undefined {
+    return this.sentAt.get(threadId);
   }
 
   private registerHandlers(): void {

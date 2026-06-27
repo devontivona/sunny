@@ -27,6 +27,7 @@ import { LangfuseSpanProcessor } from '@langfuse/otel';
 import type { SpanProcessor, ReadableSpan, Span } from '@opentelemetry/sdk-trace-base';
 import type { AttributeValue } from '@opentelemetry/api';
 import { defaultRedactor, type Redactor } from './redact.js';
+import { TracePromotingSpanProcessor } from './tracePromotion.js';
 import { telemetryEnabled } from './enabled.js';
 import { logger } from '../logger.js';
 
@@ -104,8 +105,15 @@ export function startTelemetry(): void {
   }
   langfuseProcessor = new LangfuseSpanProcessor();
   sdk = new NodeSDK({
-    // Redaction runs first; the Langfuse exporter only sees scrubbed attributes.
-    spanProcessors: [new RedactingSpanProcessor(defaultRedactor()), langfuseProcessor],
+    // Order matters: redaction runs first (the exporter only sees scrubbed attributes), then
+    // trace-promotion copies durable runs' AI-SDK telemetry onto Langfuse trace-level
+    // attributes (so durable turns/jobs get named + session-grouped traces, not just child
+    // observations), then the Langfuse exporter sees the finished attributes.
+    spanProcessors: [
+      new RedactingSpanProcessor(defaultRedactor()),
+      new TracePromotingSpanProcessor(),
+      langfuseProcessor,
+    ],
   });
   sdk.start();
   log.info('tracing enabled → Langfuse', {

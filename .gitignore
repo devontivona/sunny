@@ -45,3 +45,7 @@ evals/scorecards/
 
 # Experiment result dumps (artifacts)
 evals/experiments/results/
+
+# @workflow/vitest test artifacts
+.workflow-data/
+.workflow-vitest/

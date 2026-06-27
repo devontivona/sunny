@@ -296,6 +296,7 @@ export class DashboardData {
         (select count(*)::int from workflow.workflow_steps s
            where s.run_id = r.id and s.status = 'failed') as failed_steps
       from workflow.workflow_runs r
+      where r.name not like '%runConversation%'
       order by r.created_at desc
       limit ${limit}
     `);
@@ -338,11 +339,15 @@ export class DashboardData {
   }
 
   private async activeJobs(): Promise<LiveRun[]> {
+    // Tier-2 background/scheduled jobs only. Per-turn conversational runs (runConversation)
+    // are surfaced as live TURNS via the in-process LiveBus (the gateway bridges their WDK
+    // stream into it), so they must NOT also appear here as jobs — exclude them.
     const res = await this.db.execute(sql`
       select r.id, r.name, r.created_at, r.started_at,
         (select count(*)::int from workflow.workflow_steps s where s.run_id = r.id) as step_count
       from workflow.workflow_runs r
       where r.status = 'running'
+        and r.name not like '%runConversation%'
       order by r.created_at desc
       limit 20
     `);
@@ -469,6 +474,9 @@ function listSkillFiles(dir: string): string[] {
 function jobKind(name: string): string {
   if (name.endsWith('runJob')) return 'Background job';
   if (name.endsWith('runScheduledJob')) return 'Scheduled job';
+  // Durable Tier-1 conversational runs (durable-main-loop) surface here as WDK runs
+  // when SUNNY_DURABLE_TURNS=1; label them as conversations rather than jobs.
+  if (name.endsWith('runConversation')) return 'Conversation';
   return name.split('//').filter(Boolean).pop() ?? name;
 }
 

@@ -103,7 +103,7 @@ Sunny SHALL persist every inbound and outbound message to its own store (the Pos
 - **AND** does not depend on the transport returning prior message history
 
 ### Requirement: Per-channel capability flags with graceful degradation
-Each channel driver SHALL declare its capabilities (at least: reactions, read receipts, typing indicators, group participation, proactive group messaging, and media/attachments). Sunny SHALL feature-detect these capabilities and degrade gracefully rather than assuming any channel's feature set.
+Each channel driver SHALL declare its capabilities (at least: reactions, read receipts, typing indicators, group participation, proactive group messaging, and media/attachments). Sunny SHALL feature-detect these capabilities and degrade gracefully rather than assuming any channel's feature set. Where a channel supports typing indicators, Sunny SHALL keep the indicator active for the duration of a conversational turn, refreshing it as the turn makes progress, and SHALL clear it when the turn ends. Refreshing the indicator SHALL be driven from the gateway (which holds the live channel handle), not from inside a durable workflow.
 
 #### Scenario: Capability is absent
 - **WHEN** Sunny would use a feature a channel does not support (e.g. read receipts)
@@ -116,6 +116,11 @@ Each channel driver SHALL declare its capabilities (at least: reactions, read re
 #### Scenario: Media capability gates attachment sends
 - **WHEN** Sunny would attach media on a channel whose `media` capability is false
 - **THEN** it omits the attachment and still delivers the message text
+
+#### Scenario: Typing indicator persists across a long turn
+- **WHEN** a conversational turn runs for multiple steps on a channel that supports typing
+- **THEN** the gateway refreshes the typing indicator as the turn progresses
+- **AND** clears it once the turn completes
 
 ### Requirement: Sender authorization and owner tagging
 The gateway SHALL authorize inbound messages before the agent acts on them and SHALL tag each message with whether it is from the owner. Messages from outside any authorized context SHALL NOT trigger the agent. Within an authorized group, non-owner participants' messages MAY be answered, but only owner-tagged messages may trigger high-consequence actions or grant approvals (per security-permissions).
@@ -133,11 +138,16 @@ The gateway SHALL authorize inbound messages before the agent acts on them and S
 - **THEN** the gateway does not trigger the agent on it
 
 ### Requirement: Direct-message delivery
-Over a channel that addresses recipients by a stable identity (e.g. iMessage DMs by phone number), Sunny SHALL be able to both reply to and proactively send direct messages to an authorized user, including after a process restart.
+Over a channel that addresses recipients by a stable identity (e.g. iMessage DMs by phone number), Sunny SHALL be able to both reply to and proactively send direct messages to an authorized user, including after a process restart and from within a durable conversational turn. Outbound delivery SHALL address the recipient by stable identity and SHALL NOT depend on a live in-process session handle, so that a send issued from a durable step succeeds the same way a proactive send does.
 
 #### Scenario: Proactive DM after restart
 - **WHEN** Sunny needs to message Devon directly after a restart (e.g. a scheduled reminder)
 - **THEN** it can send the DM using the user's stable address without requiring a prior inbound message in the current session
+
+#### Scenario: Reply sent from a durable turn step
+- **WHEN** a conversational turn delivers a reply from within a durable step
+- **THEN** the message is sent by addressing the thread's stable identity without a live session handle
+- **AND** if that step is replayed after a crash, the message is not sent a second time
 
 ### Requirement: Group participation
 Sunny SHALL be able to participate in group chats: when an inbound group message is received, Sunny SHALL be able to reply to that group. Because the Sendblue transport exposes durable group identifiers, the driver MAY report `proactiveGroup` as supported (initiating to a known group survives restarts).

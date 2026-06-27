@@ -520,7 +520,11 @@ async function jobRunMeta(runId: string, status: LiveRun['status']): Promise<Liv
   let startedAt = new Date(0);
   try {
     const name = await run.workflowName;
-    label = name.endsWith('runScheduledJob') ? 'Scheduled job' : 'Background job';
+    label = name.endsWith('runScheduledJob')
+      ? 'Scheduled job'
+      : name.endsWith('runConversation')
+        ? 'Conversation'
+        : 'Background job';
   } catch {
     /* default label */
   }
