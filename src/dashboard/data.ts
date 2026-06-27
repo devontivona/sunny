@@ -580,6 +580,7 @@ function toConversationMessage(row: typeof messages.$inferSelect) {
       attachments,
       scratch: null,
       delivery: null,
+      recovered: false,
       steps: null,
       usage: null,
       parts: null,
@@ -603,6 +604,9 @@ function toConversationMessage(row: typeof messages.$inferSelect) {
     attachments,
     scratch: scratch || null,
     delivery: typeof meta.delivered === 'string' ? meta.delivered : null,
+    // Whether this turn required the delivery-recovery backstop ("de-poisoning",
+    // D-MG8) — the same signal as the Activity "Backstop" column. Drives the [R].
+    recovered: meta.recovered === true,
     steps: typeof meta.steps === 'number' ? meta.steps : null,
     usage: normalizeUsage(meta.usage),
     // The full per-step trajectory (D live-conversation-streaming): the stored

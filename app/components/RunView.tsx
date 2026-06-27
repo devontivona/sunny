@@ -16,7 +16,6 @@ type AnyPart = UIMessage['parts'][number];
 interface ToolPartShape {
   type: string;
   toolName?: string;
-  toolCallId?: string;
   state?: string;
   input?: unknown;
   output?: unknown;
@@ -157,29 +156,15 @@ function ToolPart({ part }: { part: ToolPartShape }) {
   const name = part.toolName ?? (part.type.startsWith('tool-') ? part.type.slice(5) : part.type);
 
   // The delivered message: render the text as the conversation bubble itself, not
-  // as a tool call — it IS Sunny speaking.
+  // as a tool call — it IS Sunny speaking. (Whether the turn was recovered/de-poisoned
+  // is a turn-level signal shown as [R] on the bubble header, not here.)
   if (name === 'send_message') {
     const text = (part.input as { text?: string } | undefined)?.text;
-    if (!text) return null;
-    // The delivery-recovery backstop coerces its send into the same shape as a real
-    // send_message (to teach the model), but it keeps a `recovery-*` toolCallId — the
-    // one tell. Surface it so a recovered (elicitation-miss) reply is visible.
-    const recovered = part.toolCallId?.startsWith('recovery') ?? false;
-    return (
-      <div className="my-xs flex items-baseline gap-xs text-fg">
-        {recovered && (
-          <span
-            className="shrink-0 text-error"
-            title="Delivered via the recovery backstop (the model wrote text but didn't call send_message)"
-          >
-            [R]
-          </span>
-        )}
-        <div className="min-w-0 flex-1">
-          <Markdown>{text}</Markdown>
-        </div>
+    return text ? (
+      <div className="my-xs text-fg">
+        <Markdown>{text}</Markdown>
       </div>
-    );
+    ) : null;
   }
 
   const isError = part.state === 'output-error';

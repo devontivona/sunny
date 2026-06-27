@@ -128,6 +128,9 @@ export interface ConversationMessage {
   /** Assistant's retained private scratch (never delivered); null for users. */
   scratch: string | null;
   delivery: string | null;
+  /** Whether this turn required the delivery-recovery backstop ("de-poisoning") —
+   *  the same signal as the Activity "Backstop" column; drives the [R] marker. */
+  recovered: boolean;
   steps: number | null;
   usage: TurnUsage | null;
   /** Full per-step trajectory (assistant turns only): the stored UIMessage parts,

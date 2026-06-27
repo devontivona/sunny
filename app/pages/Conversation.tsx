@@ -34,6 +34,14 @@ function Bubble({ m }: { m: ConversationMessage }) {
         <span className={isSunny ? 'text-secondary' : 'text-primary'}>
           {isSunny ? 'サニー' : m.senderName || 'You'}
         </span>
+        {isSunny && m.recovered && (
+          <span
+            className="text-error"
+            title="This turn required the delivery-recovery backstop — the model wrote a reply but didn't call send_message, so the backstop composed + delivered it (de-poisoning)."
+          >
+            [R]
+          </span>
+        )}
         <span>{formatTime(m.timestamp)}</span>
         {m.delivery && m.delivery !== 'send_message' && (
           <span className="text-warning">[{m.delivery}]</span>
