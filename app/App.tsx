@@ -44,7 +44,7 @@ function RouteView() {
     case 'schedules':
       return <Schedules />;
     case 'jobs':
-      return <Jobs />;
+      return <Jobs runId={second ? decodeURIComponent(second) : null} />;
     case 'activity':
       return <Activity />;
     case 'health':

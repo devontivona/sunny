@@ -1,9 +1,12 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { apiGet } from '../api';
 import type { ConversationMessage, SearchHit, ThreadSummary } from '../types';
 import { Markdown } from '../components/Markdown';
 import { Link, LinkButton } from '../components/Link';
 import { ErrorNote, Loading, PageTitle, formatTime, useAsync } from '../components/ui';
+import { useLiveThread } from '../components/live';
+import { LivePane } from '../components/LivePane';
+import { RunView, MessageParts } from '../components/RunView';
 import { navigate } from '../router';
 
 // Conversation view (5.3): an index page (search + thread list) and a nested
@@ -20,27 +23,46 @@ interface ThreadDetail {
 
 function Bubble({ m }: { m: ConversationMessage }) {
   const isSunny = m.role === 'assistant';
+  // Assistant turns render the full per-step trajectory (tool calls, results,
+  // scratch, step boundaries) from the stored UIMessage parts — the same expanded
+  // view as the live stream — so a turn keeps its display after the stream ends.
+  // User messages stay as plain delivered text.
+  const showParts = isSunny && m.parts != null && m.parts.length > 0;
   return (
-    <div className="mb-md">
+    <div className="mb-md min-w-0">
       <div className="mb-xs flex items-baseline gap-sm text-fg-dim">
         <span className={isSunny ? 'text-secondary' : 'text-primary'}>
           {isSunny ? 'サニー' : m.senderName || 'You'}
         </span>
+        {isSunny && m.recovered && (
+          <span
+            className="text-error"
+            title="This turn required the delivery-recovery backstop — the model wrote a reply but didn't call send_message, so the backstop composed + delivered it (de-poisoning)."
+          >
+            [R]
+          </span>
+        )}
         <span>{formatTime(m.timestamp)}</span>
         {m.delivery && m.delivery !== 'send_message' && (
           <span className="text-warning">[{m.delivery}]</span>
         )}
+        {isSunny && m.steps != null && (
+          <span>
+            · {m.steps} step{m.steps === 1 ? '' : 's'}
+          </span>
+        )}
       </div>
-      {m.delivered.length > 0 ? (
+      {showParts ? (
+        <MessageParts parts={m.parts ?? []} />
+      ) : m.delivered.length > 0 ? (
         <div className="text-fg">
           {m.delivered.map((text, i) => (
             <Markdown key={i}>{text}</Markdown>
           ))}
         </div>
       ) : (
-        !m.scratch && m.attachments.length === 0 && (
-          <div className="text-fg-dim italic">(silent turn)</div>
-        )
+        !m.scratch &&
+        m.attachments.length === 0 && <div className="text-fg-dim italic">(silent turn)</div>
       )}
       {m.attachments.length > 0 && (
         <div className="mt-xs flex flex-wrap gap-sm">
@@ -54,14 +76,20 @@ function Bubble({ m }: { m: ConversationMessage }) {
                 />
               </a>
             ) : (
-              <a key={i} href={a.src} target="_blank" rel="noreferrer" className="text-primary hover:underline">
+              <a
+                key={i}
+                href={a.src}
+                target="_blank"
+                rel="noreferrer"
+                className="text-primary hover:underline"
+              >
                 {a.name} ({a.mediaType})
               </a>
             ),
           )}
         </div>
       )}
-      {m.scratch && (
+      {!showParts && m.scratch && (
         <details className="mt-xs pl-md">
           <summary className="cursor-pointer list-none text-primary hover:underline [&::-webkit-details-marker]:hidden">
             › Retained scratch (private)
@@ -86,7 +114,9 @@ function ConversationIndex() {
   const results = useAsync<{ results: SearchHit[] }>(
     () =>
       searching
-        ? apiGet<{ results: SearchHit[] }>(`/conversation/search?q=${encodeURIComponent(submitted)}`)
+        ? apiGet<{ results: SearchHit[] }>(
+            `/conversation/search?q=${encodeURIComponent(submitted)}`,
+          )
         : Promise.resolve({ results: [] }),
     [submitted],
   );
@@ -155,7 +185,9 @@ function ConversationIndex() {
           {threads.data.threads.map((t) => (
             <li key={t.threadId} className="flex items-baseline justify-between gap-md">
               <span className="min-w-0 truncate">
-                <LinkButton onClick={() => navigate(`conversation/${encodeURIComponent(t.threadId)}`)}>
+                <LinkButton
+                  onClick={() => navigate(`conversation/${encodeURIComponent(t.threadId)}`)}
+                >
                   {t.label}
                 </LinkButton>
               </span>
@@ -170,28 +202,81 @@ function ConversationIndex() {
   );
 }
 
-/** Nested thread page: breadcrumb back to the index, then the messages (#5). */
+/** Nested thread page: breadcrumb, then the messages chronologically in a shared
+ *  auto-stick-to-bottom pane (LivePane) that follows the in-flight turn as it streams. */
 function ThreadPage({ threadId }: { threadId: string }) {
   const state = useAsync<ThreadDetail>(
     () => apiGet<ThreadDetail>(`/conversation/thread?id=${encodeURIComponent(threadId)}`),
     [threadId],
   );
+  const reload = state.reload;
   const label = state.status === 'ready' ? state.data.label : '…';
+
+  // Stream this thread live over one persistent SSE connection opened on mount —
+  // whatever turn runs now or next, with no run-id discovery and no polling gap.
+  const { message, run, lastDoneRunId, version } = useLiveThread(threadId);
+  const runId = run?.runId ?? null;
+  const [settledRun, setSettledRun] = useState<string | null>(null);
+
+  // A turn just started: the user's triggering message is already persisted (the
+  // gateway stores inbound before dispatching), so refetch to show it immediately —
+  // otherwise the user's message wouldn't appear until the turn finished.
+  useEffect(() => {
+    if (runId) reload();
+  }, [runId, reload]);
+
+  // Settle when a turn finishes: refetch (the turn becomes a persisted per-step
+  // bubble) and stop rendering the live trajectory.
+  useEffect(() => {
+    if (lastDoneRunId && lastDoneRunId !== settledRun) {
+      setSettledRun(lastDoneRunId);
+      reload();
+    }
+  }, [lastDoneRunId, settledRun, reload]);
+
+  // Keep the last-loaded messages on screen during a background refetch (turn start /
+  // settle), so reloads don't blank the thread. Reset when switching threads.
+  const lastMsgs = useRef<ConversationMessage[]>([]);
+  const seenThread = useRef(threadId);
+  if (seenThread.current !== threadId) {
+    seenThread.current = threadId;
+    lastMsgs.current = [];
+  }
+  if (state.status === 'ready') lastMsgs.current = state.data.messages;
+  const messages = lastMsgs.current;
+
+  // Show the live trajectory as soon as the turn is RUNNING (the status event), not
+  // only once the first chunk lands — so "responding…" appears immediately even while
+  // the model is still thinking.
+  const showLive = run != null && run.status === 'running' && settledRun !== run.runId;
+  const initialLoading = state.status === 'loading' && messages.length === 0;
+
   return (
-    <div>
-      <div className="mb-md font-bold text-fg">
-        <Link to="conversation">Conversation</Link>
-        <span className="font-normal text-fg-dim"> / {label}</span>
-      </div>
-      {state.status === 'loading' && <Loading />}
-      {state.status === 'error' && <ErrorNote error={state.error} />}
-      {state.status === 'ready' &&
-        (state.data.messages.length === 0 ? (
-          <p className="text-fg-dim">No messages.</p>
-        ) : (
-          state.data.messages.map((m) => <Bubble key={m.id} m={m} />)
-        ))}
-    </div>
+    <LivePane
+      runId={runId}
+      version={version}
+      header={
+        <>
+          <Link to="conversation">Conversation</Link>
+          <span className="font-normal text-fg-dim"> / {label}</span>
+        </>
+      }
+    >
+      {initialLoading && <Loading />}
+      {state.status === 'error' && messages.length === 0 && <ErrorNote error={state.error} />}
+      {!initialLoading && messages.length === 0 && !showLive && (
+        <p className="text-fg-dim">No messages.</p>
+      )}
+      {messages.map((m) => (
+        <Bubble key={m.id} m={m} />
+      ))}
+      {showLive && (
+        <div className="mt-sm min-w-0">
+          <div className="mb-xs text-secondary">サニー · responding…</div>
+          <RunView message={message} run={run} />
+        </div>
+      )}
+    </LivePane>
   );
 }
 

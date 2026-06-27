@@ -16,8 +16,10 @@ import type { CredentialResolver } from '../credentials/index.js';
 import { loadCore, memoryPaths } from '../memory/index.js';
 import { loadAllSkills, renderSkillIndex } from '../skills/index.js';
 import { AGENT_STEP_LIMIT } from './limits.js';
+import { randomUUID } from 'node:crypto';
 import { logger } from '../logger.js';
 import { telemetryEnabled } from '../observability/instrumentation.js';
+import { getLiveBus } from '../observability/live.js';
 import { ensureConsolidationSchedule } from '../scheduler/index.js';
 import type { SteerHandle } from './dispatcher.js';
 import { getModel, getRecoveryModel, anthropicProviderOptions } from './model.js';
@@ -158,9 +160,11 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
     // model stays the single voice (D-MG8). Wiring a driver here made the tool send the
     // link directly too — the owner got the authorize message twice.
     const notifyOwnerThread = (text: string) =>
-      void gateway.send(event.threadId, { text }, { persist: false }).catch((err) =>
-        log.warn('mcp owner notice failed', { threadId: event.threadId, err: String(err) }),
-      );
+      void gateway
+        .send(event.threadId, { text }, { persist: false })
+        .catch((err) =>
+          log.warn('mcp owner notice failed', { threadId: event.threadId, err: String(err) }),
+        );
     const mcp = ownerDm
       ? await assembleMcpTools(config, deps.credentials, notifyOwnerThread)
       : { tools: {}, close: () => Promise.resolve() };
@@ -249,17 +253,49 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
       },
     });
 
+    // Live observability (live-conversation-streaming): register this turn as an
+    // active run and forward its UIMessageChunks to the dashboard as they stream.
+    // The dashboard renders the same UIMessage parts live that get persisted below,
+    // so there is no second event schema and no second model pass.
+    const runId = randomUUID();
+    const live = getLiveBus();
+    live.registerTurn({
+      runId,
+      threadId: event.threadId,
+      label: event.senderName ?? (event.isGroup ? 'Group' : 'Conversation'),
+      model: config.modelId,
+      effort: config.thinking === 'off' ? null : config.effort,
+    });
+
     try {
       const result = await agent.stream({ prompt: messages });
 
       // Consume the UI-message stream: this drives the tool loop to completion
       // and assembles the final assistant UIMessage (scratch text parts + every
       // tool part, incl. each send_message). That assembled message IS the
-      // persisted turn record (D-MG9).
+      // persisted turn record (D-MG9). We `tee` it: one branch assembles the turn
+      // (as before), the other forwards each chunk to the live bus for the dashboard.
+      const [forAssembly, forBus] = result.toUIMessageStream().tee();
+      const pump = (async () => {
+        const reader = forBus.getReader();
+        try {
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            live.publishTurnChunk(runId, value);
+          }
+        } catch {
+          // The assembly branch + the catch below own error handling; a forwarding
+          // failure must never break the turn.
+        } finally {
+          reader.releaseLock();
+        }
+      })();
       let assistant: UIMessage | undefined;
-      for await (const m of readUIMessageStream({ stream: result.toUIMessageStream() })) {
+      for await (const m of readUIMessageStream({ stream: forAssembly })) {
         assistant = m;
       }
+      await pump;
       const [totalUsage, steps, finishReason] = await Promise.all([
         result.totalUsage,
         result.steps,
@@ -295,6 +331,11 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
             threadId: event.threadId,
             scratchLen: scratch.length,
           });
+          // The miss happened — this turn took the backstop path ("de-poisoning"),
+          // so mark it recovered regardless of whether the pass below succeeds,
+          // returns empty, or throws. (This is the signal the dashboard's [R] and the
+          // Activity "Backstop" column read.)
+          recovered = true;
           try {
             const recoveryText = await runRecoveryPass({
               model: recoveryModel,
@@ -303,7 +344,6 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
               scratch,
               threadId: event.threadId,
             });
-            recovered = true;
             if (recoveryText) {
               // Deliver the composed message and record it in history as a
               // send_message tool call (the same shape the main loop persists), so a
@@ -363,19 +403,35 @@ export function createAgentRunner(deps: AgentRunnerDeps) {
         Date.now() - startedAt,
         recovered,
       );
+
+      // The turn (and its persisted record) is complete — settle the live run. The
+      // client refetches the persisted thread on `done`, so the streamed view and
+      // the stored turn converge.
+      live.finishTurn(runId, 'finished', {
+        steps: steps.length,
+        usage: {
+          in: totalUsage.inputTokens ?? null,
+          out: totalUsage.outputTokens ?? null,
+          cached: totalUsage.inputTokenDetails?.cacheReadTokens ?? null,
+          cacheWrite: totalUsage.inputTokenDetails?.cacheWriteTokens ?? null,
+        },
+      });
     } catch (err) {
       log.error('agent turn failed', {
         threadId: event.threadId,
         err: err instanceof Error ? (err.stack ?? err.message) : String(err),
       });
+      live.finishTurn(runId, 'errored');
       await gateway.send(event.threadId, {
         text: 'Sorry — I hit an error handling that. Mind trying again?',
       });
     } finally {
       // Connect-per-turn (D-MCP6): close every MCP client opened for this turn.
-      await mcp.close().catch((err) =>
-        log.warn('mcp close failed', { threadId: event.threadId, err: String(err) }),
-      );
+      await mcp
+        .close()
+        .catch((err) =>
+          log.warn('mcp close failed', { threadId: event.threadId, err: String(err) }),
+        );
     }
   };
 }

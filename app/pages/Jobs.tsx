@@ -1,6 +1,11 @@
 import { apiGet } from '../api';
 import type { JobsView, JobRunView } from '../types';
 import { ErrorNote, Loading, PageTitle, StatusDot, formatTime, useAsync } from '../components/ui';
+import { Link, LinkButton } from '../components/Link';
+import { useLiveRun } from '../components/live';
+import { LivePane } from '../components/LivePane';
+import { RunView } from '../components/RunView';
+import { navigate } from '../router';
 
 // Durable jobs (observability): background jobs (start_job → runJob) and scheduled
 // runs, read from the Workflow DevKit world. Observe-only — status, timing, and step
@@ -29,7 +34,11 @@ function JobRow({ j }: { j: JobRunView }) {
       <div className="flex items-baseline justify-between gap-md">
         <div className="flex items-baseline gap-sm">
           <StatusDot ok={ok} />
-          <span className="font-bold text-fg">{j.kind}</span>
+          {/* Every job links to its run view — the durable WDK stream replays the
+              full trajectory for completed runs and tails live ones. */}
+          <LinkButton onClick={() => navigate(`jobs/${encodeURIComponent(j.id)}`)}>
+            {j.kind}
+          </LinkButton>
         </div>
         <span className={statusColor(j.status)}>{j.status}</span>
       </div>
@@ -48,7 +57,31 @@ function JobRow({ j }: { j: JobRunView }) {
   );
 }
 
-export function Jobs() {
+/** A job's run view — the same trajectory UI as a conversation turn (8.1), streamed
+ *  from the durable WDK run stream by run id (replays completed runs, tails live
+ *  ones). Uses the shared LivePane so it gets the same auto-stick-to-bottom, jump
+ *  button, and no-horizontal-scroll behavior as the Conversation thread. */
+function JobRunPage({ runId }: { runId: string }) {
+  const { message, run, version } = useLiveRun(runId, 'job');
+  return (
+    <LivePane
+      runId={runId}
+      version={version}
+      header={
+        <>
+          <Link to="jobs">Jobs</Link>
+          <span className="font-normal text-fg-dim"> / {run?.label ?? 'run'}</span>
+        </>
+      }
+    >
+      <div className="min-w-0">
+        <RunView message={message} run={run} />
+      </div>
+    </LivePane>
+  );
+}
+
+function JobsList() {
   const state = useAsync<JobsView>(() => apiGet<JobsView>('/jobs'), []);
   return (
     <div>
@@ -63,4 +96,8 @@ export function Jobs() {
         ))}
     </div>
   );
+}
+
+export function Jobs({ runId }: { runId: string | null }) {
+  return runId ? <JobRunPage runId={runId} /> : <JobsList />;
 }

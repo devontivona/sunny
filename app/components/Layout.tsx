@@ -42,14 +42,16 @@ function Masthead() {
 }
 
 export function Layout({ children }: { children: ReactNode }) {
-  // No forced `min-h-screen` (100vh): that mismatches the real viewport by a hair
-  // (sub-pixel / scrollbar rounding) and produces a phantom scroll on pages that
-  // fit. The page is exactly its content height — `body` paints `bg-bg` across the
-  // whole viewport via background propagation, so short pages still look full.
+  // Full-viewport flex column: a pinned masthead and a single scroll region below
+  // it. This lets a page (e.g. the live Conversation) own a bottom-anchored
+  // scroll container that sticks to the newest message, while ordinary pages just
+  // scroll normally inside `main`.
   return (
-    <div className="text-fg">
+    <div className="flex h-dvh flex-col text-fg">
       <Masthead />
-      <main className="mx-auto max-w-[900px] px-md py-md">{children}</main>
+      <main className="mx-auto flex w-full max-w-[900px] min-h-0 flex-1 flex-col overflow-y-auto px-md">
+        {children}
+      </main>
     </div>
   );
 }

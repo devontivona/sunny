@@ -1,6 +1,12 @@
+import type { UIMessage } from 'ai';
+
 // JSON shapes returned by the dashboard's read-only API (src/dashboard/api/*).
 // Kept in sync by hand with the server transforms — the app and server build
 // under different tsconfigs, so they don't share a module.
+
+/** The AI SDK message parts (tool calls, results, text, step boundaries) — the
+ *  shape both the live stream and persisted turns render via `<MessageParts>`. */
+export type UIPart = UIMessage['parts'][number];
 
 export interface MemoryCore {
   sunny: string;
@@ -122,8 +128,15 @@ export interface ConversationMessage {
   /** Assistant's retained private scratch (never delivered); null for users. */
   scratch: string | null;
   delivery: string | null;
+  /** Whether this turn required the delivery-recovery backstop ("de-poisoning") —
+   *  the same signal as the Activity "Backstop" column; drives the [R] marker. */
+  recovered: boolean;
   steps: number | null;
   usage: TurnUsage | null;
+  /** Full per-step trajectory (assistant turns only): the stored UIMessage parts,
+   *  redacted. Rendered with the same `<MessageParts>` used for the live stream so
+   *  historical turns keep the expanded display. Null for user messages. */
+  parts: UIPart[] | null;
 }
 
 export interface ThreadSummary {
@@ -208,6 +221,31 @@ export interface Health {
   gateway: HealthComponent;
   unprocessedInbound: number;
   generatedAt: string;
+}
+
+// Live observability (live-conversation-streaming). A `LiveRun` is the unified
+// descriptor for an in-flight turn or job, mirrored from the server's
+// src/observability/live.ts. The live UIMessage itself is folded client-side from
+// the SSE chunk stream using the AI SDK's `readUIMessageStream` (see components/live.ts).
+
+export type RunKind = 'turn' | 'job';
+
+export interface LiveRun {
+  runId: string;
+  kind: RunKind;
+  threadId: string | null;
+  label: string;
+  status: 'running' | 'finished' | 'errored';
+  startedAt: string;
+  steps: number;
+  model: string | null;
+  effort: string | null;
+  usage: TurnUsage | null;
+  traceUrl: string | null;
+}
+
+export interface ActiveRunsView {
+  runs: LiveRun[];
 }
 
 export type AuthState =
