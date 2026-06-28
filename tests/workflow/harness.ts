@@ -1,8 +1,16 @@
+import { start } from 'workflow/api';
 import type { MockResponseDescriptor } from '../../src/agent/mockModel.js';
 import { ConversationStore } from '../../src/gateway/store.js';
 import type { SunnyConfig } from '../../src/config/index.js';
 import { initMemory } from '../../src/memory/index.js';
 import { TEST_TURN_MODEL_KEY } from '../../src/agent/turnModel.js';
+import {
+  DelegationSupervisor,
+  type SpawnInput,
+  type SpawnResult,
+} from '../../src/agent/delegationSupervisor.js';
+import { steerChild as steerChildImpl } from '../../src/agent/delegation.js';
+import { runSubagent } from '../../workflows/subagent.js';
 import { createTestDb, type TestDb } from '../db.js';
 import { FakeGateway } from '../fakes/gateway.js';
 import { makeConfig } from '../factories.js';
@@ -25,6 +33,11 @@ export interface TestRuntimeCtx {
   store: ConversationStore;
   gateway: FakeGateway;
   config: SunnyConfig;
+  /** Delegation seams wired against the real WDK Local World (durable-subagents): start a child
+   *  run via the supervisor, or steer one. `wake` is captured for assertions (no router in test). */
+  spawnChild: (input: SpawnInput) => Promise<SpawnResult>;
+  steerChild: (childThreadId: string, text: string) => Promise<boolean>;
+  wakeCalls: string[];
 }
 
 /** Stand up a PGlite-backed test runtime and inject it for the workflow's steps. */
@@ -34,8 +47,36 @@ export async function setupTestRuntime(): Promise<TestRuntimeCtx> {
   await initMemory(config); // create the memory tree so instruction assembly reads clean files
   const store = new ConversationStore(db.db, 30);
   const gateway = new FakeGateway();
-  g[RUNTIME_KEY] = Promise.resolve({ config, gateway, store, db: db.db });
-  return { db, store, gateway, config };
+
+  // Delegation seams (durable-subagents): a real supervisor over the Local World, so a child
+  // run actually starts + reports. `wake` is captured rather than re-routed (no router here).
+  const wakeCalls: string[] = [];
+  const wake = (threadId: string) => {
+    wakeCalls.push(threadId);
+  };
+  const supervisor = new DelegationSupervisor(
+    db.db,
+    store,
+    async (input) => {
+      const run = await start(runSubagent, [input]);
+      return { runId: run.runId, returnValue: run.returnValue };
+    },
+    wake,
+  );
+  const spawnChild = (input: SpawnInput) => supervisor.spawn(input);
+  const steerChild = (childThreadId: string, text: string) =>
+    steerChildImpl(db.db, store, childThreadId, text);
+
+  g[RUNTIME_KEY] = Promise.resolve({
+    config,
+    gateway,
+    store,
+    db: db.db,
+    wakeThread: wake,
+    spawnChild,
+    steerChild,
+  });
+  return { db, store, gateway, config, spawnChild, steerChild, wakeCalls };
 }
 
 /** Script the turn's model (a `send_message`/`stay_silent` tool call, text, etc.). Sets the

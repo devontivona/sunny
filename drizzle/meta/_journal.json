@@ -50,6 +50,20 @@
       "when": 1781747532266,
       "tag": "0006_dashboard_auth",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1781747632266,
+      "tag": "0007_output_target",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1781747732266,
+      "tag": "0008_subagent_links",
+      "breakpoints": true
     }
   ]
 }

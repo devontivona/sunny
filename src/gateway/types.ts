@@ -110,6 +110,15 @@ export interface Gateway {
   startTyping(threadId: string): Promise<void>;
 
   /**
+   * Clear the typing indicator on a thread (Sendblue typing-v2 `state: 'stop'`). Optional — a
+   * driver whose indicator is purely auto-expiring (or that has no stop) omits it. The durable
+   * router calls it when a turn ends so "…" disappears immediately instead of lingering for the
+   * transport's auto-expiry window. Best-effort: failures are swallowed (the indicator still
+   * auto-expires).
+   */
+  stopTyping?(threadId: string): Promise<void>;
+
+  /**
    * Epoch-ms of the most recent outbound delivery on a thread, or undefined if none this
    * session. Lets a typing driver suppress the indicator right after a message lands (so it
    * doesn't reappear during a turn's post-send housekeeping) — durable-main-loop typing fix.

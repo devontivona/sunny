@@ -278,6 +278,39 @@ export class SendblueGateway implements Gateway {
     }
   }
 
+  /**
+   * Clear the typing indicator (Sendblue typing-v2 `state: 'stop'`). The chat-SDK `Adapter`/
+   * `Thread` interface only exposes `startTyping`, so we go straight to the adapter's already-
+   * configured raw Sendblue client (`sdk.typingIndicators.send`, which supports `state`) and its
+   * own `decodeThreadId` to resolve the E.164 numbers — no second client, no duplicated auth.
+   * Feature-detected + best-effort: if the adapter internals ever change shape, or it's a group
+   * (Sendblue has no group typing), this no-ops and the indicator falls back to auto-expiry.
+   */
+  async stopTyping(threadId: string): Promise<void> {
+    if (!this.capabilities.typing) return;
+    const sb = this.adapter as unknown as {
+      sdk?: { typingIndicators?: { send: (b: Record<string, unknown>) => Promise<unknown> } };
+      decodeThreadId?: (id: string) => {
+        fromNumber: string;
+        contactNumber?: string;
+        groupId?: string;
+      };
+    };
+    const send = sb.sdk?.typingIndicators?.send;
+    if (typeof send !== 'function' || typeof sb.decodeThreadId !== 'function') return;
+    try {
+      const decoded = sb.decodeThreadId(threadId);
+      if (!decoded.contactNumber) return; // DMs only — Sendblue typing isn't supported in groups
+      await send.call(sb.sdk!.typingIndicators, {
+        from_number: decoded.fromNumber,
+        number: decoded.contactNumber,
+        state: 'stop',
+      });
+    } catch (err) {
+      log.debug('stopTyping failed (non-fatal)', { threadId, err: String(err) });
+    }
+  }
+
   lastSentAt(threadId: string): number | undefined {
     return this.sentAt.get(threadId);
   }

@@ -2,6 +2,7 @@ import { getRun, start as startWorkflow } from 'workflow/api';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { runScheduledJob } from '../workflows/scheduledJob.js';
 import { DurableTurnRouter } from './agent/durableRouter.js';
+import { DelegationSupervisor } from './agent/delegationSupervisor.js';
 import { loadConfig, type SunnyConfig } from './config/index.js';
 import { createDb, runMigrations, type Db } from './db/client.js';
 import { messages } from './db/schema.js';
@@ -24,6 +25,30 @@ export interface Runtime {
   gateway: Gateway;
   store: ConversationStore;
   db: Db;
+  /**
+   * Wake a thread's run-supply (durable-subagents D-DS13): ensure the supervisor/router is
+   * draining `threadId` as durable runs. Lets a `'use step'` (which can reach the runtime
+   * singleton but not the in-process router directly — task 3.3) nudge it after writing to a
+   * recipient's inbox — e.g. a child reporting to its parent. Optional: undefined in entrypoints
+   * that don't run conversations (e.g. the ECHO mode).
+   */
+  wakeThread?: (threadId: string) => void;
+
+  /**
+   * Spawn a delegated child run (durable-subagents D-DS2). Reached from the `delegate_task`
+   * tool's `'use step'`; routes to the in-process `DelegationSupervisor`, which enforces the
+   * caps, starts the child, records the link, and arms the watchdog. Returns the child handle
+   * immediately (non-blocking). Undefined when delegation isn't wired.
+   */
+  spawnChild?: (
+    input: import('./agent/delegationSupervisor.js').SpawnInput,
+  ) => Promise<import('./agent/delegationSupervisor.js').SpawnResult>;
+
+  /** Steer a still-running child (durable-subagents D-DS4): append to its inbox; its in-flight
+   *  run folds the steer via `loadSteers`. Reached from the `message_subagent` tool's step.
+   *  Resolves `true` if delivered, `false` if the child already finished (so the caller can
+   *  tell the model the truth instead of a false success). */
+  steerChild?: (childThreadId: string, text: string) => Promise<boolean>;
 }
 
 /**
@@ -106,6 +131,36 @@ async function start(): Promise<Runtime> {
     gateway.onInbound(async (event: ChannelEvent) => durableRouter!.route(event));
   }
 
+  // Delegation seams (durable-subagents D-DS2/4/13): the in-process supervisor is the run-supply
+  // engine for single-run children + the watchdog. A child's report lands on its PARENT's thread —
+  // for top-level Sunny that's the owner conversation thread the router already drives — so
+  // `wakeThread` is just `router.wake`. `spawnChild`/`steerChild` give a `'use step'` a path to the
+  // in-process supervisor it can't reach directly (task 3.3). All undefined in ECHO (no router).
+  let wakeThread: ((threadId: string) => void) | undefined;
+  let spawnChild: Runtime['spawnChild'];
+  let steerChild: Runtime['steerChild'];
+  let supervisor: DelegationSupervisor | null = null;
+  if (durableRouter) {
+    const router = durableRouter;
+    wakeThread = (threadId) => router.wake(threadId);
+    const sup = new DelegationSupervisor(
+      db,
+      store,
+      async (input) => {
+        const { runSubagent } = await import('../workflows/subagent.js');
+        const run = await startWorkflow(runSubagent, [input]);
+        return { runId: run.runId, returnValue: run.returnValue };
+      },
+      wakeThread,
+    );
+    supervisor = sup;
+    spawnChild = (input) => sup.spawn(input);
+    steerChild = async (childThreadId, text) => {
+      const { steerChild: steer } = await import('./agent/delegation.js');
+      return steer(db, store, childThreadId, text);
+    };
+  }
+
   await gateway.start();
 
   // Restart recovery: re-run any inbound received but never answered (process died mid-turn).
@@ -121,6 +176,7 @@ async function start(): Promise<Runtime> {
       log.info('recovering un-answered messages', { count: unprocessed.length });
       await durableRouter.recoverPending(unprocessed);
     }
+    if (supervisor) await reattachRunningChildren(db, supervisor);
   }
 
   // Scheduling (D-SC2): the ~60s ticker dispatches due schedules as durable jobs.
@@ -142,6 +198,8 @@ async function start(): Promise<Runtime> {
             threadId: schedule.threadId,
             prompt: schedule.prompt,
             ownerName: config.owner.name,
+            // Route the fired run's reply by the schedule's target (D-DS1); 'silent' = record-only.
+            outputTarget: schedule.outputTarget === 'silent' ? 'silent' : 'user',
           },
         ]);
       },
@@ -161,12 +219,45 @@ async function start(): Promise<Runtime> {
   });
 
   log.info('runtime started');
-  return { config, gateway, store, db };
+  return { config, gateway, store, db, wakeThread, spawnChild, steerChild };
 }
 
 /** Longest we wait on an in-flight conversation run at startup before proceeding to recovery
  *  anyway — a single turn is far shorter, so this only ever guards a wedged run. */
 const ORPHAN_AWAIT_MS = 30_000;
+
+/**
+ * Re-arm the delegation watchdog for children still marked `running` at startup (durable-subagents
+ * D-DS6). The watchdog is in-memory, so a child in flight across a restart would otherwise have no
+ * one observing its `returnValue`: if it then failed, its link would leak as `running` forever
+ * (a permanently-consumed concurrency slot) and the parent would never hear of the failure. For
+ * each running link we re-subscribe to the durable run's `returnValue` and hand it to the
+ * supervisor (which closes the link / reports failure on terminal outcome). A link with no recorded
+ * run id (a crash in the gap between createLink and setChildRunId) can't be watched, so we free its
+ * slot by marking it failed. Best-effort + non-blocking — never blocks startup.
+ */
+async function reattachRunningChildren(db: Db, supervisor: DelegationSupervisor): Promise<void> {
+  try {
+    const { listRunningLinks, completeLink } = await import('./agent/delegation.js');
+    const links = await listRunningLinks(db);
+    if (links.length === 0) return;
+    log.info('re-attaching delegation watchdogs', { count: links.length });
+    for (const link of links) {
+      if (!link.childRunId) {
+        await completeLink(db, link.childThreadId, 'failed').catch(() => {});
+        continue;
+      }
+      try {
+        const rv = getRun<unknown>(link.childRunId).returnValue;
+        supervisor.reattach(link.childThreadId, link.parentThreadId, 'subagent', rv);
+      } catch {
+        await completeLink(db, link.childThreadId, 'failed').catch(() => {});
+      }
+    }
+  } catch (err) {
+    log.warn('child watchdog re-attach failed (non-fatal)', { err: String(err) });
+  }
+}
 
 /**
  * Await any `runConversation` runs still RUNNING at startup (durable-main-loop restart-orphan

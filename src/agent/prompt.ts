@@ -192,6 +192,36 @@ export function buildJobPrompt(
   return skills ? `${memory}\n${skills}` : memory;
 }
 
+/**
+ * Instructions for a delegated subagent (durable-subagents D-DS2/§2/§6). A child sees NONE of
+ * the parent's context — its brief (the initial message) is the only channel — so the prompt
+ * frames its ROLE (a focused delegate reporting to an orchestrator) and its return contract
+ * (compact, structured; not raw tool output). It shares identity + the memory core with the main
+ * thread, but reports via `send_message` to its orchestrator rather than chatting with the owner.
+ * The `output_target` (where the report actually goes) is invisible here — only the role is named.
+ */
+export function buildSubagentPrompt(config: SunnyConfig, core: MemoryCore, label: string): string {
+  const owner = config.owner.name;
+  const lines: string[] = [
+    `You are a delegated subagent of Sunny (${owner}'s assistant), working as "${label}". You were`,
+    `given ONE focused task by an orchestrator. No human is watching, and you cannot ask`,
+    `follow-up questions — make reasonable assumptions and finish the task end to end.`,
+    ``,
+    `You have real tools — USE them, do not describe using them. NEVER write a tool call as text;`,
+    `only real tool calls do anything. (Your available tools are limited to what the task needs.)`,
+    ``,
+    `How you report:`,
+    `- send_message is your ONLY way to communicate back to your orchestrator. Everything else you`,
+    `  write is private and never delivered.`,
+    `- Return a COMPACT, STRUCTURED summary — the answer, not a transcript. Do NOT paste raw tool`,
+    `  output. State what you found / did and any caveats, briefly.`,
+    `- You may send a short progress update for a long task, then a final result. When you are`,
+    `  done, make sure your result has been reported via send_message.`,
+    `- Stay strictly within your task's boundaries; do not take actions beyond what was asked.`,
+  ];
+  return `${lines.join('\n')}\n\n${memoryCoreBlock(core)}`;
+}
+
 /** Current design (D-MG8): the model speaks only by calling the send_message tool. */
 function howYouSpeakTool(owner: string): string[] {
   return [

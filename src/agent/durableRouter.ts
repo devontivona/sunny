@@ -10,11 +10,8 @@ import { logger } from '../logger.js';
 
 const log = logger('durable-router');
 
-/** Re-fire typing at most this often per thread while a turn streams. */
+/** Re-fire typing at most this often per thread while a turn streams (before its first send). */
 const TYPING_THROTTLE_MS = 4000;
-/** Suppress typing for this long after a delivery so it doesn't reappear during a turn's
- *  post-send housekeeping (the model's wrap-up step still emits chunks after the last send). */
-const TYPING_POST_SEND_COOLDOWN_MS = 6000;
 
 /**
  * Durable Tier-1 router (durable-main-loop), the gateway-side counterpart of the per-turn
@@ -46,6 +43,16 @@ export class DurableTurnRouter {
    *  serial worker is draining its unanswered inbound as durable turn-runs. */
   route(event: ChannelEvent): void {
     this.ensureWorker(event.threadId);
+  }
+
+  /**
+   * Wake a thread's run-supply (durable-subagents D-DS13): ensure a serial worker is draining it.
+   * The runtime exposes this as `wakeThread` so a `'use step'` can nudge the router after writing
+   * to a thread's inbox out-of-band — e.g. a child reporting to its parent (the parent thread is a
+   * normal conversation thread this router already drives), or the watchdog delivering a failure.
+   */
+  wake(threadId: string): void {
+    this.ensureWorker(threadId);
   }
 
   /** Re-drive any inbound that was received but never answered (durable-main-loop D5): on
@@ -118,6 +125,7 @@ export class DurableTurnRouter {
       model: this.meta.modelId,
       effort: this.meta.effort,
     });
+    const runStartedAt = Date.now();
     void (async () => {
       let reader: ReadableStreamDefaultReader<UIMessageChunk> | null = null;
       try {
@@ -131,11 +139,15 @@ export class DurableTurnRouter {
           const { done, value } = await reader.read();
           if (done) break;
           bus.publishTurnChunk(runId, value);
+          // Typing shows while the turn streams (throttled), then is cleared two ways at turn end
+          // (belt-and-suspenders against the stuck-on-after-reply bug): an explicit `stopTyping`
+          // in the `finally`, AND we stop RE-ARMING it once this turn has delivered a message.
+          // The latter matters because `send_message` fires MID-stream: without it, the model's
+          // post-send wrap-up chunks (a second tool call, a final empty step) re-fire typing >4s
+          // after the reply already landed, and it lingers until the next explicit stop / auto-
+          // expiry. `lastSentAt` is per-thread, so compare to this run's start = "sent THIS turn".
+          if ((this.gateway.lastSentAt?.(threadId) ?? 0) > runStartedAt) continue;
           const now = Date.now();
-          // Don't show typing right after a delivery (post-send wrap-up chunks).
-          if (now - (this.gateway.lastSentAt?.(threadId) ?? 0) < TYPING_POST_SEND_COOLDOWN_MS) {
-            continue;
-          }
           if (now - (this.lastTyped.get(threadId) ?? 0) >= TYPING_THROTTLE_MS) {
             this.lastTyped.set(threadId, now);
             await this.gateway.startTyping(threadId).catch(() => {});
@@ -145,6 +157,9 @@ export class DurableTurnRouter {
         log.debug('run stream bridge ended', { runId, threadId, err: String(err) });
       } finally {
         await reader?.cancel().catch(() => {});
+        // Clear the typing indicator now that the turn is done (explicit stop; falls back to the
+        // transport's auto-expiry if the driver has no `stopTyping`).
+        await this.gateway.stopTyping?.(threadId).catch(() => {});
         let status: 'finished' | 'errored' = 'finished';
         try {
           status = (await getRun<unknown>(runId).status) === 'failed' ? 'errored' : 'finished';
