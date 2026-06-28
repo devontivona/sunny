@@ -1,6 +1,7 @@
 import {
   boolean,
   index,
+  integer,
   jsonb,
   pgTable,
   text,
@@ -139,3 +140,45 @@ export const accessRequests = pgTable(
 
 export type DashboardSessionRow = typeof dashboardSessions.$inferSelect;
 export type AccessRequestRow = typeof accessRequests.$inferSelect;
+
+/**
+ * Durable parent↔child delegation links (durable-subagents D-DS2/D-DS6/D-DS8). One row per
+ * delegated child run: who spawned it (`parentThreadId` — where the child's reports are
+ * delivered), the child's own inbox thread (`childThreadId` — where parent→child steers land),
+ * the run id (filled once started), lifecycle `status`, spawn `depth` (the anti-blowup cap), and
+ * whether the child may itself delegate (`orchestrator`). Survives restart, so the supervisor can
+ * re-attach its watchdog to in-flight children and enforce concurrency from the durable record,
+ * not just in-memory state.
+ */
+export const subagentLinks = pgTable(
+  'subagent_links',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    /** The spawning run's inbox thread — where this child's reports/failures are delivered. */
+    parentThreadId: text('parent_thread_id').notNull(),
+    /** The child's own inbox thread (D-DS12) — where parent→child steers land. Unique per child. */
+    childThreadId: text('child_thread_id').notNull(),
+    /** The WDK run id of the child, set once started (null briefly between insert and start). */
+    childRunId: text('child_run_id'),
+    /** The brief the child was given (for inspection). */
+    task: text('task').notNull(),
+    /** 'running' | 'done' | 'failed' | 'timeout' (D-DS6). */
+    status: text('status').notNull().default('running'),
+    /** Spawn depth (D-DS8): top-level children are depth 1; an orchestrator child's children 2… */
+    depth: integer('depth').notNull().default(1),
+    /** Whether this child may itself delegate (D-DS8: no sub-delegation unless an orchestrator). */
+    orchestrator: boolean('orchestrator').notNull().default(false),
+    /** Model id the child runs on (D-DS9), for inspection. */
+    model: text('model'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex('subagent_links_child_thread_uniq').on(t.childThreadId),
+    // Concurrency/active-children lookups: by parent, by status.
+    index('subagent_links_parent_idx').on(t.parentThreadId, t.status),
+  ],
+);
+
+export type SubagentLinkRow = typeof subagentLinks.$inferSelect;
+export type NewSubagentLinkRow = typeof subagentLinks.$inferInsert;

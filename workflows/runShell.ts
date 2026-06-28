@@ -39,3 +39,29 @@ export async function emitStep(out: EmitTarget, text: string): Promise<void> {
   // user (the default): deliver to the owner thread via the gateway.
   await runtime.gateway.send(out.destThreadId, { text });
 }
+
+/**
+ * Read messages that arrived on `threadId` that the run hasn't folded yet (D-DS4 steering),
+ * excluding ids already seen. Shared by the conversation turn (owner double-text) and a child
+ * run (parent→child steer via `message_subagent`) — both fold the same way via `loadSteers`.
+ * A `'use step'`, so it's deterministic on replay.
+ */
+export async function loadSteersStep(
+  threadId: string,
+  excludeIds: string[],
+): Promise<{ messageId: string; text: string; senderName?: string }[]> {
+  'use step';
+
+  const { getRuntime } = await import('../src/runtime.js');
+  const { store } = await getRuntime();
+  return store.unansweredSteers(threadId, excludeIds);
+}
+
+/** Mark a thread's inbound messages answered (the watermark) — shared across profiles. */
+export async function markAnsweredStep(threadId: string, messageIds: string[]): Promise<void> {
+  'use step';
+
+  const { getRuntime } = await import('../src/runtime.js');
+  const { store } = await getRuntime();
+  await store.markAnsweredForThread(threadId, messageIds);
+}

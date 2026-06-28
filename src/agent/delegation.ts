@@ -1,4 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import { and, eq } from 'drizzle-orm';
+import type { Db } from '../db/client.js';
+import { subagentLinks, type SubagentLinkRow } from '../db/schema.js';
 import type { Runtime } from '../runtime.js';
 import type { ChannelEvent } from '../gateway/types.js';
 import type { EmitTarget } from './outputTarget.js';
@@ -10,6 +13,87 @@ const log = logger('delegation');
  *  Internal — never a transport. The recipient's run reads by `threadId`, so the channel only
  *  has to be stable + distinct from a real transport's ids (for the dedup unique index). */
 export const DELEGATION_CHANNEL = 'delegation';
+
+/** Bounded fan-out + depth (D-DS8): defaults guarded against the "depth 5 × branching 3 = 243
+ *  agents" blowup. A child cannot delegate further unless it is an orchestrator. */
+export const MAX_CONCURRENT_CHILDREN = 3;
+export const MAX_DELEGATION_DEPTH = 2;
+
+/** A distinct internal inbox thread for a child run (D-DS12). `subagent:` is non-group
+ *  (`isGroupThreadId` keys off the 3rd colon-segment), so a child runs with DM semantics. */
+export function newChildThreadId(): string {
+  return `subagent:${randomUUID()}`;
+}
+
+export interface CreateLinkInput {
+  parentThreadId: string;
+  childThreadId: string;
+  task: string;
+  depth: number;
+  orchestrator: boolean;
+  model?: string;
+}
+
+/** Insert a parent↔child link (status 'running'). */
+export async function createLink(db: Db, input: CreateLinkInput): Promise<SubagentLinkRow> {
+  const [row] = await db
+    .insert(subagentLinks)
+    .values({
+      parentThreadId: input.parentThreadId,
+      childThreadId: input.childThreadId,
+      task: input.task,
+      depth: input.depth,
+      orchestrator: input.orchestrator,
+      model: input.model ?? null,
+      status: 'running',
+    })
+    .returning();
+  if (!row) throw new Error('failed to create subagent link');
+  return row;
+}
+
+/** Record the child's WDK run id once started. */
+export async function setChildRunId(db: Db, childThreadId: string, runId: string): Promise<void> {
+  await db
+    .update(subagentLinks)
+    .set({ childRunId: runId })
+    .where(eq(subagentLinks.childThreadId, childThreadId));
+}
+
+/** Mark a link terminal (done | failed | timeout) and stamp completion (D-DS6/D-DS7). */
+export async function completeLink(
+  db: Db,
+  childThreadId: string,
+  status: 'done' | 'failed' | 'timeout',
+): Promise<void> {
+  await db
+    .update(subagentLinks)
+    .set({ status, completedAt: new Date() })
+    .where(eq(subagentLinks.childThreadId, childThreadId));
+}
+
+/** How many of a parent's children are still running — the concurrency gate (D-DS8). */
+export async function activeChildCount(db: Db, parentThreadId: string): Promise<number> {
+  const rows = await db
+    .select({ id: subagentLinks.id })
+    .from(subagentLinks)
+    .where(
+      and(eq(subagentLinks.parentThreadId, parentThreadId), eq(subagentLinks.status, 'running')),
+    );
+  return rows.length;
+}
+
+/** The link for a child inbox thread, or undefined (used to resolve a child's parent + depth). */
+export async function getLinkByChildThread(
+  db: Db,
+  childThreadId: string,
+): Promise<SubagentLinkRow | undefined> {
+  const [row] = await db
+    .select()
+    .from(subagentLinks)
+    .where(eq(subagentLinks.childThreadId, childThreadId));
+  return row;
+}
 
 /**
  * Child → parent report (durable-subagents D-DS4): deliver `text` into the parent run's inbox

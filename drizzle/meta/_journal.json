@@ -57,6 +57,13 @@
       "when": 1781747632266,
       "tag": "0007_output_target",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1781747732266,
+      "tag": "0008_subagent_links",
+      "breakpoints": true
     }
   ]
 }
