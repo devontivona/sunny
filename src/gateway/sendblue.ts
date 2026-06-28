@@ -330,6 +330,18 @@ export class SendblueGateway implements Gateway {
     this.chat.onSubscribedMessage(async (thread, message) => {
       await this.dispatch(thread, message);
     });
+
+    // Group participation WITHOUT requiring an @mention (multiplayer-family D6 / OQ1): a match-all
+    // pattern fires `onNewMessage` for any message in an UNSUBSCRIBED thread, so Sunny sees a family
+    // group's first message even when not mentioned. We bootstrap-subscribe and dispatch (which
+    // authorizes the all-trusted roster); afterwards `onSubscribedMessage` carries every message and
+    // the agent uses per-turn discretion (send_message / stay_silent). DMs are handled by
+    // `onDirectMessage`, so this guards to groups only (and the store dedups any overlap anyway).
+    this.chat.onNewMessage(/[\s\S]*/, async (thread, message) => {
+      if (!isGroupThreadId(thread.id)) return;
+      await thread.subscribe();
+      await this.dispatch(thread, message);
+    });
   }
 
   /** Normalize → authorize → persist → hand to the agent runner. */
@@ -342,7 +354,27 @@ export class SendblueGateway implements Gateway {
     // unreliable here.
     const isGroup = isGroupThreadId(thread.id);
     const senderId = message.author.userId;
-    const auth = this.authorizer.authorize(senderId, isGroup);
+
+    // For groups, authorize only when EVERY participant is trusted (multiplayer-family D5). The
+    // roster is fetched live and re-checked on every message, so an outsider added mid-thread
+    // silences the whole group on the next message. Sunny's own handle is excluded. If the roster
+    // can't be determined, `authorize` fails CLOSED (participantIds === undefined).
+    let participantIds: string[] | undefined;
+    if (isGroup) {
+      try {
+        const participants = await thread.getParticipants();
+        const ids = participants.filter((p) => !p.isMe).map((p) => p.userId);
+        participantIds = ids.length > 0 ? ids : undefined;
+      } catch (err) {
+        log.warn('group roster unavailable; failing closed', {
+          threadId: thread.id,
+          err: String(err),
+        });
+        participantIds = undefined;
+      }
+    }
+
+    const auth = this.authorizer.authorize(senderId, isGroup, participantIds);
     if (!auth.authorized) {
       log.warn('unauthorized sender; not triggering agent', { senderId, isGroup });
       return;
@@ -376,6 +408,8 @@ export class SendblueGateway implements Gateway {
       timestamp: message.metadata?.dateSent ?? new Date(),
       isGroup,
       isOwner: auth.isOwner,
+      isTrusted: auth.isTrusted,
+      senderRole: auth.role,
     };
 
     // Fetch + persist attachment bytes PROMPTLY (Sendblue URLs expire, D-MM2). A

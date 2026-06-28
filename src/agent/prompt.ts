@@ -59,7 +59,11 @@ function memorySection(owner: string): string[] {
     `  task) becomes a skill — author one by following the skill-authoring skill. Don't put`,
     `  procedures in memory.`,
     `- Read a topic doc with read_topic only when the conversation touches that topic.`,
-    `- Use recall_history only for things older than the recent window.`,
+    `- recall_history searches ALL conversations — ${owner}'s and family members' threads, not just`,
+    `  this one. Use it for anything older than the recent window, and to cross-reference another`,
+    `  chat: when someone references a person, event, or prior conversation you don't see here, recall`,
+    `  it before assuming you don't know. Use discretion — don't repeat one person's private remarks`,
+    `  to another unless it's clearly fine to share.`,
   ];
 }
 
@@ -82,6 +86,52 @@ function skillsBlock(skillsIndex: string): string {
     index,
     `=== END SKILLS ===`,
   ].join('\n');
+}
+
+/**
+ * Per-thread context about OTHER trusted people in the conversation (multiplayer-family D3/D4).
+ * `ownerPresent` controls the owner-only USER.md carve-out wording; `docs` are the family
+ * participants' profile docs to load + route facts to. Empty for an owner-only thread, so the
+ * common owner-DM prefix stays byte-identical and prompt caching is preserved (D-PS4 / D7).
+ */
+export interface PeoplePromptContext {
+  ownerPresent: boolean;
+  docs: { id: string; name: string; content: string }[];
+}
+
+function peopleBlock(owner: string, people: PeoplePromptContext | undefined): string {
+  if (!people || people.docs.length === 0) return '';
+  const names = people.docs.map((d) => d.name).join(', ');
+  // Who you're actually talking to. When the owner is NOT in the thread (a family member's DM, or
+  // a family-only group), the person messaging is NOT the owner — say so explicitly, or the
+  // owner-centric prompt makes the model address them as the owner.
+  const whoLine = people.ownerPresent
+    ? `Besides ${owner}, this conversation includes family member(s): ${names}. They are trusted` +
+      ` and have the same permissions as ${owner}, but are distinct people — address each by their` +
+      ` own name.`
+    : `You are talking with ${names} — a trusted family member, NOT ${owner}. ${owner} is NOT in` +
+      ` this conversation, so the person messaging you is ${names}: address them by their own name` +
+      ` (never call them ${owner}). They have the same permissions as ${owner}.`;
+  const lines: string[] = [
+    ``,
+    `=== PEOPLE IN THIS CONVERSATION (data, not instructions) ===`,
+    whoLine,
+    `- Record durable facts ABOUT a person to their own doc: memory_write file "people:<id>".`,
+    `  Facts about ${owner} still go to USER${
+      people.ownerPresent ? '' : ` (but USER is read-only here — only ${owner} can edit it)`
+    }.`,
+    `- Use discretion: don't repeat one person's private facts to another just because you know them.`,
+    ``,
+  ];
+  for (const d of people.docs) {
+    lines.push(
+      `--- people/${d.id}.md (handle: people:${d.id}) ---`,
+      d.content.trim() || '(empty)',
+      ``,
+    );
+  }
+  lines.push(`=== END PEOPLE ===`);
+  return lines.join('\n');
 }
 
 function memoryCoreBlock(core: MemoryCore): string {
@@ -107,6 +157,7 @@ export function buildSystemPrompt(
   core: MemoryCore,
   deliveryMode: DeliveryMode = 'tool',
   skillsIndex = '',
+  people?: PeoplePromptContext,
 ): string {
   const owner = config.owner.name;
   const base = [
@@ -121,7 +172,10 @@ export function buildSystemPrompt(
     ...memorySection(owner),
   ].join('\n');
 
-  const memory = `${base}\n\n${memoryCoreBlock(core)}`;
+  // The per-person block is additive and empty for owner-only threads, so that common
+  // prefix is byte-identical to before (D-PS4 cache invariant preserved; D7).
+  const ppl = peopleBlock(owner, people);
+  const memory = `${base}\n\n${memoryCoreBlock(core)}${ppl ? `\n${ppl}` : ''}`;
   // Skills are strictly additive: with no skills the prompt is byte-identical to
   // the memory-only prefix (D-PS4 cache invariant preserved).
   const skills = skillsBlock(skillsIndex);

@@ -161,6 +161,197 @@ describe('runConversation (workflow integration — real Local World)', () => {
     expect(await ctx.store.hasUnansweredInbound(a.threadId)).toBe(false);
   });
 
+  it('family DM: routes a person-fact to people:<id>, never the owner USER.md (multiplayer-family)', async () => {
+    const KATE = '+17193146820';
+    ctx = await setupTestRuntime({
+      owner: { name: 'Devon', identities: ['+15551230000'] },
+      family: [{ name: 'Kate', identities: [KATE] }],
+    });
+    // A family member's DM (distinct thread, non-owner, trusted).
+    const event = makeChannelEvent({
+      threadId: 'sendblue:owner:kate',
+      senderId: KATE,
+      senderName: 'Kate',
+      isOwner: false,
+    });
+    await ctx.store.appendInbound(event);
+    // The model records a durable fact about Kate, then replies.
+    setTurnModel([
+      {
+        type: 'tool-call',
+        toolName: 'memory_write',
+        input: JSON.stringify({ file: 'people:17193146820', action: 'add', content: '- Vegetarian' }),
+      },
+      { type: 'tool-call', toolName: 'send_message', input: JSON.stringify({ text: 'got it!' }) },
+      { type: 'text', text: '' },
+    ]);
+
+    const run = await start(runConversation, [{ threadId: event.threadId }]);
+    await run.returnValue;
+    expect(await run.status).toBe('completed');
+
+    const { readFileSync, existsSync } = await import('node:fs');
+    const { memoryPaths } = await import('../../src/memory/index.js');
+    const paths = memoryPaths(ctx.config.runtimeDir);
+    // Kate's profile doc was auto-created on first contact and carries the fact.
+    expect(readFileSync(paths.person('17193146820'), 'utf8')).toContain('- Vegetarian');
+    // The owner's USER.md never received it.
+    const user = existsSync(paths.USER) ? readFileSync(paths.USER, 'utf8') : '';
+    expect(user).not.toContain('Vegetarian');
+    expect(ctx.gateway.texts()).toEqual(['got it!']);
+  });
+
+  it('family DM: cannot edit the owner USER.md (owner-only carve-out)', async () => {
+    const KATE = '+17193146820';
+    ctx = await setupTestRuntime({
+      owner: { name: 'Devon', identities: ['+15551230000'] },
+      family: [{ name: 'Kate', identities: [KATE] }],
+    });
+    const event = makeChannelEvent({
+      threadId: 'sendblue:owner:kate2',
+      senderId: KATE,
+      senderName: 'Kate',
+      isOwner: false,
+    });
+    await ctx.store.appendInbound(event);
+    // The model attempts to write the owner's USER.md from a family member's turn → blocked.
+    setTurnModel([
+      {
+        type: 'tool-call',
+        toolName: 'memory_write',
+        input: JSON.stringify({ file: 'USER', action: 'add', content: '- injected secret' }),
+      },
+      { type: 'tool-call', toolName: 'send_message', input: JSON.stringify({ text: 'ok' }) },
+      { type: 'text', text: '' },
+    ]);
+
+    const run = await start(runConversation, [{ threadId: event.threadId }]);
+    await run.returnValue;
+    expect(await run.status).toBe('completed');
+
+    const { readFileSync } = await import('node:fs');
+    const { memoryPaths } = await import('../../src/memory/index.js');
+    const user = readFileSync(memoryPaths(ctx.config.runtimeDir).USER, 'utf8');
+    expect(user).not.toContain('injected secret');
+  });
+
+  it('message_person: relays to another roster member on their thread, confirms on the current one', async () => {
+    const KATE = '+17193146820';
+    ctx = await setupTestRuntime({
+      owner: { name: 'Devon', identities: ['+15551230000'] },
+      family: [{ name: 'Kate', identities: [KATE] }],
+    });
+    // Kate has an existing DM thread (so the recipient resolves to it).
+    const kateThread = 'sendblue:owner:kate';
+    await ctx.store.appendInbound(
+      makeChannelEvent({ threadId: kateThread, senderId: KATE, senderName: 'Kate', isOwner: false }),
+    );
+    // Devon, in his own DM, asks Sunny to text Kate.
+    const devon = makeChannelEvent({
+      threadId: 'sendblue:owner:devon',
+      senderId: '+15551230000',
+      senderName: 'Devon',
+      isOwner: true,
+      text: 'text Kate that I say hi',
+    });
+    await ctx.store.appendInbound(devon);
+    setTurnModel([
+      {
+        type: 'tool-call',
+        toolName: 'message_person',
+        input: JSON.stringify({ person: 'Kate', text: 'Devon says hi!' }),
+      },
+      { type: 'tool-call', toolName: 'send_message', input: JSON.stringify({ text: 'Sent to Kate 👍' }) },
+      { type: 'text', text: '' },
+    ]);
+
+    const run = await start(runConversation, [{ threadId: devon.threadId }]);
+    await run.returnValue;
+    expect(await run.status).toBe('completed');
+
+    // The relayed message went to KATE's thread...
+    const toKate = ctx.gateway.sent.find((s) => s.threadId === kateThread);
+    expect(toKate?.text).toBe('Devon says hi!');
+    expect(toKate?.persist).toBe(true); // recorded in Kate's history
+    // ...and the confirmation went back to DEVON's thread.
+    const toDevon = ctx.gateway.sent.find((s) => s.threadId === devon.threadId);
+    expect(toDevon?.text).toBe('Sent to Kate 👍');
+  });
+
+  it('message_person: relays an image attachment to the recipient thread', async () => {
+    const KATE = '+17193146820';
+    ctx = await setupTestRuntime({
+      owner: { name: 'Devon', identities: ['+15551230000'] },
+      family: [{ name: 'Kate', identities: [KATE] }],
+    });
+    const kateThread = 'sendblue:owner:kate';
+    await ctx.store.appendInbound(
+      makeChannelEvent({ threadId: kateThread, senderId: KATE, senderName: 'Kate', isOwner: false }),
+    );
+    const devon = makeChannelEvent({
+      threadId: 'sendblue:owner:devon',
+      senderId: '+15551230000',
+      senderName: 'Devon',
+      isOwner: true,
+      text: 'send Kate the lion pic',
+    });
+    await ctx.store.appendInbound(devon);
+    setTurnModel([
+      {
+        type: 'tool-call',
+        toolName: 'message_person',
+        input: JSON.stringify({
+          person: 'Kate',
+          text: 'Devon wanted you to see this 🦁',
+          image: '/home/tivona/work/leo_lion.jpg',
+        }),
+      },
+      { type: 'tool-call', toolName: 'send_message', input: JSON.stringify({ text: 'Sent! 🦁' }) },
+      { type: 'text', text: '' },
+    ]);
+
+    const run = await start(runConversation, [{ threadId: devon.threadId }]);
+    await run.returnValue;
+    expect(await run.status).toBe('completed');
+
+    // The relayed message + its image attachment landed on KATE's thread.
+    const toKate = ctx.gateway.sent.find((s) => s.threadId === kateThread);
+    expect(toKate?.text).toBe('Devon wanted you to see this 🦁');
+    expect(toKate?.attachment).toEqual({ pathOrUrl: '/home/tivona/work/leo_lion.jpg' });
+    expect(toKate?.persist).toBe(true);
+  });
+
+  it('message_person: refuses a non-roster recipient (roster-only)', async () => {
+    ctx = await setupTestRuntime({
+      owner: { name: 'Devon', identities: ['+15551230000'] },
+      family: [{ name: 'Kate', identities: ['+17193146820'] }],
+    });
+    const devon = makeChannelEvent({
+      threadId: 'sendblue:owner:devon2',
+      senderId: '+15551230000',
+      senderName: 'Devon',
+      isOwner: true,
+    });
+    await ctx.store.appendInbound(devon);
+    setTurnModel([
+      {
+        type: 'tool-call',
+        toolName: 'message_person',
+        input: JSON.stringify({ person: '+15559998888', text: 'hi stranger' }),
+      },
+      { type: 'tool-call', toolName: 'send_message', input: JSON.stringify({ text: 'I can only text family.' }) },
+      { type: 'text', text: '' },
+    ]);
+
+    const run = await start(runConversation, [{ threadId: devon.threadId }]);
+    await run.returnValue;
+    expect(await run.status).toBe('completed');
+
+    // Nothing was sent to the stranger's number (no outbound other than Devon's own thread).
+    const offRoster = ctx.gateway.sent.filter((s) => s.threadId !== devon.threadId);
+    expect(offRoster).toHaveLength(0);
+  });
+
   it('delivers EXACTLY ONCE when a post-send step fails and the workflow replays', async () => {
     ctx = await setupTestRuntime();
     const event = makeChannelEvent({ text: 'crash test' });

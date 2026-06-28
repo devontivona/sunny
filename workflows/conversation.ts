@@ -11,6 +11,7 @@ import { z } from 'zod';
 import { BASH_TOOL_SPECS } from '../src/agent/tools/bashSpecs.js';
 import { MEMORY_TOOL_SPECS } from '../src/agent/tools/memorySpecs.js';
 import { SEND_MESSAGE_SPEC, STAY_SILENT_SPEC } from '../src/agent/tools/sendMessageSpec.js';
+import { MESSAGE_PERSON_SPEC } from '../src/agent/tools/messagePersonSpec.js';
 import {
   DELEGATE_TASK_SPEC,
   MESSAGE_SUBAGENT_SPEC,
@@ -61,6 +62,9 @@ interface TurnSetup {
   providerOptions: SharedV4ProviderOptions;
   deliveryMode: 'tool' | 'text';
   ownerName: string;
+  /** Whether the owner is a participant of this thread — gates the owner-only USER.md carve-out
+   *  (multiplayer-family D2/D3). False in a family-only DM/group. */
+  ownerPresent: boolean;
   /** Mock model responses set by a workflow test (plain serializable data), read in the step
    *  and used by the body to build a mock; undefined in production. */
   testModelResponses?: MockResponseDescriptor[];
@@ -76,12 +80,13 @@ export async function runConversation(input: ConversationInput): Promise<void> {
   'use workflow';
 
   const { threadId } = input;
-  // A DM is the owner's thread (auth admits only the owner on DMs), so ownerDm ⇔ not-a-group —
-  // derived from the id alone (no extra input) via the shared `isGroupThreadId` helper.
+  // A DM admits only TRUSTED senders (owner or family, per gateway auth), so a DM ⇒ the elevated
+  // toolset — derived from the id alone via `isGroupThreadId`. The owner-only carve-out (editing
+  // USER.md) is gated separately on whether the owner is actually present (setup.ownerPresent).
   const isGroup = isGroupThreadId(threadId);
-  const ownerDm = !isGroup;
+  const trustedDm = !isGroup;
 
-  const setup = await setupTurn(ownerDm, threadId);
+  const setup = await setupTurn(threadId, isGroup);
   const ownerName = setup.ownerName;
 
   const pending = await loadPending(threadId, isGroup);
@@ -95,7 +100,7 @@ export async function runConversation(input: ConversationInput): Promise<void> {
   const { result, usage, foldedIds } = await streamAgent({
     model: buildTurnModel(setup.modelId, setup.testModelResponses),
     instructions: setup.instructions,
-    tools: buildTools({ threadId, ownerName, ownerDm }),
+    tools: buildTools({ threadId, ownerName, trustedDm, canEditUser: setup.ownerPresent }),
     providerOptions: setup.providerOptions,
     messages: pending.messages,
     steering: { inboxThreadId: threadId, isGroup, baseExcludeIds: pending.windowUserIds },
@@ -185,11 +190,18 @@ async function finalizeTurn(args: {
   }
 }
 
-/** Tools for a durable conversational turn (D6). The host tools are owner-DM-only, matching
- *  the in-process loop's `ownerDm` gating; every side-effecting `execute` is a `'use step'`
- *  so a replay never re-applies it (and `send_message` never re-sends). */
-function buildTools(ctx: { threadId: string; ownerName: string; ownerDm: boolean }) {
-  const { threadId, ownerName, ownerDm } = ctx;
+/** Tools for a durable conversational turn (D6). The host/delegation tools are trusted-DM-only
+ *  (owner OR family — gateway auth admits only trusted senders to a DM; multiplayer-family D2);
+ *  groups stay tool-limited regardless of trust (design D5). Editing the owner's USER.md is gated
+ *  on `canEditUser` (owner present). Every side-effecting `execute` is a `'use step'` so a replay
+ *  never re-applies it (and `send_message` never re-sends). */
+function buildTools(ctx: {
+  threadId: string;
+  ownerName: string;
+  trustedDm: boolean;
+  canEditUser: boolean;
+}) {
+  const { threadId, ownerName, trustedDm, canEditUser } = ctx;
   return {
     send_message: tool({
       ...SEND_MESSAGE_SPEC,
@@ -218,7 +230,7 @@ function buildTools(ctx: { threadId: string; ownerName: string; ownerDm: boolean
     }),
     memory_write: tool({
       ...MEMORY_TOOL_SPECS.memory_write,
-      execute: (args) => memWriteStep(args),
+      execute: (args) => memWriteStep({ ...args, canEditUser }),
     }),
     read_topic: tool({
       ...MEMORY_TOOL_SPECS.read_topic,
@@ -230,8 +242,8 @@ function buildTools(ctx: { threadId: string; ownerName: string; ownerDm: boolean
     }),
     // Delegation (durable-subagents): spawn an isolated child that reports back, and steer one
     // that is still working. Non-blocking — a child's report arrives as a later inbound the
-    // router folds into a fresh turn (D-DS2/3/4). Owner DMs only (delegation acts with host reach).
-    ...(ownerDm
+    // router folds into a fresh turn (D-DS2/3/4). Trusted DMs only (delegation acts with host reach).
+    ...(trustedDm
       ? {
           delegate_task: tool({
             ...DELEGATE_TASK_SPEC,
@@ -242,10 +254,16 @@ function buildTools(ctx: { threadId: string; ownerName: string; ownerDm: boolean
             ...MESSAGE_SUBAGENT_SPEC,
             execute: ({ child, text }) => steerChildStep(child, text),
           }),
+          // Relay a message to ANOTHER roster member on the user's behalf (multiplayer-family).
+          // Roster-only: reaches owner/family, never arbitrary numbers. Trusted DMs only.
+          message_person: tool({
+            ...MESSAGE_PERSON_SPEC,
+            execute: ({ person, text, image }) => messagePersonStep(person, text, image),
+          }),
         }
       : {}),
-    // Host tools: owner DMs only — real host access (D-TA2), mirroring the in-process loop.
-    ...(ownerDm
+    // Host tools: trusted DMs only — real host access (D-TA2), mirroring the in-process loop.
+    ...(trustedDm
       ? {
           bash: tool({ ...BASH_TOOL_SPECS.bash, execute: (a) => bashStep(a) }),
           file_read: tool({ ...BASH_TOOL_SPECS.file_read, execute: (a) => fileReadStep(a) }),
@@ -263,22 +281,46 @@ function buildTools(ctx: { threadId: string; ownerName: string; ownerDm: boolean
  * path's system prefix is byte-identical to the in-process loop's — `DurableAgent` honors
  * `cacheControl` on the `SystemModelMessage`, so prompt-cache behavior is preserved (5.6).
  */
-async function setupTurn(ownerDm: boolean, threadId: string): Promise<TurnSetup> {
+async function setupTurn(threadId: string, isGroup: boolean): Promise<TurnSetup> {
   'use step';
 
   const { getRuntime } = await import('../src/runtime.js');
   const { assembleTurnInstructions } = await import('../src/agent/instructions.js');
   const { anthropicProviderOptions } = await import('../src/agent/model.js');
   const { testModelResponses } = await import('../src/agent/turnModel.js');
-  const { config } = await getRuntime();
+  const { Authorizer } = await import('../src/gateway/auth.js');
+  const { personId, ensureAndLoadPeople } = await import('../src/memory/index.js');
+  const { config, store } = await getRuntime();
   const deliveryMode = config.deliveryMode;
-  void ownerDm; // tool gating happens in buildTools; kept for parity/readability
+
+  // Resolve the thread's trusted participants from persisted history (multiplayer-family D3).
+  // Owner presence comes from the persisted `isOwner` tag (also correct for the loopback test
+  // channel's synthetic owner); family participants are resolved fresh from the current roster,
+  // and their profile docs are auto-created on first contact and loaded into context.
+  const window = await store.recentWindow(threadId);
+  const authorizer = new Authorizer(config);
+  const userRows = window.filter((m) => m.role === 'user');
+  const ownerPresent = userRows.some((m) => m.isOwner);
+  const seen = new Set<string>();
+  const familyRefs: { id: string; name: string; identity: string }[] = [];
+  for (const m of userRows) {
+    if (m.isOwner || authorizer.resolveRole(m.senderId) !== 'family') continue;
+    const id = personId(m.senderId);
+    if (seen.has(id)) continue;
+    seen.add(id);
+    familyRefs.push({ id, name: m.senderName ?? m.senderId, identity: m.senderId });
+  }
+  const docs = await ensureAndLoadPeople(config, familyRefs);
+  const people = docs.length > 0 ? { ownerPresent, docs } : undefined;
+  void isGroup; // group-specific gating happens in buildTools / gateway auth
+
   return {
-    instructions: assembleTurnInstructions(config, deliveryMode),
+    instructions: assembleTurnInstructions(config, deliveryMode, people),
     modelId: config.modelId,
     providerOptions: anthropicProviderOptions(config),
     deliveryMode,
     ownerName: config.owner.name,
+    ownerPresent,
     // Read here (in the step, where a test's globalThis override is visible) and threaded to
     // the body to build a mock; undefined in production. Keyed per-thread (persists until the
     // route clears it), so a scripted reply reliably drives this thread's turns and never leaks
@@ -439,18 +481,81 @@ async function steerChildStep(childThreadId: string, text: string): Promise<stri
         `more from it, delegate a fresh task (include the prior result in the brief).`;
 }
 
+/**
+ * Relay a message to another roster member (multiplayer-family: cross-thread sends). Resolves the
+ * recipient against the owner/family roster (ROSTER-ONLY — arbitrary numbers are refused), finds
+ * their existing DM thread (or constructs one), and proactively sends + persists into THAT thread.
+ * Memoized as a step so a durable replay never double-texts.
+ */
+async function messagePersonStep(person: string, text: string, image?: string): Promise<string> {
+  'use step';
+
+  const { getRuntime } = await import('../src/runtime.js');
+  const { normalize } = await import('../src/gateway/auth.js');
+  const { sendblueDmThreadId } = await import('../src/gateway/threadId.js');
+  const { config, store, gateway } = await getRuntime();
+
+  // Resolve the recipient against the roster (owner + family). Match by name first, then identity.
+  const roster = [
+    { name: config.owner.name, identities: config.owner.identities },
+    ...config.family,
+  ];
+  const wanted = person.trim();
+  const wantedNorm = normalize(wanted);
+  const match =
+    roster.find((p) => p.name.toLowerCase() === wanted.toLowerCase()) ??
+    roster.find((p) => p.identities.map(normalize).includes(wantedNorm));
+  if (!match || match.identities.length === 0) {
+    const known = roster.map((r) => r.name).join(', ');
+    return (
+      `I can only text people in your family roster (right now: ${known}). ` +
+      `"${person}" isn't one of them, so I didn't send anything.`
+    );
+  }
+
+  // Address their existing DM if we have one; otherwise construct a Sendblue DM id.
+  const identity = normalize(match.identities[0]!);
+  let threadId = await store.findDmThreadForSender(identity);
+  if (!threadId) {
+    const from = process.env.SENDBLUE_FROM_NUMBER;
+    if (!from) {
+      return `I don't have a conversation with ${match.name} yet and can't start one right now.`;
+    }
+    threadId = sendblueDmThreadId(from, identity);
+  }
+
+  // An optional image rides along as a single outbound attachment, exactly like send_message's
+  // image path; the gateway hosts/sends + persists it (degrading to text in group threads).
+  await gateway.send(
+    threadId,
+    { text, ...(image ? { attachment: { pathOrUrl: image } } : {}) },
+    { persist: true },
+  );
+  return image ? `Sent to ${match.name} (with image).` : `Sent to ${match.name}.`;
+}
+
 async function memWriteStep(args: {
   file: string;
   action: 'add' | 'replace' | 'remove';
   content?: string;
   target?: string;
+  /** Owner-only carve-out (multiplayer-family D2): editing the owner's USER.md requires the owner
+   *  to be present. Undefined (legacy callers) is permissive. */
+  canEditUser?: boolean;
 }): Promise<string> {
   'use step';
 
   const { getRuntime } = await import('../src/runtime.js');
   const { execMemoryWrite } = await import('../src/agent/tools/memory.js');
   const { config } = await getRuntime();
-  return execMemoryWrite(config, args);
+  if (args.canEditUser === false && args.file.trim().toUpperCase() === 'USER') {
+    return (
+      `ERROR: editing USER.md (the owner's profile) is restricted to the owner. ` +
+      `Record durable facts about another person with file "people:<id>" instead.`
+    );
+  }
+  const { file, action, content, target } = args;
+  return execMemoryWrite(config, { file, action, content, target });
 }
 
 async function readTopicStep(name: string): Promise<string> {
@@ -467,6 +572,6 @@ async function recallStep(query: string, limit?: number): Promise<string> {
 
   const { getRuntime } = await import('../src/runtime.js');
   const { execRecall } = await import('../src/agent/tools/memory.js');
-  const { store } = await getRuntime();
-  return execRecall(store, query, limit);
+  const { store, config } = await getRuntime();
+  return execRecall(store, config, query, limit);
 }

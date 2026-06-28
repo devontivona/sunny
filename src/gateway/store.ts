@@ -4,6 +4,7 @@ import type { Db } from '../db/client.js';
 import { messages } from '../db/schema.js';
 import { attachmentRefsOf, type AttachmentRef, type OutboundMediaResult } from './media.js';
 import { isGroupThreadId } from './threadId.js';
+import { normalize } from './auth.js';
 import type { Attachment, ChannelEvent } from './types.js';
 
 /**
@@ -289,6 +290,26 @@ export class ConversationStore {
       isOwner: false,
       timestamp: new Date(),
     });
+  }
+
+  /**
+   * Find the most recent direct-message thread a given identity has appeared in (multiplayer-family:
+   * relayed sends). Used to address "text Kate…" to the existing DM rather than constructing a new
+   * thread id. Matches on the normalized identity, scans recent inbound, and skips group threads.
+   * Returns null if the identity has no prior DM.
+   */
+  async findDmThreadForSender(identity: string): Promise<string | null> {
+    const norm = normalize(identity);
+    const rows = await this.db
+      .select({ threadId: messages.threadId, senderId: messages.senderId })
+      .from(messages)
+      .where(eq(messages.role, 'user'))
+      .orderBy(desc(messages.createdAt))
+      .limit(500);
+    for (const r of rows) {
+      if (!isGroupThreadId(r.threadId) && normalize(r.senderId) === norm) return r.threadId;
+    }
+    return null;
   }
 
   /** Return the recent window for a thread, oldest-first. */

@@ -37,9 +37,11 @@ export interface Attachment {
 
 /**
  * Normalized inbound event (D-MG3). Channel-agnostic; the agent never sees
- * iMessage-specific shapes. `isOwner` is tagged by sender authorization
- * (D-MG6 / R1) — only owner messages may trigger high-consequence actions
- * (enforced from Phase 4 onward).
+ * iMessage-specific shapes. Sender authorization (D-MG6 / multiplayer-family D1)
+ * tags the trust tier: `isOwner` (specifically the owner), `isTrusted` (owner OR
+ * family), and the resolved `senderRole`. Only `isOwner` is persisted on the
+ * message row; `isTrusted`/`senderRole` are derived fresh at turn time from the
+ * current roster, so they may be absent on replayed/reconstructed events.
  */
 export interface ChannelEvent {
   channel: ChannelId;
@@ -52,6 +54,10 @@ export interface ChannelEvent {
   timestamp: Date;
   isGroup: boolean;
   isOwner: boolean;
+  /** Owner OR family — drives elevated capabilities (multiplayer-family D1). */
+  isTrusted?: boolean;
+  /** Resolved trust tier of the sender ('owner' | 'family' | null). */
+  senderRole?: 'owner' | 'family' | null;
 }
 
 /**

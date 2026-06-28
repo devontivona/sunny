@@ -9,10 +9,12 @@ export type CoreFile = 'USER' | 'SUNNY' | 'INDEX';
 export interface MemoryPaths {
   root: string;
   topicsDir: string;
+  peopleDir: string;
   USER: string;
   SUNNY: string;
   INDEX: string;
   topic: (name: string) => string;
+  person: (id: string) => string;
 }
 
 export function memoryPaths(runtimeDir: string): MemoryPaths {
@@ -21,10 +23,12 @@ export function memoryPaths(runtimeDir: string): MemoryPaths {
   return {
     root,
     topicsDir: join(root, 'topics'),
+    peopleDir: join(root, 'people'),
     USER: join(root, 'USER.md'),
     SUNNY: join(root, 'SUNNY.md'),
     INDEX: join(root, 'INDEX.md'),
     topic: (name: string) => join(root, 'topics', `${sanitizeTopic(name)}.md`),
+    person: (id: string) => join(root, 'people', `${sanitizePersonId(id)}.md`),
   };
 }
 
@@ -35,6 +39,31 @@ export function sanitizeTopic(name: string): string {
     .replace(/[^a-z0-9_-]+/g, '-')
     .replace(/^-+|-+$/g, '');
   if (!slug) throw new Error(`invalid topic name: ${name}`);
+  return slug;
+}
+
+/**
+ * Stable, filesystem-safe id for a per-person profile doc (multiplayer-family D3), derived from a
+ * normalized identity (the same key the authorizer matches on). Phones/emails reduce to a slug,
+ * e.g. `+1 (719) 314-6820` → `17193146820`, `kate@x.com` → `kate-x-com`.
+ */
+export function personId(identity: string): string {
+  // Mirror the authorizer's identity normalization so formatting variants of one phone/email map
+  // to the SAME doc: phones reduce to digits, emails lowercase. Then slug to a filesystem-safe id.
+  const t = identity.trim().toLowerCase();
+  const base = /[0-9]/.test(t) && !t.includes('@') ? t.replace(/[^0-9]/g, '') : t;
+  const slug = base.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  if (!slug) throw new Error(`invalid person identity: ${identity}`);
+  return slug;
+}
+
+/** Defensively re-slug a person id used as a write target (prevents path traversal). */
+export function sanitizePersonId(id: string): string {
+  const slug = id
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  if (!slug) throw new Error(`invalid person id: ${id}`);
   return slug;
 }
 
@@ -58,6 +87,46 @@ export function readTopic(paths: MemoryPaths, name: string): string | null {
   return existsSync(file) ? readFileSync(file, 'utf8') : null;
 }
 
+/** A person present in the current thread, for per-person doc loading (multiplayer-family D3). */
+export interface PersonRef {
+  id: string;
+  name: string;
+  identity: string;
+}
+
+/** A loaded per-person profile doc, ready to inject into the prompt. */
+export interface PersonDoc {
+  id: string;
+  name: string;
+  content: string;
+}
+
+/**
+ * Ensure each family participant has a profile doc (auto-create on first contact, D3), then load
+ * them for injection. Seeds + commits a starter doc when absent. Used by the durable turn's
+ * setup step (real Node), so fs/git side effects are fine here.
+ */
+export async function ensureAndLoadPeople(
+  config: SunnyConfig,
+  people: PersonRef[],
+): Promise<PersonDoc[]> {
+  if (people.length === 0) return [];
+  const paths = memoryPaths(config.runtimeDir);
+  mkdirSync(paths.peopleDir, { recursive: true });
+  let created = false;
+  const docs: PersonDoc[] = [];
+  for (const p of people) {
+    const file = paths.person(p.id);
+    if (!existsSync(file)) {
+      writeFileSync(file, starterPerson(p.name, p.identity), { mode: 0o644 });
+      created = true;
+    }
+    docs.push({ id: p.id, name: p.name, content: readIfExists(file) });
+  }
+  if (created) await commitState(config.runtimeDir, 'memory: seed person doc(s)');
+  return docs;
+}
+
 /**
  * Cold-start seeding (R11) + the `state` git repo (runtime-home). Initialize (or
  * clone) `~/.sunny/state/` FIRST so a fresh host with a configured private remote
@@ -70,6 +139,7 @@ export async function initMemory(config: SunnyConfig): Promise<void> {
 
   const paths = memoryPaths(config.runtimeDir);
   mkdirSync(paths.topicsDir, { recursive: true });
+  mkdirSync(paths.peopleDir, { recursive: true });
 
   seedIfAbsent(paths.USER, starterUser(config.owner.name));
   seedIfAbsent(paths.SUNNY, starterSunny());
@@ -181,6 +251,16 @@ function resolveTarget(
     const name = file.slice('topic:'.length);
     return { filePath: paths.topic(name), cap: null, label: `topics/${sanitizeTopic(name)}.md` };
   }
+  if (file.startsWith('people:')) {
+    // Per-person profile doc (multiplayer-family D3). Capped like USER so a person's model stays
+    // a concise core (deeper detail goes to topic docs); unbounded would defeat the core/topic split.
+    const id = file.slice('people:'.length);
+    return {
+      filePath: paths.person(id),
+      cap: config.memory.userMaxChars,
+      label: `people/${sanitizePersonId(id)}.md`,
+    };
+  }
   switch (file.toUpperCase()) {
     case 'USER':
       return { filePath: paths.USER, cap: config.memory.userMaxChars, label: 'USER.md' };
@@ -209,6 +289,16 @@ function starterUser(owner: string): string {
 _Durable facts about ${owner}: identity, preferences, people, comms style. Sunny keeps this current; ${owner} can hand-edit it._
 
 - Name: ${owner}
+`;
+}
+
+function starterPerson(name: string, identity: string): string {
+  return `# ${name} — profile
+
+_Durable facts about ${name} (a family member who messages Sunny): identity, preferences, people, comms style. Sunny keeps this current. Use discretion about sharing one person's facts with another._
+
+- Name: ${name}
+- Identity: ${identity}
 `;
 }
 

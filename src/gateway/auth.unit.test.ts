@@ -17,32 +17,93 @@ describe('normalize (identity)', () => {
   });
 });
 
-describe('Authorizer.authorize', () => {
+describe('Authorizer.authorize — tiers (multiplayer-family)', () => {
   const config = makeConfig({
     owner: { name: 'Devon', identities: ['+1 (555) 123-4567', 'devon@example.com'] },
+    family: [{ name: 'Kate', identities: ['+1 (719) 314-6820'] }],
     allowGroups: true,
   });
 
-  it('authorizes the owner as owner (across phone formatting)', () => {
+  it('authorizes the owner as owner + trusted (across phone formatting)', () => {
     const auth = new Authorizer(config);
-    expect(auth.authorize('+15551234567', false)).toEqual({ authorized: true, isOwner: true });
-    expect(auth.authorize('DEVON@example.com', false)).toEqual({ authorized: true, isOwner: true });
+    expect(auth.authorize('+15551234567', false)).toEqual({
+      authorized: true,
+      isTrusted: true,
+      isOwner: true,
+      role: 'owner',
+    });
+    expect(auth.authorize('DEVON@example.com', false)).toEqual({
+      authorized: true,
+      isTrusted: true,
+      isOwner: true,
+      role: 'owner',
+    });
   });
 
-  it('authorizes a non-owner in a group as non-owner when groups are allowed', () => {
+  it('authorizes a family DM as trusted, non-owner (across phone formatting)', () => {
     const auth = new Authorizer(config);
-    expect(auth.authorize('+15559999999', true)).toEqual({ authorized: true, isOwner: false });
+    expect(auth.authorize('+17193146820', false)).toEqual({
+      authorized: true,
+      isTrusted: true,
+      isOwner: false,
+      role: 'family',
+    });
   });
 
-  it('rejects a non-owner DM', () => {
+  it('rejects a non-trusted DM', () => {
     const auth = new Authorizer(config);
-    expect(auth.authorize('+15559999999', false)).toEqual({ authorized: false, isOwner: false });
+    expect(auth.authorize('+15559999999', false)).toEqual({
+      authorized: false,
+      isTrusted: false,
+      isOwner: false,
+      role: null,
+    });
+  });
+});
+
+describe('Authorizer.authorize — group membership (multiplayer-family D5)', () => {
+  const config = makeConfig({
+    owner: { name: 'Devon', identities: ['+15551234567'] },
+    family: [
+      { name: 'Kate', identities: ['+17193146820'] },
+      { name: 'Sam', identities: ['+15550001111'] },
+    ],
+    allowGroups: true,
   });
 
-  it('rejects a non-owner group message when allowGroups is off', () => {
-    const auth = new Authorizer(makeConfig({ ...config, allowGroups: false }));
-    expect(auth.authorize('+15559999999', true)).toEqual({ authorized: false, isOwner: false });
-    // …but the owner is still recognized in a group regardless of allowGroups.
-    expect(auth.authorize('+15551234567', true)).toEqual({ authorized: true, isOwner: true });
+  it('authorizes an all-trusted group (owner present)', () => {
+    const auth = new Authorizer(config);
+    const res = auth.authorize('+17193146820', true, ['+15551234567', '+17193146820']);
+    expect(res.authorized).toBe(true);
+    expect(res.role).toBe('family');
+  });
+
+  it('authorizes a family-only group (owner NOT present)', () => {
+    const auth = new Authorizer(config);
+    const res = auth.authorize('+17193146820', true, ['+17193146820', '+15550001111']);
+    expect(res.authorized).toBe(true);
+  });
+
+  it('silences a group with any outsider', () => {
+    const auth = new Authorizer(config);
+    const res = auth.authorize('+17193146820', true, ['+17193146820', '+15559999999']);
+    expect(res.authorized).toBe(false);
+  });
+
+  it('fails closed when the roster is unavailable', () => {
+    const auth = new Authorizer(config);
+    expect(auth.authorize('+17193146820', true, undefined).authorized).toBe(false);
+  });
+
+  it('rejects a group entirely when allowGroups is off, but owner DM still works', () => {
+    const off = new Authorizer(makeConfig({ ...config, allowGroups: false }));
+    expect(off.authorize('+17193146820', true, ['+17193146820']).authorized).toBe(false);
+    expect(off.authorize('+15551234567', false).authorized).toBe(true);
+  });
+
+  it('rejects a non-trusted sender even when the listed participants are trusted', () => {
+    const auth = new Authorizer(config);
+    const res = auth.authorize('+15559999999', true, ['+15559999999', '+15551234567']);
+    expect(res.authorized).toBe(false);
   });
 });

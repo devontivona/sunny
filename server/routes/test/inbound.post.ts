@@ -39,6 +39,7 @@ export default defineEventHandler(async (event) => {
     threadId?: string;
     senderId?: string;
     senderName?: string;
+    participants?: string[];
     modelResponses?: unknown[];
   };
   if (typeof body.text !== 'string' || !body.text.trim()) {
@@ -61,5 +62,6 @@ export default defineEventHandler(async (event) => {
     threadId: body.threadId,
     senderId: body.senderId,
     senderName: body.senderName,
+    participants: body.participants,
   });
 });
