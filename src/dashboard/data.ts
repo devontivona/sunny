@@ -209,7 +209,13 @@ export class DashboardData {
       .orderBy(desc(messages.timestamp))
       .limit(limit);
     const ordered = rows.reverse();
-    const participants = participantNames(ordered.filter((r) => r.role === 'user'));
+    // All participants across the WHOLE thread (not just the windowed messages above), so the
+    // title lists everyone even in a long thread.
+    const partRows = await this.db
+      .selectDistinct({ senderName: messages.senderName, senderId: messages.senderId })
+      .from(messages)
+      .where(and(eq(messages.threadId, threadId), eq(messages.role, 'user')));
+    const participants = participantNames(partRows);
     return {
       threadId,
       channel: channelForThread(threadId, ordered[0]?.channel ?? 'imessage'),

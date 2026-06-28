@@ -282,16 +282,18 @@ function ThreadPage({ threadId }: { threadId: string }) {
       version={version}
       header={
         <>
-          <Link to="conversation">Conversation</Link>
-          <span className="font-normal text-fg-dim"> / {label}</span>
+          <div>
+            <Link to="conversation">Conversation</Link>
+            <span> / {label}</span>
+          </div>
           {detail && (
-            <span className="ml-sm">
+            <div className="font-normal">
               <ThreadMeta
                 channel={detail.channel}
                 isGroup={detail.isGroup}
                 threadId={detail.threadId}
               />
-            </span>
+            </div>
           )}
         </>
       }
