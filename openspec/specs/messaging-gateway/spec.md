@@ -159,7 +159,7 @@ The gateway SHALL resolve each inbound sender to a trust tier derived from confi
 - **THEN** they are treated as the same identity
 
 ### Requirement: Capability exposure follows trust tier
-The set of capabilities (tools) exposed to a turn SHALL be determined by the sender's trust tier, not by the thread kind. A turn whose triggering sender `isTrusted` SHALL receive the elevated capability set (including host-affecting tools such as shell, file read, and task delegation); a turn from a non-trusted sender SHALL NOT. Capabilities reserved as owner-only SHALL remain gated on `isOwner` even for trusted family senders. Editing the owner's own profile document SHALL be one such owner-only capability.
+The set of capabilities (tools) exposed to a turn SHALL be determined by the sender's trust tier, not by the thread kind. A turn whose triggering sender `isTrusted` SHALL receive the elevated capability set (including host-affecting tools such as shell, file read, and task delegation); a turn from a non-trusted sender SHALL NOT. Capabilities reserved as owner-only SHALL remain gated on `isOwner` even for trusted family senders. Editing the owner-only core memory files — the owner's profile (`USER.md`) and Sunny's operating notes (`SUNNY.md`) — SHALL be such owner-only capabilities.
 
 #### Scenario: Family DM gets elevated capabilities
 - **WHEN** a trusted family member sends a direct message

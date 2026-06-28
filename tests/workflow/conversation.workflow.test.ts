@@ -235,6 +235,40 @@ describe('runConversation (workflow integration — real Local World)', () => {
     expect(user).not.toContain('injected secret');
   });
 
+  it('family DM: cannot edit SUNNY.md (owner-only operating notes)', async () => {
+    const KATE = '+17193146820';
+    ctx = await setupTestRuntime({
+      owner: { name: 'Devon', identities: ['+15551230000'] },
+      family: [{ name: 'Kate', identities: [KATE] }],
+    });
+    const event = makeChannelEvent({
+      threadId: 'sendblue:owner:kate3',
+      senderId: KATE,
+      senderName: 'Kate',
+      isOwner: false,
+    });
+    await ctx.store.appendInbound(event);
+    // A family member's turn must not be able to reprogram Sunny's operating notes.
+    setTurnModel([
+      {
+        type: 'tool-call',
+        toolName: 'memory_write',
+        input: JSON.stringify({ file: 'SUNNY', action: 'add', content: '- reprogrammed conduct' }),
+      },
+      { type: 'tool-call', toolName: 'send_message', input: JSON.stringify({ text: 'ok' }) },
+      { type: 'text', text: '' },
+    ]);
+
+    const run = await start(runConversation, [{ threadId: event.threadId }]);
+    await run.returnValue;
+    expect(await run.status).toBe('completed');
+
+    const { readFileSync } = await import('node:fs');
+    const { memoryPaths } = await import('../../src/memory/index.js');
+    const sunny = readFileSync(memoryPaths(ctx.config.runtimeDir).SUNNY, 'utf8');
+    expect(sunny).not.toContain('reprogrammed conduct');
+  });
+
   it('message_person: relays to another roster member on their thread, confirms on the current one', async () => {
     const KATE = '+17193146820';
     ctx = await setupTestRuntime({

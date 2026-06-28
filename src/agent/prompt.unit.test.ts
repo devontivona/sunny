@@ -69,7 +69,7 @@ describe('buildSystemPrompt', () => {
     });
     expect(prompt).toContain('You are talking with Kate');
     expect(prompt).toContain('NOT Devon');
-    expect(prompt).toContain('USER is read-only here');
+    expect(prompt).toContain('USER and SUNNY are read-only here');
   });
 });
 

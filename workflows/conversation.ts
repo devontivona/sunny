@@ -100,7 +100,7 @@ export async function runConversation(input: ConversationInput): Promise<void> {
   const { result, usage, foldedIds } = await streamAgent({
     model: buildTurnModel(setup.modelId, setup.testModelResponses),
     instructions: setup.instructions,
-    tools: buildTools({ threadId, ownerName, trustedDm, canEditUser: setup.ownerPresent }),
+    tools: buildTools({ threadId, ownerName, trustedDm, ownerPresent: setup.ownerPresent }),
     providerOptions: setup.providerOptions,
     messages: pending.messages,
     steering: { inboxThreadId: threadId, isGroup, baseExcludeIds: pending.windowUserIds },
@@ -192,16 +192,16 @@ async function finalizeTurn(args: {
 
 /** Tools for a durable conversational turn (D6). The host/delegation tools are trusted-DM-only
  *  (owner OR family — gateway auth admits only trusted senders to a DM; multiplayer-family D2);
- *  groups stay tool-limited regardless of trust (design D5). Editing the owner's USER.md is gated
- *  on `canEditUser` (owner present). Every side-effecting `execute` is a `'use step'` so a replay
- *  never re-applies it (and `send_message` never re-sends). */
+ *  groups stay tool-limited regardless of trust (design D5). Editing the owner-only core files
+ *  (USER.md, SUNNY.md) is gated on `ownerPresent`. Every side-effecting `execute` is a `'use step'`
+ *  so a replay never re-applies it (and `send_message` never re-sends). */
 function buildTools(ctx: {
   threadId: string;
   ownerName: string;
   trustedDm: boolean;
-  canEditUser: boolean;
+  ownerPresent: boolean;
 }) {
-  const { threadId, ownerName, trustedDm, canEditUser } = ctx;
+  const { threadId, ownerName, trustedDm, ownerPresent } = ctx;
   return {
     send_message: tool({
       ...SEND_MESSAGE_SPEC,
@@ -230,7 +230,7 @@ function buildTools(ctx: {
     }),
     memory_write: tool({
       ...MEMORY_TOOL_SPECS.memory_write,
-      execute: (args) => memWriteStep({ ...args, canEditUser }),
+      execute: (args) => memWriteStep({ ...args, ownerPresent }),
     }),
     read_topic: tool({
       ...MEMORY_TOOL_SPECS.read_topic,
@@ -539,18 +539,22 @@ async function memWriteStep(args: {
   action: 'add' | 'replace' | 'remove';
   content?: string;
   target?: string;
-  /** Owner-only carve-out (multiplayer-family D2): editing the owner's USER.md requires the owner
-   *  to be present. Undefined (legacy callers) is permissive. */
-  canEditUser?: boolean;
+  /** Owner-only carve-out (multiplayer-family D2): the owner-only core files (USER.md, SUNNY.md)
+   *  may only be edited when the owner is present. Undefined (legacy callers) is permissive. */
+  ownerPresent?: boolean;
 }): Promise<string> {
   'use step';
 
   const { getRuntime } = await import('../src/runtime.js');
   const { execMemoryWrite } = await import('../src/agent/tools/memory.js');
   const { config } = await getRuntime();
-  if (args.canEditUser === false && args.file.trim().toUpperCase() === 'USER') {
+  // USER (the owner's profile) and SUNNY (Sunny's operating notes) are owner-only: family must not
+  // rewrite the owner's model or reprogram Sunny's conduct. Family can still write people:<id>,
+  // topic docs, and INDEX.
+  const fileKey = args.file.trim().toUpperCase();
+  if (args.ownerPresent === false && (fileKey === 'USER' || fileKey === 'SUNNY')) {
     return (
-      `ERROR: editing USER.md (the owner's profile) is restricted to the owner. ` +
+      `ERROR: editing ${fileKey}.md is restricted to the owner. ` +
       `Record durable facts about another person with file "people:<id>" instead.`
     );
   }

@@ -118,7 +118,9 @@ function peopleBlock(owner: string, people: PeoplePromptContext | undefined): st
     whoLine,
     `- Record durable facts ABOUT a person to their own doc: memory_write file "people:<id>".`,
     `  Facts about ${owner} still go to USER${
-      people.ownerPresent ? '' : ` (but USER is read-only here — only ${owner} can edit it)`
+      people.ownerPresent
+        ? ''
+        : ` (but USER and SUNNY are read-only here — only ${owner} can edit them)`
     }.`,
     `- Use discretion: don't repeat one person's private facts to another just because you know them.`,
     ``,
