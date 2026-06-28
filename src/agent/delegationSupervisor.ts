@@ -1,5 +1,6 @@
 import type { Db } from '../db/client.js';
 import type { ConversationStore } from '../gateway/store.js';
+import { runSerial } from '../gateway/serial.js';
 import type { SubagentInput, ChildToolset } from '../../workflows/subagent.js';
 import {
   MAX_CONCURRENT_CHILDREN,
@@ -53,9 +54,20 @@ export class DelegationSupervisor {
     private readonly wake: (threadId: string) => void,
   ) {}
 
+  /** Per-parent serial chains: makes each parent's cap-check → createLink atomic in-process. */
+  private readonly spawnChain = new Map<string, Promise<unknown>>();
+
   /** Spawn a child for `parentThreadId`, enforcing caps. Returns the child's handle immediately
-   *  (non-blocking, D-DS2); the watchdog runs in the background. */
-  async spawn(input: SpawnInput): Promise<SpawnResult> {
+   *  (non-blocking, D-DS2); the watchdog runs in the background. The whole cap-check → createLink
+   *  is serialized PER PARENT (`runSerial`) so two `delegate_task` tool calls in the same model
+   *  step — whose `execute`s the AI SDK runs concurrently — can't both pass the gate and exceed
+   *  the cap (the check-then-insert would otherwise be a TOCTOU race). One in-process supervisor,
+   *  so a per-parent serial chain fully closes it. */
+  spawn(input: SpawnInput): Promise<SpawnResult> {
+    return runSerial(this.spawnChain, input.parentThreadId, () => this.doSpawn(input));
+  }
+
+  private async doSpawn(input: SpawnInput): Promise<SpawnResult> {
     if (input.depth > MAX_DELEGATION_DEPTH) {
       log.warn('delegation refused: depth cap', { depth: input.depth, parent: input.parentThreadId });
       return { error: 'depth_cap' };
@@ -91,6 +103,22 @@ export class DelegationSupervisor {
     void this.watch(childThreadId, input.parentThreadId, input.label ?? 'subagent', run.returnValue);
 
     return { childThreadId, childRunId: run.runId };
+  }
+
+  /**
+   * Re-arm the watchdog for an already-running child after a process restart (D-DS6). The
+   * in-memory `watch` is the only thing observing a child's `returnValue`, so without this a child
+   * in flight across a restart whose run later fails would leak a `running` link forever (a
+   * permanently-consumed concurrency slot) and never report its failure. Runtime startup enumerates
+   * the durable `running` links and calls this with a re-subscribed `returnValue`.
+   */
+  reattach(
+    childThreadId: string,
+    parentThreadId: string,
+    label: string,
+    returnValue: Promise<unknown>,
+  ): void {
+    void this.watch(childThreadId, parentThreadId, label, returnValue);
   }
 
   /** Await the child's completion; on terminal failure, deliver a failure event to the parent. */

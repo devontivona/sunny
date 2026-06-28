@@ -36,7 +36,7 @@ export interface TestRuntimeCtx {
   /** Delegation seams wired against the real WDK Local World (durable-subagents): start a child
    *  run via the supervisor, or steer one. `wake` is captured for assertions (no router in test). */
   spawnChild: (input: SpawnInput) => Promise<SpawnResult>;
-  steerChild: (childThreadId: string, text: string) => Promise<void>;
+  steerChild: (childThreadId: string, text: string) => Promise<boolean>;
   wakeCalls: string[];
 }
 
@@ -65,7 +65,7 @@ export async function setupTestRuntime(): Promise<TestRuntimeCtx> {
   );
   const spawnChild = (input: SpawnInput) => supervisor.spawn(input);
   const steerChild = (childThreadId: string, text: string) =>
-    steerChildImpl(store, childThreadId, text);
+    steerChildImpl(db.db, store, childThreadId, text);
 
   g[RUNTIME_KEY] = Promise.resolve({
     config,

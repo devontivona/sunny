@@ -45,8 +45,10 @@ export interface Runtime {
   ) => Promise<import('./agent/delegationSupervisor.js').SpawnResult>;
 
   /** Steer a still-running child (durable-subagents D-DS4): append to its inbox; its in-flight
-   *  run folds the steer via `loadSteers`. Reached from the `message_subagent` tool's step. */
-  steerChild?: (childThreadId: string, text: string) => Promise<void>;
+   *  run folds the steer via `loadSteers`. Reached from the `message_subagent` tool's step.
+   *  Resolves `true` if delivered, `false` if the child already finished (so the caller can
+   *  tell the model the truth instead of a false success). */
+  steerChild?: (childThreadId: string, text: string) => Promise<boolean>;
 }
 
 /**
@@ -137,10 +139,11 @@ async function start(): Promise<Runtime> {
   let wakeThread: ((threadId: string) => void) | undefined;
   let spawnChild: Runtime['spawnChild'];
   let steerChild: Runtime['steerChild'];
+  let supervisor: DelegationSupervisor | null = null;
   if (durableRouter) {
     const router = durableRouter;
     wakeThread = (threadId) => router.wake(threadId);
-    const supervisor = new DelegationSupervisor(
+    const sup = new DelegationSupervisor(
       db,
       store,
       async (input) => {
@@ -150,10 +153,11 @@ async function start(): Promise<Runtime> {
       },
       wakeThread,
     );
-    spawnChild = (input) => supervisor.spawn(input);
+    supervisor = sup;
+    spawnChild = (input) => sup.spawn(input);
     steerChild = async (childThreadId, text) => {
       const { steerChild: steer } = await import('./agent/delegation.js');
-      await steer(store, childThreadId, text);
+      return steer(db, store, childThreadId, text);
     };
   }
 
@@ -172,6 +176,7 @@ async function start(): Promise<Runtime> {
       log.info('recovering un-answered messages', { count: unprocessed.length });
       await durableRouter.recoverPending(unprocessed);
     }
+    if (supervisor) await reattachRunningChildren(db, supervisor);
   }
 
   // Scheduling (D-SC2): the ~60s ticker dispatches due schedules as durable jobs.
@@ -220,6 +225,39 @@ async function start(): Promise<Runtime> {
 /** Longest we wait on an in-flight conversation run at startup before proceeding to recovery
  *  anyway — a single turn is far shorter, so this only ever guards a wedged run. */
 const ORPHAN_AWAIT_MS = 30_000;
+
+/**
+ * Re-arm the delegation watchdog for children still marked `running` at startup (durable-subagents
+ * D-DS6). The watchdog is in-memory, so a child in flight across a restart would otherwise have no
+ * one observing its `returnValue`: if it then failed, its link would leak as `running` forever
+ * (a permanently-consumed concurrency slot) and the parent would never hear of the failure. For
+ * each running link we re-subscribe to the durable run's `returnValue` and hand it to the
+ * supervisor (which closes the link / reports failure on terminal outcome). A link with no recorded
+ * run id (a crash in the gap between createLink and setChildRunId) can't be watched, so we free its
+ * slot by marking it failed. Best-effort + non-blocking — never blocks startup.
+ */
+async function reattachRunningChildren(db: Db, supervisor: DelegationSupervisor): Promise<void> {
+  try {
+    const { listRunningLinks, completeLink } = await import('./agent/delegation.js');
+    const links = await listRunningLinks(db);
+    if (links.length === 0) return;
+    log.info('re-attaching delegation watchdogs', { count: links.length });
+    for (const link of links) {
+      if (!link.childRunId) {
+        await completeLink(db, link.childThreadId, 'failed').catch(() => {});
+        continue;
+      }
+      try {
+        const rv = getRun<unknown>(link.childRunId).returnValue;
+        supervisor.reattach(link.childThreadId, link.parentThreadId, 'subagent', rv);
+      } catch {
+        await completeLink(db, link.childThreadId, 'failed').catch(() => {});
+      }
+    }
+  } catch (err) {
+    log.warn('child watchdog re-attach failed (non-fatal)', { err: String(err) });
+  }
+}
 
 /**
  * Await any `runConversation` runs still RUNNING at startup (durable-main-loop restart-orphan

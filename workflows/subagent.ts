@@ -29,7 +29,7 @@ import {
 
 /** Least-privilege toolset presets (D-DS5). A child is never broader than its parent; an
  *  untrusted-content child gets `readonly`/`none` (no host mutation, no credentials). */
-export type ChildToolset = 'host' | 'readonly' | 'memory' | 'none';
+export type ChildToolset = 'host' | 'readonly' | 'none';
 
 export interface SubagentInput {
   /** The child's own inbox thread (where parent→child steers arrive). */
@@ -108,13 +108,6 @@ function buildChildTools(input: SubagentInput) {
   const toolset = input.toolset ?? 'readonly';
   if (toolset === 'none') return reportTool;
   if (toolset === 'readonly') {
-    return {
-      ...reportTool,
-      file_read: tool({ ...BASH_TOOL_SPECS.file_read, execute: (a: FileReadToolInput) => fileReadStep(a) }),
-    };
-  }
-  if (toolset === 'memory') {
-    // memory tools resolved lazily to avoid importing Node specs needlessly; readonly subset.
     return {
       ...reportTool,
       file_read: tool({ ...BASH_TOOL_SPECS.file_read, execute: (a: FileReadToolInput) => fileReadStep(a) }),

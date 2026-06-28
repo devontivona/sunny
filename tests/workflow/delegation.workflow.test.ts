@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { getLinkByChildThread } from '../../src/agent/delegation.js';
+import { completeLink, createLink, getLinkByChildThread } from '../../src/agent/delegation.js';
 import {
   setTurnModel,
   setupTestRuntime,
@@ -54,11 +54,34 @@ describe('delegation (workflow integration — real Local World)', () => {
     expect(ctx.wakeCalls).toContain(OWNER);
   });
 
-  it('parent → child steer lands on the child inbox (folds via loadSteers in-flight)', async () => {
+  it('parent → child steer lands on a RUNNING child inbox (folds via loadSteers in-flight)', async () => {
     ctx = await setupTestRuntime();
-    await ctx.steerChild('subagent:in-flight', 'also check the archive');
+    await createLink(ctx.db.db, {
+      parentThreadId: OWNER,
+      childThreadId: 'subagent:in-flight',
+      task: 'work',
+      depth: 1,
+      orchestrator: false,
+    });
+    const delivered = await ctx.steerChild('subagent:in-flight', 'also check the archive');
+    expect(delivered).toBe(true);
     const steers = await ctx.store.unansweredSteers('subagent:in-flight', []);
     expect(steers.map((s) => s.text)).toContain('also check the archive');
     expect(steers[0]?.senderName).toBe('parent');
+  });
+
+  it('parent → child steer reports NOT delivered when the child has already finished', async () => {
+    ctx = await setupTestRuntime();
+    await createLink(ctx.db.db, {
+      parentThreadId: OWNER,
+      childThreadId: 'subagent:done',
+      task: 'work',
+      depth: 1,
+      orchestrator: false,
+    });
+    await completeLink(ctx.db.db, 'subagent:done', 'done');
+    const delivered = await ctx.steerChild('subagent:done', 'too late');
+    expect(delivered).toBe(false); // honest no-op — the model is told it did not land
+    expect(await ctx.store.unansweredSteers('subagent:done', [])).toEqual([]);
   });
 });

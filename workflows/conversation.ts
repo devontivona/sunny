@@ -11,7 +11,13 @@ import { z } from 'zod';
 import { BASH_TOOL_SPECS } from '../src/agent/tools/bashSpecs.js';
 import { MEMORY_TOOL_SPECS } from '../src/agent/tools/memorySpecs.js';
 import { SEND_MESSAGE_SPEC, STAY_SILENT_SPEC } from '../src/agent/tools/sendMessageSpec.js';
-import { DELEGATE_TASK_SPEC, MESSAGE_SUBAGENT_SPEC } from '../src/agent/tools/delegationSpecs.js';
+import {
+  DELEGATE_TASK_SPEC,
+  MESSAGE_SUBAGENT_SPEC,
+  type ChildModelName,
+} from '../src/agent/tools/delegationSpecs.js';
+import type { ChildToolset } from './subagent.js';
+import { isGroupThreadId } from '../src/gateway/threadId.js';
 import {
   assistantUIMessageFromResponse,
   buildTurnRecord,
@@ -70,9 +76,9 @@ export async function runConversation(input: ConversationInput): Promise<void> {
   'use workflow';
 
   const { threadId } = input;
-  // Group threads are `…:<from>:g:<group>`; a DM is the owner's thread (auth admits only the
-  // owner on DMs), so ownerDm ⇔ not-a-group — derived from the id alone (no extra input).
-  const isGroup = threadId.split(':')[2] === 'g';
+  // A DM is the owner's thread (auth admits only the owner on DMs), so ownerDm ⇔ not-a-group —
+  // derived from the id alone (no extra input) via the shared `isGroupThreadId` helper.
+  const isGroup = isGroupThreadId(threadId);
   const ownerDm = !isGroup;
 
   const setup = await setupTurn(ownerDm, threadId);
@@ -389,12 +395,7 @@ async function startJobStep(threadId: string, task: string, ownerName: string): 
  */
 async function delegateStep(
   parentThreadId: string,
-  args: {
-    task: string;
-    label?: string;
-    toolset?: 'host' | 'readonly' | 'memory' | 'none';
-    model?: 'sonnet' | 'opus' | 'haiku';
-  },
+  args: { task: string; label?: string; toolset?: ChildToolset; model?: ChildModelName },
 ): Promise<string> {
   'use step';
 
@@ -431,8 +432,11 @@ async function steerChildStep(childThreadId: string, text: string): Promise<stri
   const { getRuntime } = await import('../src/runtime.js');
   const rt = await getRuntime();
   if (!rt.steerChild) return 'Subagent steering is unavailable in this runtime.';
-  await rt.steerChild(childThreadId, text);
-  return `Sent to subagent ${childThreadId}; it will fold your message into its work.`;
+  const delivered = await rt.steerChild(childThreadId, text);
+  return delivered
+    ? `Sent to subagent ${childThreadId}; it will fold your message into its work.`
+    : `Subagent ${childThreadId} has already finished, so it did not receive that. If you need ` +
+        `more from it, delegate a fresh task (include the prior result in the brief).`;
 }
 
 async function memWriteStep(args: {

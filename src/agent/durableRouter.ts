@@ -125,6 +125,7 @@ export class DurableTurnRouter {
       model: this.meta.modelId,
       effort: this.meta.effort,
     });
+    const runStartedAt = Date.now();
     void (async () => {
       let reader: ReadableStreamDefaultReader<UIMessageChunk> | null = null;
       try {
@@ -138,10 +139,14 @@ export class DurableTurnRouter {
           const { done, value } = await reader.read();
           if (done) break;
           bus.publishTurnChunk(runId, value);
-          // Show typing while the turn streams (throttled). It is cleared with an explicit
-          // `stopTyping` when the turn ends (the `finally` below) — Sendblue's typing-v2 supports
-          // `state: 'stop'`, so "…" disappears the moment Sunny is done instead of lingering for
-          // the transport's auto-expiry window (the stuck-on-after-reply bug).
+          // Typing shows while the turn streams (throttled), then is cleared two ways at turn end
+          // (belt-and-suspenders against the stuck-on-after-reply bug): an explicit `stopTyping`
+          // in the `finally`, AND we stop RE-ARMING it once this turn has delivered a message.
+          // The latter matters because `send_message` fires MID-stream: without it, the model's
+          // post-send wrap-up chunks (a second tool call, a final empty step) re-fire typing >4s
+          // after the reply already landed, and it lingers until the next explicit stop / auto-
+          // expiry. `lastSentAt` is per-thread, so compare to this run's start = "sent THIS turn".
+          if ((this.gateway.lastSentAt?.(threadId) ?? 0) > runStartedAt) continue;
           const now = Date.now();
           if (now - (this.lastTyped.get(threadId) ?? 0) >= TYPING_THROTTLE_MS) {
             this.lastTyped.set(threadId, now);

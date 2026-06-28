@@ -25,6 +25,24 @@ export function newChildThreadId(): string {
   return `subagent:${randomUUID()}`;
 }
 
+/** Whether a thread is an internal child inbox (vs. a real owner/group conversation thread). */
+export function isChildThread(threadId: string): boolean {
+  return threadId.startsWith('subagent:');
+}
+
+/** Make a model-supplied subagent label safe as a sender name + `Name: text` attribution prefix:
+ *  no newlines/colons (which would break the speaker convention or rendering), bounded length,
+ *  never empty. */
+export function sanitizeLabel(label?: string): string {
+  const cleaned = (label ?? '')
+    .replace(/[\r\n:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 40)
+    .trim();
+  return cleaned || 'subagent';
+}
+
 export interface CreateLinkInput {
   parentThreadId: string;
   childThreadId: string;
@@ -83,6 +101,12 @@ export async function activeChildCount(db: Db, parentThreadId: string): Promise<
   return rows.length;
 }
 
+/** All still-running links (D-DS6 restart recovery): the supervisor re-attaches a watchdog to
+ *  each on startup so a child in flight across a restart can't leak a `running` link. */
+export async function listRunningLinks(db: Db): Promise<SubagentLinkRow[]> {
+  return db.select().from(subagentLinks).where(eq(subagentLinks.status, 'running'));
+}
+
 /** The link for a child inbox thread, or undefined (used to resolve a child's parent + depth). */
 export async function getLinkByChildThread(
   db: Db,
@@ -139,11 +163,12 @@ export async function reportToParent(
   out: EmitTarget,
   text: string,
 ): Promise<void> {
-  const name = out.fromName ?? 'subagent';
+  const name = sanitizeLabel(out.fromName);
   // Attribute the report so the parent reads it as a message from a NAMED subagent, not from the
   // owner — the parent inbox can be the owner's own DM thread (D-DS12), where a bare report would
   // be indistinguishable from the owner speaking. `Name: text` is the same speaker convention the
-  // model already follows in group threads, so no DM-specific rendering is needed.
+  // model already follows in group threads, so no DM-specific rendering is needed; `sanitizeLabel`
+  // keeps a model-supplied label from breaking that convention (no embedded newline/colon).
   const attributed = `${name} (subagent): ${text}`;
   const inserted = await appendInterRunMessage(
     runtime.store,
@@ -152,8 +177,11 @@ export async function reportToParent(
     attributed,
   );
   if (!inserted) return;
-  // Wake the parent's run-supply: an idle parent is restarted by the supervisor/router.
-  runtime.wakeThread?.(out.destThreadId);
+  // Wake the parent's run-supply ONLY for a real conversation thread. A `subagent:` parent inbox
+  // (an orchestrator child — future) is a single run, not router-driven, so waking it would wrongly
+  // start a conversation turn on an internal thread; an in-flight orchestrator folds the report via
+  // `loadSteers`, a finished one is run-to-completion (no re-drive).
+  if (!isChildThread(out.destThreadId)) runtime.wakeThread?.(out.destThreadId);
   log.info('child reported to parent', { parentThread: out.destThreadId, from: name });
 }
 
@@ -164,10 +192,19 @@ export async function reportToParent(
  * the `message_subagent` tool.
  */
 export async function steerChild(
+  db: Db,
   store: InboundSink,
   childThreadId: string,
   text: string,
-): Promise<void> {
+): Promise<boolean> {
+  // Only a STILL-RUNNING child can fold a steer (run-to-completion, D-DS7). If it already
+  // finished (or is unknown), report not-delivered so the caller doesn't tell the model its
+  // course-correction took effect when it was a no-op on a dead thread. (A child that finishes in
+  // the gap between this check and folding is a rare, harmless dangling row — the steer just isn't
+  // folded; the honest common-case result is what matters.)
+  const link = await getLinkByChildThread(db, childThreadId);
+  if (!link || link.status !== 'running') return false;
   await appendInterRunMessage(store, childThreadId, { id: 'parent', name: 'parent' }, text);
   log.info('parent steered child', { childThread: childThreadId });
+  return true;
 }
