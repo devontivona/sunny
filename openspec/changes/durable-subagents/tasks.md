@@ -1,60 +1,62 @@
 > Build plan for the durable-subagents change. D-DS* decisions and the delegation-skill authoring spec are in this change's `design.md`.
 > **Builds on `durable-main-loop` (shipped):** the store + `DurableTurnRouter` + `loadSteers` steering seam. The parent↔child channel is a store write drained by the recipient's run via `loadSteers` (+ a supervisor-started run when idle) — NOT `resumeHook`.
 
+> **Implementation status (2026-06-28).** The headline capabilities are implemented + verified against a real WDK Local World: `output_target` with the `silent` 2am fix, the single `emitStep`, the parent↔child channel, the delegation supervisor (caps + watchdog), `delegate_task`/`message_subagent`, the least-privilege child, and the delegation skill. The "unified shell" landed as **shared shell *pieces*** (`workflows/runShell.ts`: `emitStep`, `loadSteersStep`, `markAnsweredStep`) called by thin per-trigger workflow entrypoints — WDK requires distinct `'use workflow'` entrypoints, so a single `runAgent(profile)` function isn't literally possible; the substance (one emit path, shared steering, profile config) is realized. Deliberately deferred (noted below): re-expressing `conversation.ts`'s stream boilerplate onto the shared pieces (1.1–1.3 — works as-is, internal cleanup only), full record-always for jobs + background-job steerability (2.3/10.3 — the design flagged background-job steering as a latent affordance, not v1 scope), and a programmatic toolset-subset check (8.1 — preset-based for v1, since the only parent today, Sunny, has full tools).
+
 ## 1. Unified durable-run shell (D-DS11)
-- [ ] 1.1 Extract the shared `WorkflowAgent` shell into `runAgent(profile)`: `profile = {threadId (inbox), instructionsBuilder, tools, model, providerOptions, output_target, finalize}`; one `agent.stream` body with `loadSteers` in `prepareStep` and the stream-bridge/telemetry-off boilerplate factored in once
-- [ ] 1.2 Define the `finalize` strategy parameterized by `recoverOnMiss ∈ {model, rawtext, none}` (D-DS14); the conversation profile uses `model` (delivery-classification + recovery backstop + turn-record persistence — unchanged behavior), jobs use `rawtext`, silent uses `none`
-- [ ] 1.3 Re-express `conversation.ts` as the conversation profile of `runAgent` (perpetual run-supply; full tools; `output_target=user`; `recoverOnMiss: model`) with behavior identical to today
-- [x] 1.4 Re-express `job.ts` (`runJob`) as the background-job profile (single run; host tools; `output_target=user`; `recoverOnMiss: rawtext`) — delete its bespoke `deliver()` (now the backstop branch of the shared finalize)
+- [~] 1.1 Shared shell *pieces* extracted to `workflows/runShell.ts` (`emitStep` + `loadSteersStep` + `markAnsweredStep`, telemetry-off pattern), reused across job/scheduled/subagent. A single `runAgent(profile)` function is not possible (WDK needs distinct entrypoints); the `agent.stream` boilerplate is still per-entrypoint. **Deferred:** factor the stream call itself into a shared helper.
+- [~] 1.2 `recoverOnMiss` realized per profile: jobs/subagent emit final text (`rawtext`), the conversation keeps its `model` recovery backstop, `silent` emits nothing. Not yet one parameterized `finalize` function shared across all four.
+- [ ] 1.3 Re-express `conversation.ts` onto the shared pieces (its `sendStep` is still a local gateway send; functionally identical to `emitStep` with `user`). **Deferred** — works as-is; lowest-value, highest-regression-risk part.
+- [x] 1.4 Re-express `job.ts` (`runJob`) as the background-job profile (single run; host tools; `output_target=user`; `recoverOnMiss: rawtext`) — `deliver()` deleted, now `emitStep`
 - [x] 1.5 Re-express `scheduledJob.ts` (`runScheduledJob`) as the scheduled-job profile (single run; memory tools; `recoverOnMiss: rawtext`); anti-recursion (D-SC4) preserved by the profile toolset
 
 ## 2. Configurable output target + the single emit path (D-DS1/12/14)
-- [ ] 2.1 `output_target ∈ {user, parent, silent}` on the run profile; resolve to `{transport, destThreadId}`: `user`→`(gateway, ownerThread)`, `parent`→`(appendInbound+supervisor, parentInbox)`, `silent`→none
-- [x] 2.2 Single `emit(text) → route(output_target)` step (`workflows/runShell.ts` `emitStep`); `send_message.execute` and the finalize backstop both call it (no separate `deliver`); invisible at the tool surface (no `target` arg)
-- [ ] 2.3 Record-always ⟂ emit-by-target: every run persists its turn record to its own inbox thread regardless of `output_target`; `silent` profiles omit the `send_message` tool entirely
-- [x] 2.4 Set the nightly memory-consolidation schedule to `output_target=silent` (stop the 2am text); default scheduled/promoted jobs remain `user` — verify result still recorded
+- [x] 2.1 `output_target ∈ {user, parent, silent}` (`src/agent/outputTarget.ts`) resolving to `{transport, destThreadId}`: `user`→gateway, `parent`→`appendInbound`+wake, `silent`→none
+- [x] 2.2 Single `emit(text) → route(output_target)` step (`workflows/runShell.ts` `emitStep`); the finalize backstop + the child `send_message` both call it (no separate `deliver`); invisible at the tool surface
+- [~] 2.3 Record-always ⟂ emit-by-target: `silent` records via `recordRun` (scheduled) / gateway-persist (user jobs); children persist their report to the parent thread. **Deferred:** a uniform "every run appends a turn record to its OWN inbox thread" for jobs.
+- [x] 2.4 Nightly memory-consolidation schedule set `output_target=silent` (stops the 2am text); default scheduled/promoted jobs remain `user`; result still recorded — verified
 
 ## 3. Run-supply policy: generalize the router into the supervisor (D-DS13)
-- [ ] 3.1 Generalize `DurableTurnRouter` into the delegation supervisor: a registry of `thread → {profile, run-supply policy ∈ {perpetual, single}}`; owner/group threads = perpetual, jobs/children = single
-- [ ] 3.2 Each trigger registers a thread + asks the supervisor to supply run(s): gateway inbound → owner (perpetual); `cron tick` → scheduled (single); `start_job` → background (single); `delegate_task` → child (single)
-- [ ] 3.3 Wire the supervisor so a `'use step'` can nudge it for a thread (it is a bootstrap-closure local today, reachable only via `gateway.onInbound`) — decide: expose on the runtime singleton, or model the parent↔child channel as an internal gateway whose `appendInbound` flows through the existing `onInbound → route` path (see design — favor the internal-gateway option for fidelity)
+- [x] 3.1 Run-supply policy realized as two engines: `DurableTurnRouter` = perpetual (owner/group threads), `DelegationSupervisor` = single-run (children). (Kept as siblings rather than one registry class — same policy distinction, less churn on the shipped router.)
+- [x] 3.2 Triggers: gateway inbound → router (perpetual); `start_job` → `runJob` (single); `cron` → `runScheduledJob` (single); `delegate_task` → supervisor → `runSubagent` (single)
+- [x] 3.3 Supervisor reachable from a `'use step'` via the runtime singleton (`runtime.spawnChild`/`steerChild`/`wakeThread`); `router.wake()` drives the parent thread (chose the runtime-seam option)
 
 ## 4. Configurable model per run (D-DS9)
-- [ ] 4.1 Add a `model` (+ providerOptions) parameter to the run profile; default to the main thread's model when unset; jobs no longer hardcode `claude-opus-4-8`
+- [x] 4.1 `model` parameter on job/scheduled/subagent (test-aware `buildTurnModel` seam); jobs no longer hardcode `claude-opus-4-8`; children default to `claude-sonnet-4-6`
 
 ## 5. Non-blocking delegation + durable link (D-DS2)
-- [ ] 5.1 `delegate_task(brief, {tools, model, output_target:"parent", ...})`: register a child thread + start a single child run on the shared shell; return the `childId` handle immediately; the parent turn ends without blocking
-- [ ] 5.2 Durable parent↔child link store (Postgres; none exists today): `parentRunId`/`parentInboxThreadId`, `childId`, `childRunId`, `childInboxThreadId`, `status`, `output_target`, `depth`; survives restart
-- [ ] 5.3 Ensure child intermediate work never enters the parent context (only what the child emits to the parent inbox reaches it)
+- [x] 5.1 `delegate_task(task, label?, toolset?)`: supervisor starts a single child run, returns the child id immediately; parent never blocks
+- [x] 5.2 Durable `subagent_links` table (migration 0008): `parentThreadId`, `childThreadId`, `childRunId`, `status`, `depth`, `orchestrator`, `model`; survives restart
+- [x] 5.3 Child runs in its own context/inbox; only what it emits reaches the parent (verified: parent context untouched by child tool calls)
 
 ## 6. Bidirectional async messaging over the store + `loadSteers` seam (D-DS3/4)
-- [ ] 6.1 Child→parent: `send_message` with `output_target="parent"` → `appendInbound(parentInbox, {from: childId, text, final?})` (a `'use step'`) + nudge the supervisor
-- [ ] 6.2 Parent→child: `message_subagent(childId, text)` tool → `appendInbound(childInbox, {from:"parent", text})` + nudge
-- [ ] 6.3 Recipient folds via `loadSteers` in `prepareStep` with sender-name prefix (reuse `steerMessageText`) when in-flight; when idle, the supervisor starts a fresh recipient run that drains the inbox
-- [ ] 6.4 "Await == async" (D-DS3): a parent that delegated and ended its turn is restarted by the supervisor when the child's report lands as unanswered inbound — verify no keep-alive/hook involved
-- [ ] 6.5 On a `final` child report, terminate the child and clean up its link (D-DS7 run-to-completion lifecycle)
+- [x] 6.1 Child→parent: `emitStep` (`output_target=parent`) → `appendInterRunMessage(parentInbox)` + `wakeThread` (no `resumeHook`)
+- [x] 6.2 Parent→child: `message_subagent(child, text)` → `steerChild` → append to the child inbox
+- [x] 6.3 Recipient folds via `loadSteers` in `prepareStep` with sender-name prefix (`steerMessageText`); idle parent restarted by `router.wake`
+- [x] 6.4 "Await == async": a child report wakes the parent's run-supply (verified `wakeThread(parentThread)`); no keep-alive/hook
+- [x] 6.5 On completion the child reports + closes its link (`completeLink('done')`) — run-to-completion (D-DS7)
 
 ## 7. Terminal-failure watchdog = the supervisor's `await` (D-DS6)
-- [ ] 7.1 The supervisor `await`s each child run's `returnValue`; on terminal failure or budget exhaustion its catch/timeout branch writes `child_failed`/`child_timeout` to the parent inbox + nudges (no separate poller)
-- [ ] 7.2 Parent-side handling of failure events (retry / drop-and-continue / inform owner)
+- [x] 7.1 Supervisor `await`s the child `returnValue`; its catch branch marks the link `failed` + delivers a failure event to the parent inbox + wakes it (verified)
+- [x] 7.2 Parent-side handling: the failure event lands in the thread; Sunny decides retry/drop/inform per the delegation skill (§4)
 
 ## 8. Least-privilege + bounds + observability (D-DS5/8/10)
-- [ ] 8.1 Enforce child toolset/credentials ⊆ parent's, through the same gating/tiers/blocklist (`security-permissions`, `tool-access`); the profile toolset is the enforcement point
-- [ ] 8.2 Bounds: concurrency cap (default 3), depth cap (default 2, tracked via the link store's `depth`), no sub-delegation unless orchestrator; per-child token/time budget feeding the D-DS6 watchdog
-- [ ] 8.3 Untrusted-content path: helper/preset to spawn a no-credential, no-high-consequence-tool child
-- [ ] 8.4 Child runs appear as parent-associated runs/steps in the WDK runs inspector; external trajectory telemetry stays off under v7 (D-DS10) — inherit the parent's posture
+- [~] 8.1 Least-privilege via toolset presets (`host`/`readonly`/`memory`/`none`); credential reach rides the existing bash whitelist. **Deferred:** a programmatic `child ⊆ parent` subset check (moot for v1 — the only parent, Sunny, has full tools; children are always a subset).
+- [x] 8.2 Bounds: concurrency cap (3) + depth cap (2, via link `depth`) + no sub-delegation (non-orchestrator children have no `delegate_task`) — enforced in the supervisor, unit-tested
+- [x] 8.3 Untrusted-content preset: `toolset:'none'` → a child with only `send_message` (no host tools, no credentials)
+- [x] 8.4 Child runs are WDK runs (visible in the runs inspector); external trajectory telemetry stays off under v7 (inherited posture)
 
-## 9. Delegation skill (proposal: delegation skill; design.md "Delegation Skill — authoring spec")
-- [ ] 9.1 Author the delegation skill file from the authoring spec in `design.md` (§1 when-to/not-to delegate + interdependence principle; §2 four-part task brief; §3 output-target selection; §4 model selection; §5 patterns: delegate-and-await, fan-out→synthesize, verifier/critic, research, untrusted-content containment, evaluator-optimizer, routing; §6 structured returns; §7 bounds & safety; §8 bidirectional-comms usage; §9 anti-patterns)
-- [ ] 9.2 Register/index the skill so Sunny can discover it; cross-link to memory and to `security-permissions` for the untrusted-content pattern
+## 9. Delegation skill
+- [x] 9.1 `delegation` seed skill authored from the design's authoring spec (§1 interdependence; §2 four-part brief; §3 tools; §4 model/bounds; §5 patterns; §6 returns/comms; §7 anti-patterns)
+- [x] 9.2 Registered as a seed (`SEED_SKILLS`), auto-discovered; the untrusted-content pattern cross-links the containment toolset
 
 ## 10. Verification
-- [ ] 10.1 Shell parity: each profile (conversation, background, scheduled) behaves identically to today after the refactor — conversation keeps delivery-classification + recovery backstop + turn-record persistence
-- [ ] 10.2 `silent` job sends nothing on completion (no 2am text); result still recorded to its own thread
-- [ ] 10.3 A background job is steerable in-flight via its own inbox without the steer bleeding into the owner conversation (D-DS12)
-- [ ] 10.4 Delegation returns a handle without blocking; parent ends its turn; child intermediate work absent from parent context
-- [ ] 10.5 Child→parent report restarts/folds into the parent without polling or a hook; parent→child steer folds into a running child via `loadSteers`
-- [ ] 10.6 Child cannot exceed parent tools/credentials; untrusted-content child has none
-- [ ] 10.7 Concurrency/depth caps enforced; non-orchestrator child cannot delegate
-- [ ] 10.8 Terminal child failure/timeout surfaces to the parent via the supervisor's `await`
-- [ ] 10.9 Child runs visible in the inspector, associated with the parent
+- [x] 10.1 Shell parity: conversation (4) + job (2) + scheduled (2) workflow tests green; conversation keeps its recovery backstop + turn record
+- [x] 10.2 `silent` schedule sends nothing; result recorded — verified (`scheduledJob.workflow.test.ts`)
+- [ ] 10.3 Background job steerable in-flight via its own inbox without bleed — **deferred** (background-job steering is a latent affordance, not v1 scope; children ARE steerable + tested)
+- [x] 10.4 Delegation returns a handle without blocking; child intermediate work absent from the parent context — verified
+- [x] 10.5 Child→parent report wakes/folds the parent without poll/hook; parent→child steer lands on the child inbox — verified (`delegation.workflow.test.ts`)
+- [~] 10.6 Untrusted-content child has no tools/credentials (`toolset:'none'`, verified by construction); a programmatic parent-subset check is deferred (8.1)
+- [x] 10.7 Concurrency/depth caps enforced; non-orchestrator child cannot delegate — unit-tested (`delegationSupervisor.integration.test.ts`)
+- [x] 10.8 Terminal child failure surfaces to the parent via the supervisor's `await` — unit-tested
+- [~] 10.9 Child runs are WDK runs (inspector-visible by construction); no dedicated inspector assertion test
