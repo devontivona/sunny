@@ -189,7 +189,7 @@ export class DashboardData {
       const participants = participantNames(partRows);
       out.push({
         threadId: g.threadId,
-        channel: latest?.channel ?? 'imessage',
+        channel: channelForThread(g.threadId, latest?.channel ?? 'imessage'),
         participants,
         label: participants.join(', ') || threadLabel(g.threadId),
         isGroup: isGroupThread(g.threadId),
@@ -212,7 +212,7 @@ export class DashboardData {
     const participants = participantNames(ordered.filter((r) => r.role === 'user'));
     return {
       threadId,
-      channel: ordered[0]?.channel ?? 'imessage',
+      channel: channelForThread(threadId, ordered[0]?.channel ?? 'imessage'),
       participants,
       isGroup: isGroupThread(threadId),
       label: participants.join(', ') || threadLabel(threadId),
@@ -527,6 +527,17 @@ function participantNames(rows: { senderName: string | null; senderId: string }[
     }
   }
   return names.sort((a, b) => a.localeCompare(b));
+}
+
+/** The channel a thread lives on, derived from the threadId's transport prefix — reliable even
+ *  though stored assistant/outbound rows default their `channel` to 'imessage' (they're written
+ *  with only a threadId). `sendblue:` → imessage; `loopback:` → loopback; otherwise fall back to
+ *  the stored row channel. */
+function channelForThread(threadId: string, fallback: string): string {
+  const transport = threadId.split(':')[0];
+  if (transport === 'sendblue') return 'imessage';
+  if (transport === 'loopback') return 'loopback';
+  return fallback;
 }
 
 /** Fallback label when a thread has no human participants (e.g. only assistant rows).
