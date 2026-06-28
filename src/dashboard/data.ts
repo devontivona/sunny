@@ -179,16 +179,19 @@ export class DashboardData {
         .where(eq(messages.threadId, g.threadId))
         .orderBy(desc(messages.timestamp))
         .limit(1);
-      // Prefer a human's name for the label (assistant rows are all "Sunny").
-      const [latestUser] = await this.db
-        .select({ senderName: messages.senderName })
+      // ALL distinct human participants (assistant rows are all "Sunny") — not just the
+      // last sender, so a group/multi-person thread shows a stable roster rather than
+      // flipping label with whoever texted most recently.
+      const partRows = await this.db
+        .selectDistinct({ senderName: messages.senderName, senderId: messages.senderId })
         .from(messages)
-        .where(and(eq(messages.threadId, g.threadId), eq(messages.role, 'user')))
-        .orderBy(desc(messages.timestamp))
-        .limit(1);
+        .where(and(eq(messages.threadId, g.threadId), eq(messages.role, 'user')));
+      const participants = participantNames(partRows);
       out.push({
         threadId: g.threadId,
-        label: threadLabel(g.threadId, latestUser?.senderName ?? null),
+        channel: latest?.channel ?? 'imessage',
+        participants,
+        label: participants.join(', ') || threadLabel(g.threadId),
         isGroup: isGroupThread(g.threadId),
         lastAt: new Date(g.lastAt).toISOString(),
         count: Number(g.count),
@@ -206,10 +209,13 @@ export class DashboardData {
       .orderBy(desc(messages.timestamp))
       .limit(limit);
     const ordered = rows.reverse();
-    const userName = ordered.findLast((r) => r.role === 'user' && r.senderName)?.senderName ?? null;
+    const participants = participantNames(ordered.filter((r) => r.role === 'user'));
     return {
       threadId,
-      label: threadLabel(threadId, userName),
+      channel: ordered[0]?.channel ?? 'imessage',
+      participants,
+      isGroup: isGroupThread(threadId),
+      label: participants.join(', ') || threadLabel(threadId),
       messages: ordered.map(toConversationMessage),
     };
   }
@@ -508,12 +514,28 @@ function isGroupThread(threadId: string): boolean {
   return threadId.split(':')[2] === 'g';
 }
 
-function threadLabel(threadId: string, senderName: string | null): string {
+/** Distinct human participant names for a thread, deterministic (sorted), de-duplicated.
+ *  Falls back to the raw sender id when a row has no display name. */
+function participantNames(rows: { senderName: string | null; senderId: string }[]): string[] {
+  const seen = new Set<string>();
+  const names: string[] = [];
+  for (const r of rows) {
+    const n = r.senderName?.trim() || r.senderId;
+    if (n && !seen.has(n)) {
+      seen.add(n);
+      names.push(n);
+    }
+  }
+  return names.sort((a, b) => a.localeCompare(b));
+}
+
+/** Fallback label when a thread has no human participants (e.g. only assistant rows).
+ *  Prefers a decoded phone number; otherwise a short group/thread tag. */
+function threadLabel(threadId: string): string {
   if (isGroupThread(threadId)) {
     const gid = threadId.split(':')[3] ?? '';
     return `Group ${gid.slice(0, 8)}`;
   }
-  if (senderName) return senderName;
   // Sendblue encodes the contact as base64 of the phone number — decode it to a
   // short, human-readable number rather than showing the raw base64 blob.
   const tail = threadId.split(':').pop() ?? threadId;

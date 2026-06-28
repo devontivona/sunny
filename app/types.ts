@@ -142,6 +142,10 @@ export interface ConversationMessage {
 export interface ThreadSummary {
   threadId: string;
   label: string;
+  /** All distinct human participants in the thread (stable, not just the last sender). */
+  participants: string[];
+  /** Channel the thread lives on (e.g. "imessage", "loopback"). */
+  channel: string;
   isGroup: boolean;
   lastAt: string;
   count: number;
