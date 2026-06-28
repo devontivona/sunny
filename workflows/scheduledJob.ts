@@ -4,7 +4,6 @@ import { WorkflowAgent } from '@ai-sdk/workflow';
 import { buildModel } from '../src/agent/turnModel.js';
 import { getWritable } from 'workflow';
 import { MEMORY_TOOL_SPECS } from '../src/agent/tools/memorySpecs.js';
-import { telemetryEnabled } from '../src/observability/enabled.js';
 import { AGENT_STEP_LIMIT } from '../src/agent/limits.js';
 
 /**
@@ -52,9 +51,6 @@ export async function runScheduledJob(input: ScheduledJobInput): Promise<void> {
     providerOptions: {
       anthropic: { thinking: { type: 'adaptive', display: 'omitted' }, effort: 'high' },
     },
-    // OpenTelemetry → Langfuse (observability D-OB1): group with the thread's session. v7
-    // carries this via runtimeContext (the v6 telemetry.metadata channel was removed).
-    runtimeContext: { langfuseSessionId: input.threadId, scheduleId: input.scheduleId },
   });
 
   // WorkflowAgent writes raw model-call parts to the durable run stream; the dashboard reader
@@ -64,12 +60,9 @@ export async function runScheduledJob(input: ScheduledJobInput): Promise<void> {
     writable: getWritable<ModelCallStreamPart>(),
     // No work cap — runaway backstop only.
     stopWhen: ({ steps }) => steps.length >= AGENT_STEP_LIMIT,
-    // Trace the scheduled run's LLM + memory-tool steps. No-op when tracing is disabled.
-    telemetry: {
-      isEnabled: telemetryEnabled(),
-      functionId: 'scheduled-job',
-      includeRuntimeContext: { langfuseSessionId: true, scheduleId: true },
-    },
+    // Durable AI-SDK telemetry INTENTIONALLY OFF (WDK `node:vm` realm the telemetry integration
+    // can't reach — emits nothing while looking enabled). See conversation.ts (vercel/ai #12164).
+    telemetry: { isEnabled: false },
   });
 
   const text = finalAssistantText(result.messages);

@@ -30,7 +30,6 @@ import {
   usageOf,
   type Delivery,
 } from '../src/agent/delivery.js';
-import { telemetryEnabled } from '../src/observability/enabled.js';
 import { AGENT_STEP_LIMIT } from '../src/agent/limits.js';
 
 /**
@@ -97,16 +96,6 @@ export async function runConversation(input: ConversationInput): Promise<void> {
     instructions: setup.instructions,
     tools: buildTools({ threadId, ownerName, ownerDm }),
     providerOptions: setup.providerOptions,
-    // OpenTelemetry → Langfuse (D-OB1/2): one session per thread (langfuseSessionId) preserves
-    // the existing per-thread grouping. v7 carries this via runtimeContext (the v6
-    // `experimental_telemetry.metadata` channel was removed) — opted into spans below.
-    runtimeContext: {
-      langfuseSessionId: threadId,
-      langfuseUserId: ownerDm ? ownerName : 'group',
-      isGroup,
-      deliveryMode: setup.deliveryMode,
-      tier: 'durable',
-    },
     onEnd: (e) => {
       finish = { totalUsage: e.totalUsage };
     },
@@ -124,17 +113,14 @@ export async function runConversation(input: ConversationInput): Promise<void> {
     messages: pending.messages,
     writable: getWritable<ModelCallStreamPart>(),
     stopWhen: ({ steps }) => steps.length >= AGENT_STEP_LIMIT,
-    telemetry: {
-      isEnabled: telemetryEnabled(),
-      functionId: 'agent-turn',
-      includeRuntimeContext: {
-        langfuseSessionId: true,
-        langfuseUserId: true,
-        isGroup: true,
-        deliveryMode: true,
-        tier: true,
-      },
-    },
+    // Durable AI-SDK telemetry is INTENTIONALLY OFF (not silently failing). v7 emits agent spans
+    // from the agent loop, which the WDK runs in an isolated `node:vm` realm that the global
+    // `registerTelemetry` integration can't reach — so any `isEnabled: true` here produces ZERO
+    // spans, just looking enabled. We disable it explicitly until the upstream gap is fixed
+    // (vercel/ai #12164) or we adopt the event-forwarding bridge (proven, shelved — see the
+    // migrate-ai-sdk-v7-workflow-agent change notes / git branch worktree-agent-af47988b13eeb3162).
+    // Main-process telemetry (recovery `generateText`, etc.) is unaffected and still emits.
+    telemetry: { isEnabled: false },
     // Double-text steering (R12): before each model step (after the first — the window was
     // just read, so nothing new can have arrived yet), fold any message that landed mid-turn
     // into the next step. Reads the store in a step (deterministic on replay); excludes

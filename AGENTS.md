@@ -214,3 +214,11 @@ delivered, tokensIn/Out, cachedIn, cacheWriteIn, ms }`. Set `SUNNY_LOG_CONTENT=1
 text (dev only). Prompt caching is on (stable prefix marked `cacheControl: ephemeral`): a
 multi-step turn shows `cachedIn > 0` (prefix re-read at ~0.1×); single-step turns show
 `cacheWriteIn > 0` (the write).
+
+### Langfuse / OTel telemetry — DURABLE PATH IS OFF (AI SDK v7)
+
+After the v7 migration (`@ai-sdk/workflow` `WorkflowAgent`), **durable conversational turns + jobs do NOT emit OpenTelemetry/Langfuse spans**, and this is **intentional, not broken**: the durable `agent.stream(...)` calls set `telemetry: { isEnabled: false }` (see `workflows/{conversation,job,scheduledJob}.ts`). v7 dispatches agent telemetry from inside the WDK's `node:vm` realm, which the global `registerTelemetry` integration (in `src/observability/instrumentation.ts`) cannot reach, so any `isEnabled: true` there would produce zero spans while *looking* enabled. We disable it explicitly instead. Upstream: vercel/ai#12164 (draft in the change's `UPSTREAM-12164.md`).
+
+- **Still works:** main-process AI-SDK telemetry — the delivery-recovery `generateText` pass and any in-process loop calls still emit to Langfuse (`registerTelemetry(new OpenTelemetry(...))` stays wired). The `TracePromotingSpanProcessor` reads the v7 attribute names (`ai.settings.context.*`, `gen_ai.agent.name`).
+- **Workflow runs ARE still inspectable** via the WDK runs/dashboard (the runtime emits its own spans).
+- **To re-enable durable telemetry** (when Langfuse matters or upstream fixes it): pull the proven, shelved event-forwarding bridge — git branch `worktree-agent-af47988b13eeb3162` (a custom per-call `Telemetry` integration that forwards lifecycle events out of the VM via a journaled `'use step'`; journaling also dedupes replays). See the `migrate-ai-sdk-v7-workflow-agent` change notes.

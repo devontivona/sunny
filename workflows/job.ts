@@ -8,7 +8,6 @@ import {
   type BashToolInput,
   type FileReadToolInput,
 } from '../src/agent/tools/bashSpecs.js';
-import { telemetryEnabled } from '../src/observability/enabled.js';
 import { AGENT_STEP_LIMIT } from '../src/agent/limits.js';
 
 /**
@@ -47,10 +46,6 @@ export async function runJob(input: JobInput): Promise<void> {
     providerOptions: {
       anthropic: { thinking: { type: 'adaptive', display: 'omitted' }, effort: 'high' },
     },
-    // OpenTelemetry → Langfuse (observability D-OB1): langfuseSessionId = the thread, so a job
-    // groups with the conversation that spawned it. v7 carries this via runtimeContext (the v6
-    // `experimental_telemetry.metadata` channel was removed) — opted into spans below.
-    runtimeContext: { langfuseSessionId: input.threadId, langfuseUserId: input.ownerName },
   });
 
   // WorkflowAgent writes raw model-call parts to the durable run stream; the dashboard reader
@@ -61,12 +56,10 @@ export async function runJob(input: JobInput): Promise<void> {
     writable: getWritable<ModelCallStreamPart>(),
     // No work cap — runaway backstop only (the old 30-step cap could cut off a build).
     stopWhen: ({ steps }) => steps.length >= AGENT_STEP_LIMIT,
-    // Trace the background job's LLM + tool steps (no-op when tracing is disabled).
-    telemetry: {
-      isEnabled: telemetryEnabled(),
-      functionId: 'background-job',
-      includeRuntimeContext: { langfuseSessionId: true, langfuseUserId: true },
-    },
+    // Durable AI-SDK telemetry INTENTIONALLY OFF — the WDK runs the agent loop in an isolated
+    // `node:vm` realm the global telemetry integration can't reach, so it would emit nothing
+    // while looking enabled. See workflows/conversation.ts for the full rationale (vercel/ai #12164).
+    telemetry: { isEnabled: false },
   });
 
   const text = finalAssistantText(result.messages);
