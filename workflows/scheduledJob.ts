@@ -1,12 +1,8 @@
-import type { ModelCallStreamPart, ModelMessage } from '../src/agent/aiTypes.js';
 import { tool } from '@ai-sdk/provider-utils';
-import { WorkflowAgent } from '@ai-sdk/workflow';
 import { buildTurnModel, type MockResponseDescriptor } from '../src/agent/turnModel.js';
-import { getWritable } from 'workflow';
 import { MEMORY_TOOL_SPECS } from '../src/agent/tools/memorySpecs.js';
-import { AGENT_STEP_LIMIT } from '../src/agent/limits.js';
 import { type OutputTarget, outputTargetOr } from '../src/agent/outputTarget.js';
-import { emitStep } from './runShell.js';
+import { emitStep, finalAssistantText, streamAgent } from './runShell.js';
 
 /**
  * Durable job for a fired schedule — the scheduled-job PROFILE of the shared run shell
@@ -41,7 +37,7 @@ export async function runScheduledJob(input: ScheduledJobInput): Promise<void> {
 
   const setup = await buildSetup(input.model ?? DEFAULT_SCHEDULED_MODEL);
 
-  const agent = new WorkflowAgent({
+  const { result } = await streamAgent({
     model: buildTurnModel(setup.modelId, setup.testModelResponses),
     instructions: setup.instructions,
     tools: {
@@ -61,18 +57,7 @@ export async function runScheduledJob(input: ScheduledJobInput): Promise<void> {
     providerOptions: {
       anthropic: { thinking: { type: 'adaptive', display: 'omitted' }, effort: 'high' },
     },
-  });
-
-  // WorkflowAgent writes raw model-call parts to the durable run stream; the dashboard reader
-  // converts them to UIMessageChunk (design 3.1 — transform runs at the reader, not the sandbox).
-  const result = await agent.stream({
     messages: [{ role: 'user', content: input.prompt }],
-    writable: getWritable<ModelCallStreamPart>(),
-    // No work cap — runaway backstop only.
-    stopWhen: ({ steps }) => steps.length >= AGENT_STEP_LIMIT,
-    // Durable AI-SDK telemetry INTENTIONALLY OFF (WDK `node:vm` realm the telemetry integration
-    // can't reach — emits nothing while looking enabled). See conversation.ts (vercel/ai #12164).
-    telemetry: { isEnabled: false },
   });
 
   // Record-always ⟂ emit-by-target (D-DS14): the outcome is recorded regardless of output target
@@ -146,21 +131,6 @@ async function recallStep(query: string, limit?: number): Promise<string> {
   const { execRecall } = await import('../src/agent/tools/memory.js');
   const { store } = await getRuntime();
   return execRecall(store, query, limit);
-}
-
-/** Final assistant text from the run's messages (the delivery payload). */
-function finalAssistantText(messages: ModelMessage[]): string {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i];
-    if (!m || m.role !== 'assistant') continue;
-    if (typeof m.content === 'string') return m.content.trim();
-    return m.content
-      .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
-      .map((p) => p.text)
-      .join('')
-      .trim();
-  }
-  return '';
 }
 
 async function recordRun(runId: string, output: string): Promise<void> {

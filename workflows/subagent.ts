@@ -1,17 +1,20 @@
-import type { ModelCallStreamPart, ModelMessage } from '../src/agent/aiTypes.js';
 import { tool } from '@ai-sdk/provider-utils';
-import { WorkflowAgent } from '@ai-sdk/workflow';
 import { buildTurnModel, type MockResponseDescriptor } from '../src/agent/turnModel.js';
-import { getWritable } from 'workflow';
 import {
   BASH_TOOL_SPECS,
   type BashToolInput,
   type FileReadToolInput,
 } from '../src/agent/tools/bashSpecs.js';
 import { SEND_MESSAGE_SPEC } from '../src/agent/tools/sendMessageSpec.js';
-import { assistantUIMessageFromResponse, extractSends, steerMessageText } from '../src/agent/delivery.js';
-import { AGENT_STEP_LIMIT } from '../src/agent/limits.js';
-import { emitStep, loadSteersStep, markAnsweredStep } from './runShell.js';
+import { assistantUIMessageFromResponse, extractSends } from '../src/agent/delivery.js';
+import {
+  bashStep,
+  emitStep,
+  fileReadStep,
+  finalAssistantText,
+  markAnsweredStep,
+  streamAgent,
+} from './runShell.js';
 
 /**
  * Delegated child run — the subagent PROFILE of the shared run shell (durable-subagents
@@ -52,43 +55,19 @@ export async function runSubagent(input: SubagentInput): Promise<void> {
 
   const setup = await buildSetup(input.model ?? DEFAULT_CHILD_MODEL, input.label ?? 'subagent');
 
-  const agent = new WorkflowAgent({
+  // Steerable run (D-DS4): fold parent→child steers (`message_subagent`) that arrive on the
+  // child's own inbox thread, exactly like owner double-text steering on the conversation. The
+  // child's inbox starts empty (its brief is the initial message, not a stored window), so the
+  // base exclude set is empty — only what we fold.
+  const { result, foldedIds } = await streamAgent({
     model: buildTurnModel(setup.modelId, setup.testModelResponses),
     instructions: setup.instructions,
     tools: buildChildTools(input),
     providerOptions: {
       anthropic: { thinking: { type: 'adaptive', display: 'omitted' }, effort: 'high' },
     },
-  });
-
-  // Ids already folded, so loadSteers only returns genuinely new parent→child steers. The child's
-  // inbox starts empty (its task is the initial message, not a stored window), so there is no
-  // window to exclude — only what we fold.
-  const foldedIds: string[] = [];
-
-  const result = await agent.stream({
     messages: [{ role: 'user', content: input.task }],
-    writable: getWritable<ModelCallStreamPart>(),
-    stopWhen: ({ steps }) => steps.length >= AGENT_STEP_LIMIT,
-    // Durable AI-SDK telemetry INTENTIONALLY OFF (WDK isolated realm; see conversation.ts).
-    telemetry: { isEnabled: false },
-    // Parent→child steering (D-DS4): fold any message the parent sent mid-run via
-    // `message_subagent`, exactly like owner double-text steering on the conversation.
-    prepareStep: async ({ stepNumber, messages }) => {
-      if (stepNumber === 0) return {};
-      const steers = await loadSteersStep(input.childThreadId, foldedIds);
-      if (steers.length === 0) return {};
-      for (const s of steers) foldedIds.push(s.messageId);
-      return {
-        messages: [
-          ...messages,
-          ...steers.map((s) => ({
-            role: 'user' as const,
-            content: [{ type: 'text' as const, text: steerMessageText(s.text, s.senderName, false) }],
-          })),
-        ],
-      };
-    },
+    steering: { inboxThreadId: input.childThreadId, isGroup: false, baseExcludeIds: [] },
   });
 
   // Report to the parent (D-DS14 recoverOnMiss: rawtext): if the child reported intentionally via
@@ -180,43 +159,4 @@ async function closeLinkStep(childThreadId: string): Promise<void> {
   const { completeLink } = await import('../src/agent/delegation.js');
   const { db } = await getRuntime();
   await completeLink(db, childThreadId, 'done');
-}
-
-async function bashStep(args: BashToolInput): Promise<string> {
-  'use step';
-
-  const { getRuntime } = await import('../src/runtime.js');
-  const { execBash } = await import('../src/agent/tools/bash.js');
-  const { resolverFromEnv } = await import('../src/credentials/index.js');
-  const { config } = await getRuntime();
-  return execBash(config, resolverFromEnv() ?? undefined, {
-    command: args.command,
-    cwd: args.cwd,
-    timeout_ms: args.timeout_ms,
-    credentials: args.credentials
-      ? Object.fromEntries(Object.entries(args.credentials).map(([k, v]) => [k, String(v)]))
-      : undefined,
-  });
-}
-
-async function fileReadStep(args: FileReadToolInput): Promise<string> {
-  'use step';
-
-  const { readFileSafe } = await import('../src/agent/tools/bash.js');
-  return readFileSafe(args.path, args.max_bytes);
-}
-
-/** Final assistant text from the run's messages (the terminal report payload). */
-function finalAssistantText(messages: ModelMessage[]): string {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i];
-    if (!m || m.role !== 'assistant') continue;
-    if (typeof m.content === 'string') return m.content.trim();
-    return m.content
-      .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
-      .map((p) => p.text)
-      .join('')
-      .trim();
-  }
-  return '';
 }
