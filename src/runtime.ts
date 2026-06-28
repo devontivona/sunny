@@ -2,6 +2,7 @@ import { getRun, start as startWorkflow } from 'workflow/api';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { runScheduledJob } from '../workflows/scheduledJob.js';
 import { DurableTurnRouter } from './agent/durableRouter.js';
+import { DelegationSupervisor } from './agent/delegationSupervisor.js';
 import { loadConfig, type SunnyConfig } from './config/index.js';
 import { createDb, runMigrations, type Db } from './db/client.js';
 import { messages } from './db/schema.js';
@@ -25,13 +26,27 @@ export interface Runtime {
   store: ConversationStore;
   db: Db;
   /**
-   * Wake a thread's run-supply (durable-subagents D-DS13): ensure the supervisor is draining
-   * `threadId` as durable runs. Lets a `'use step'` (which can reach the runtime singleton but
-   * not the in-process supervisor directly — task 3.3) nudge the supervisor after writing to a
-   * recipient's inbox — e.g. a child reporting to its parent. Optional: undefined until the
-   * supervisor is wired and in entrypoints that don't run conversations.
+   * Wake a thread's run-supply (durable-subagents D-DS13): ensure the supervisor/router is
+   * draining `threadId` as durable runs. Lets a `'use step'` (which can reach the runtime
+   * singleton but not the in-process router directly — task 3.3) nudge it after writing to a
+   * recipient's inbox — e.g. a child reporting to its parent. Optional: undefined in entrypoints
+   * that don't run conversations (e.g. the ECHO mode).
    */
   wakeThread?: (threadId: string) => void;
+
+  /**
+   * Spawn a delegated child run (durable-subagents D-DS2). Reached from the `delegate_task`
+   * tool's `'use step'`; routes to the in-process `DelegationSupervisor`, which enforces the
+   * caps, starts the child, records the link, and arms the watchdog. Returns the child handle
+   * immediately (non-blocking). Undefined when delegation isn't wired.
+   */
+  spawnChild?: (
+    input: import('./agent/delegationSupervisor.js').SpawnInput,
+  ) => Promise<import('./agent/delegationSupervisor.js').SpawnResult>;
+
+  /** Steer a still-running child (durable-subagents D-DS4): append to its inbox; its in-flight
+   *  run folds the steer via `loadSteers`. Reached from the `message_subagent` tool's step. */
+  steerChild?: (childThreadId: string, text: string) => Promise<void>;
 }
 
 /**
@@ -114,6 +129,34 @@ async function start(): Promise<Runtime> {
     gateway.onInbound(async (event: ChannelEvent) => durableRouter!.route(event));
   }
 
+  // Delegation seams (durable-subagents D-DS2/4/13): the in-process supervisor is the run-supply
+  // engine for single-run children + the watchdog. A child's report lands on its PARENT's thread —
+  // for top-level Sunny that's the owner conversation thread the router already drives — so
+  // `wakeThread` is just `router.wake`. `spawnChild`/`steerChild` give a `'use step'` a path to the
+  // in-process supervisor it can't reach directly (task 3.3). All undefined in ECHO (no router).
+  let wakeThread: ((threadId: string) => void) | undefined;
+  let spawnChild: Runtime['spawnChild'];
+  let steerChild: Runtime['steerChild'];
+  if (durableRouter) {
+    const router = durableRouter;
+    wakeThread = (threadId) => router.wake(threadId);
+    const supervisor = new DelegationSupervisor(
+      db,
+      store,
+      async (input) => {
+        const { runSubagent } = await import('../workflows/subagent.js');
+        const run = await startWorkflow(runSubagent, [input]);
+        return { runId: run.runId, returnValue: run.returnValue };
+      },
+      wakeThread,
+    );
+    spawnChild = (input) => supervisor.spawn(input);
+    steerChild = async (childThreadId, text) => {
+      const { steerChild: steer } = await import('./agent/delegation.js');
+      await steer(store, childThreadId, text);
+    };
+  }
+
   await gateway.start();
 
   // Restart recovery: re-run any inbound received but never answered (process died mid-turn).
@@ -171,7 +214,7 @@ async function start(): Promise<Runtime> {
   });
 
   log.info('runtime started');
-  return { config, gateway, store, db };
+  return { config, gateway, store, db, wakeThread, spawnChild, steerChild };
 }
 
 /** Longest we wait on an in-flight conversation run at startup before proceeding to recovery

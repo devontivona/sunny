@@ -48,6 +48,16 @@ export class DurableTurnRouter {
     this.ensureWorker(event.threadId);
   }
 
+  /**
+   * Wake a thread's run-supply (durable-subagents D-DS13): ensure a serial worker is draining it.
+   * The runtime exposes this as `wakeThread` so a `'use step'` can nudge the router after writing
+   * to a thread's inbox out-of-band — e.g. a child reporting to its parent (the parent thread is a
+   * normal conversation thread this router already drives), or the watchdog delivering a failure.
+   */
+  wake(threadId: string): void {
+    this.ensureWorker(threadId);
+  }
+
   /** Re-drive any inbound that was received but never answered (durable-main-loop D5): on
    *  startup, ensure a worker runs for each affected thread. The worker reads the store, so a
    *  message that landed while the gateway was down is answered. */

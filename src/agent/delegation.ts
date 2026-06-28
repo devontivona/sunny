@@ -95,34 +95,74 @@ export async function getLinkByChildThread(
   return row;
 }
 
+/** Min interface the inter-run messaging needs — `ConversationStore.appendInbound`. Keeps the
+ *  low-level append usable from both the workflow step (full runtime) and the in-process
+ *  supervisor (store only), without dragging the whole `Runtime` type into the latter. */
+export interface InboundSink {
+  appendInbound(event: ChannelEvent): Promise<boolean>;
+}
+
 /**
- * Child → parent report (durable-subagents D-DS4): deliver `text` into the parent run's inbox
- * thread as an inbound the parent's next run folds via `loadSteers`, then wake the parent's
- * run-supply so an idle parent is restarted. The recipient is just another thread in the store;
- * there is no hook. Runs inside `emitStep`'s `'use step'`, so it's memoized on replay.
+ * Deliver a message from one run into another run's inbox thread (durable-subagents D-DS4) — a
+ * child→parent report, a parent→child steer, or a watchdog failure event. The recipient's run
+ * folds it via `loadSteers`; the recipient is just another thread in the store, there is no hook.
+ * Returns whether it was newly inserted (deduped on replay by the channel+messageId unique index).
  */
-export async function reportToParent(
-  runtime: Runtime,
-  out: EmitTarget,
+export async function appendInterRunMessage(
+  store: InboundSink,
+  threadId: string,
+  from: { id: string; name: string },
   text: string,
-): Promise<void> {
+): Promise<boolean> {
   const event: ChannelEvent = {
     channel: DELEGATION_CHANNEL,
-    threadId: out.destThreadId,
+    threadId,
     messageId: randomUUID(),
-    senderId: out.fromId ?? 'subagent',
-    senderName: out.fromName ?? 'subagent',
+    senderId: from.id,
+    senderName: from.name,
     text,
     attachments: [],
     timestamp: new Date(),
     isGroup: false,
     isOwner: false,
   };
-  const inserted = await runtime.store.appendInbound(event);
+  return store.appendInbound(event);
+}
+
+/**
+ * Child → parent report (D-DS4): deliver `text` into the parent run's inbox thread, then wake the
+ * parent's run-supply so an idle parent is restarted (an in-flight parent folds it via
+ * `loadSteers`). Runs inside `emitStep`'s `'use step'`, so it's memoized on replay.
+ */
+export async function reportToParent(
+  runtime: Runtime,
+  out: EmitTarget,
+  text: string,
+): Promise<void> {
+  const name = out.fromName ?? 'subagent';
+  const inserted = await appendInterRunMessage(
+    runtime.store,
+    out.destThreadId,
+    { id: out.fromId ?? 'subagent', name },
+    text,
+  );
   if (!inserted) return;
-  // Wake the parent's run-supply: an in-flight parent folds this via loadSteers at its next
-  // step; an idle parent is restarted by the supervisor. `wakeThread` is a no-op until the
-  // supervisor is wired (it is reached only by `parent`-targeted children, which require it).
+  // Wake the parent's run-supply: an idle parent is restarted by the supervisor/router.
   runtime.wakeThread?.(out.destThreadId);
-  log.info('child reported to parent', { parentThread: out.destThreadId, from: event.senderName });
+  log.info('child reported to parent', { parentThread: out.destThreadId, from: name });
+}
+
+/**
+ * Parent → child steer (D-DS4): deliver `text` into the child's own inbox thread. A child is a
+ * single in-flight run (run-to-completion, D-DS7), so its `loadSteers` folds the steer at its
+ * next step; no wake is needed (if the child already ended, the steer is simply a no-op). Used by
+ * the `message_subagent` tool.
+ */
+export async function steerChild(
+  store: InboundSink,
+  childThreadId: string,
+  text: string,
+): Promise<void> {
+  await appendInterRunMessage(store, childThreadId, { id: 'parent', name: 'parent' }, text);
+  log.info('parent steered child', { childThread: childThreadId });
 }

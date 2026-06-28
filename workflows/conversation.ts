@@ -18,6 +18,7 @@ import {
 } from '../src/agent/tools/bashSpecs.js';
 import { MEMORY_TOOL_SPECS } from '../src/agent/tools/memorySpecs.js';
 import { SEND_MESSAGE_SPEC, STAY_SILENT_SPEC } from '../src/agent/tools/sendMessageSpec.js';
+import { DELEGATE_TASK_SPEC, MESSAGE_SUBAGENT_SPEC } from '../src/agent/tools/delegationSpecs.js';
 import {
   assistantUIMessageFromResponse,
   buildTurnRecord,
@@ -259,6 +260,21 @@ function buildTools(ctx: { threadId: string; ownerName: string; ownerDm: boolean
       ...MEMORY_TOOL_SPECS.recall_history,
       execute: ({ query, limit }) => recallStep(query, limit),
     }),
+    // Delegation (durable-subagents): spawn an isolated child that reports back, and steer one
+    // that is still working. Non-blocking — a child's report arrives as a later inbound the
+    // router folds into a fresh turn (D-DS2/3/4). Owner DMs only (delegation acts with host reach).
+    ...(ownerDm
+      ? {
+          delegate_task: tool({
+            ...DELEGATE_TASK_SPEC,
+            execute: ({ task, label, toolset }) => delegateStep(threadId, { task, label, toolset }),
+          }),
+          message_subagent: tool({
+            ...MESSAGE_SUBAGENT_SPEC,
+            execute: ({ child, text }) => steerChildStep(child, text),
+          }),
+        }
+      : {}),
     // Host tools: owner DMs only — real host access (D-TA2), mirroring the in-process loop.
     ...(ownerDm
       ? {
@@ -413,6 +429,54 @@ async function startJobStep(threadId: string, task: string, ownerName: string): 
   const { runJob } = await import('./job.js');
   const run = await start(runJob, [{ threadId, task, ownerName }]);
   return `Started durable background job ${run.runId}; it will message the user on completion.`;
+}
+
+/**
+ * Delegate a subtask to an isolated child (durable-subagents D-DS2): hand the brief to the
+ * in-process supervisor (via the runtime seam — a step can't reach it directly, task 3.3), which
+ * enforces the caps, starts the child, links it, and arms the watchdog. Returns the child's id
+ * immediately (non-blocking); the child reports back as a later inbound on THIS thread. Top-level
+ * Sunny delegations are depth 1 and non-orchestrator (no sub-delegation, D-DS8).
+ */
+async function delegateStep(
+  parentThreadId: string,
+  args: { task: string; label?: string; toolset?: 'host' | 'readonly' | 'memory' | 'none' },
+): Promise<string> {
+  'use step';
+
+  const { getRuntime } = await import('../src/runtime.js');
+  const rt = await getRuntime();
+  if (!rt.spawnChild) return 'Delegation is unavailable in this runtime.';
+  const res = await rt.spawnChild({
+    parentThreadId,
+    task: args.task,
+    label: args.label,
+    toolset: args.toolset,
+    depth: 1,
+    orchestrator: false,
+  });
+  if ('error' in res) {
+    return res.error === 'depth_cap'
+      ? 'Delegation refused: max delegation depth reached.'
+      : 'Delegation refused: already at the concurrent-subagent limit (3). Wait for one to finish.';
+  }
+  return (
+    `Delegated to subagent "${args.label ?? 'subagent'}" (id ${res.childThreadId}). It is working ` +
+    `in its own context and will report back here when done; you can keep going or steer it with ` +
+    `message_subagent.`
+  );
+}
+
+/** Steer a still-working child (durable-subagents D-DS4): append to its inbox; its in-flight run
+ *  folds the message via `loadSteers`. A no-op if the child already finished (run-to-completion). */
+async function steerChildStep(childThreadId: string, text: string): Promise<string> {
+  'use step';
+
+  const { getRuntime } = await import('../src/runtime.js');
+  const rt = await getRuntime();
+  if (!rt.steerChild) return 'Subagent steering is unavailable in this runtime.';
+  await rt.steerChild(childThreadId, text);
+  return `Sent to subagent ${childThreadId}; it will fold your message into its work.`;
 }
 
 async function memWriteStep(args: {
