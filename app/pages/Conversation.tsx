@@ -35,7 +35,7 @@ function ThreadMeta({
   threadId: string;
 }) {
   return (
-    <span className="font-mono text-xs text-fg-dim" title={threadId}>
+    <span className="font-mono text-fg-dim" title={threadId}>
       {channel}
       {isGroup ? ' · group' : ' · dm'} · {threadId}
     </span>
