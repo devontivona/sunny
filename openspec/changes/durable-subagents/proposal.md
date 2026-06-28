@@ -1,3 +1,5 @@
+> **⚠️ Reconcile before implementing** (post v6→v7 migration + post `durable-main-loop`): the durable primitive is now `@ai-sdk/workflow` `WorkflowAgent` (not `DurableAgent`); durable runs emit no external trajectory telemetry under v7 (runs inspector only); and the `resumeHook`/`prepareStep`-drain steering premise below describes the keep-alive model `durable-main-loop` abandoned (it now uses one-run-per-turn + gateway serialization + `loadSteers` store-polling). See the reconciliation note in `design.md`. These are not addressed by the v7 migration PR.
+
 ## Why
 
 Some tasks are big enough to blow out Sunny's context window, parallelizable enough to be worth fanning out, or risky enough that they should run with fewer privileges than the main agent. Today the only way to run work off the main thread is a Tier-2 durable job that always notifies the *user* on completion — which (a) can't return a result *to Sunny* for further reasoning, (b) can't run silently for maintenance (the nightly memory-consolidation job texts the owner at 2am for no reason), and (c) can't be constrained below full privilege.

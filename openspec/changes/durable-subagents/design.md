@@ -2,6 +2,11 @@
 
 > Supersedes the carved-out `subagents` change. Reframed: subagents are not a new capability but a generalization of `durable-execution`. Depends on `durable-main-loop`.
 
+> **⚠️ NEEDS RECONCILIATION before implementation (added 2026-06-28, post v6→v7 migration + post `durable-main-loop` landing):**
+> 1. **Primitive renamed (v7):** the durable agent is now `@ai-sdk/workflow`'s **`WorkflowAgent`**, not `@workflow/ai`'s `DurableAgent` (which v7 replaced). Read `DurableAgent` below as `WorkflowAgent`.
+> 2. **Telemetry (v7):** durable runs currently emit **no external trajectory telemetry** (OTel/Langfuse) — a known AI SDK v7 + Workflow DevKit limitation (durable agent telemetry dispatches inside an isolated `node:vm` realm `registerTelemetry` can't reach; explicitly disabled, see the `migrate-ai-sdk-v7-workflow-agent` change). So D-DS10 / "Child runs are observable" are amended: child runs are inspectable via the **WDK runs inspector**, but external trajectory telemetry is off until upstream (vercel/ai#12164) or the shelved bridge restores it.
+> 3. **Steering model (pre-v7, from `durable-main-loop`):** this design's `resumeHook(runId, event)` + "suspends on a hook" + `prepareStep` drain premise describes the **keep-alive** model that `durable-main-loop` ultimately **abandoned** (it caused a turns-2+ hook FIFO **parking bug**). The shipped model is **one durable run per turn**, gateway-serialized, steered by **`loadSteers`** (a store read inside `prepareStep`), NOT `resumeHook`. The child↔parent channel here (child `send_message`→`resumeHook(parentRun)`, `message_subagent`→`resumeHook(childRun)`) must be re-grounded on that shipped model — likely a durable store the recipient's next turn-run drains via `loadSteers`, plus the gateway/router starting the next run — rather than a cross-turn hook listener (which parks). This is a substantive design change, NOT a mechanical rename, and is out of scope for the v7 PR.
+
 ## Context
 
 Complex tasks generate noisy intermediate work — large tool outputs, exploratory reads, dead ends — that, if run on the main thread, bloat Sunny's context and cost. Delegation runs a subtask in an isolated child and brings back only the result. The primary motivation is **context/token preservation**; least-privilege and bounded fan-out are what make it safe; durability and async messaging are what make it *usable without polling*.
@@ -74,7 +79,7 @@ Concurrency is capped (default ~3 concurrent children), spawn depth is capped (d
 A delegated/background run MAY specify its model. Cheap/bounded children run on a smaller model; Sunny reserves the stronger model for orchestration/synthesis/high-stakes review. Selection guidance lives in the skill.
 
 ### D-DS10 — Observed
-Child runs appear as nested runs/spans in the workflow inspector and in trajectory telemetry, so delegated work is as inspectable as the parent's (rides `durable-main-loop`'s runtime-observability work).
+Child runs appear as nested runs/steps in the **WDK workflow runs inspector**, so delegated work is as inspectable as the parent's (rides `durable-main-loop`'s runtime-observability work). **NOTE (v7):** external trajectory telemetry (OTel → Langfuse) is currently NOT emitted for durable runs — a known AI SDK v7 limitation (see the reconciliation note at the top + the `migrate-ai-sdk-v7-workflow-agent` change). Child runs inherit the parent's telemetry posture: when durable trajectory telemetry is re-enabled (upstream fix or the shelved event-forwarding bridge), child spans associate with the parent run; until then, the runs inspector is the observability surface.
 
 ### Rejected alternatives
 - **A separate `subagents` capability** — rejected; it would re-list inherited durable-execution substrate (isolation, durability, observability) as if novel. The only genuinely new mechanics are output-target routing, least-privilege subset, and the watchdog.

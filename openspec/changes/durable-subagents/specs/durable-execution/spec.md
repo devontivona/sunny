@@ -98,8 +98,12 @@ Delegation SHALL be bounded by a maximum number of concurrent children and a max
 - **THEN** the delegation is refused
 
 ### Requirement: Child runs are observable
-Child runs SHALL appear in the workflow runs inspector and in trajectory telemetry as runs/spans associated with their parent, so delegated work is as inspectable as the parent's.
+Child runs SHALL appear in the workflow runs inspector as runs/steps associated with their parent, so delegated work is as inspectable as the parent's. External trajectory telemetry (OpenTelemetry → Langfuse) is currently NOT emitted for durable runs (a known AI SDK v7 limitation — see the `durable-execution` "Conversational turns are observable on the durable runtime" requirement); when durable telemetry is re-enabled, child spans SHALL associate with their parent run.
 
 #### Scenario: Delegated work is inspectable
 - **WHEN** a child run executes
-- **THEN** its run and per-step trace are visible in the inspector and associated with the parent run
+- **THEN** its run and per-step trace are visible in the workflow runs inspector and associated with the parent run
+
+#### Scenario: External trajectory telemetry follows the durable-path posture
+- **WHEN** a child run executes while durable external telemetry is disabled (the current v7 posture)
+- **THEN** no external OTel/Langfuse spans are emitted for the child (consistent with the parent); observability is via the runs inspector
