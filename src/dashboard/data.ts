@@ -4,7 +4,16 @@ import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { messages, scheduleRuns, schedules } from '../db/schema.js';
 import type { SunnyConfig } from '../config/index.js';
-import { loadCore, memoryPaths, readTopic, sanitizeTopic } from '../memory/index.js';
+import {
+  loadCore,
+  memoryPaths,
+  personId,
+  readPerson,
+  readTopic,
+  sanitizePersonId,
+  sanitizeTopic,
+} from '../memory/index.js';
+import { Authorizer, type Role } from '../gateway/auth.js';
 import { listCredentials } from '../credentials/index.js';
 import { listMcpServers, serverHost } from '../mcp/registry.js';
 import { loadAllSkills, parseSkill, sanitizeSkillName } from '../skills/index.js';
@@ -54,6 +63,48 @@ export class DashboardData {
     const safe = sanitizeTopic(name);
     const content = readTopic(memoryPaths(this.config.runtimeDir), safe);
     return content === null ? null : { name: safe, content };
+  }
+
+  // --- People (multiplayer-family) -----------------------------------------
+
+  /** The trust roster: the owner + each configured family member, with whether a profile doc
+   *  exists yet. The owner's doc is USER.md; family docs are people/<id>.md. */
+  people(): {
+    people: { id: string; name: string; role: Role; identities: string[]; hasDoc: boolean }[];
+  } {
+    const paths = memoryPaths(this.config.runtimeDir);
+    const people: { id: string; name: string; role: Role; identities: string[]; hasDoc: boolean }[] =
+      [
+        {
+          id: 'owner',
+          name: this.config.owner.name,
+          role: 'owner',
+          identities: this.config.owner.identities,
+          hasDoc: existsSync(paths.USER),
+        },
+      ];
+    for (const f of this.config.family) {
+      const id = f.identities[0] ? personId(f.identities[0]) : sanitizePersonId(f.name);
+      people.push({
+        id,
+        name: f.name,
+        role: 'family',
+        identities: f.identities,
+        hasDoc: existsSync(paths.person(id)),
+      });
+    }
+    return { people };
+  }
+
+  /** A single roster member with their profile doc (owner → USER.md, family → people/<id>.md). */
+  person(
+    id: string,
+  ): { id: string; name: string; role: Role; identities: string[]; doc: string | null } | null {
+    const p = this.people().people.find((r) => r.id === id);
+    if (!p) return null;
+    const paths = memoryPaths(this.config.runtimeDir);
+    const doc = id === 'owner' ? loadCore(paths).user || null : readPerson(paths, id);
+    return { id: p.id, name: p.name, role: p.role, identities: p.identities, doc };
   }
 
   // --- Capabilities (tools / credentials / skills) -------------------------
@@ -216,13 +267,18 @@ export class DashboardData {
       .from(messages)
       .where(and(eq(messages.threadId, threadId), eq(messages.role, 'user')));
     const participants = participantNames(partRows);
+    // Resolve each human sender's trust tier (owner/family) from the roster so the conversation
+    // view can badge who's trusted (multiplayer-family).
+    const authorizer = new Authorizer(this.config);
     return {
       threadId,
       channel: channelForThread(threadId, ordered[0]?.channel ?? 'imessage'),
       participants,
       isGroup: isGroupThread(threadId),
       label: participants.join(', ') || threadLabel(threadId),
-      messages: ordered.map(toConversationMessage),
+      messages: ordered.map((r) =>
+        toConversationMessage(r, r.role === 'user' ? authorizer.resolveRole(r.senderId) : null),
+      ),
     };
   }
 
@@ -609,7 +665,7 @@ function mediaAttachments(rowId: string, payload: unknown) {
 }
 
 /** Turn a stored message row into the dashboard's conversation shape (D-WD3). */
-function toConversationMessage(row: typeof messages.$inferSelect) {
+function toConversationMessage(row: typeof messages.$inferSelect, senderRole: Role = null) {
   const parts = partsOf(row.payload);
   const meta = metaOf(row.payload);
   const attachments = mediaAttachments(row.id, row.payload);
@@ -623,6 +679,7 @@ function toConversationMessage(row: typeof messages.$inferSelect) {
       role: 'user' as const,
       timestamp: row.timestamp.toISOString(),
       senderName: row.senderName ?? null,
+      senderRole,
       delivered: [text || row.text].filter(Boolean),
       attachments,
       scratch: null,
@@ -647,6 +704,7 @@ function toConversationMessage(row: typeof messages.$inferSelect) {
     role: 'assistant' as const,
     timestamp: row.timestamp.toISOString(),
     senderName: row.senderName ?? null,
+    senderRole: null as Role,
     delivered: delivered.length > 0 ? delivered : row.text ? [row.text] : [],
     attachments,
     scratch: scratch || null,

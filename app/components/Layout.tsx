@@ -18,6 +18,7 @@ export const NAV: NavItem[] = [
   { path: 'mcp', label: 'MCP servers' },
   { path: 'skills', label: 'Skills' },
   { path: 'conversation', label: 'Conversation' },
+  { path: 'people', label: 'People' },
   { path: 'schedules', label: 'Schedules' },
   { path: 'jobs', label: 'Jobs' },
   { path: 'activity', label: 'Activity' },

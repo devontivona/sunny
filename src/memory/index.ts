@@ -87,6 +87,12 @@ export function readTopic(paths: MemoryPaths, name: string): string | null {
   return existsSync(file) ? readFileSync(file, 'utf8') : null;
 }
 
+/** Read a per-person profile doc by id (multiplayer-family D3), or null if none exists. */
+export function readPerson(paths: MemoryPaths, id: string): string | null {
+  const file = paths.person(id);
+  return existsSync(file) ? readFileSync(file, 'utf8') : null;
+}
+
 /** A person present in the current thread, for per-person doc loading (multiplayer-family D3). */
 export interface PersonRef {
   id: string;

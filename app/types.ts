@@ -116,11 +116,33 @@ export interface MessageAttachment {
   src: string;
 }
 
+export interface PersonSummary {
+  id: string;
+  name: string;
+  role: 'owner' | 'family' | null;
+  identities: string[];
+  hasDoc: boolean;
+}
+
+export interface PeopleView {
+  people: PersonSummary[];
+}
+
+export interface PersonDetail {
+  id: string;
+  name: string;
+  role: 'owner' | 'family' | null;
+  identities: string[];
+  doc: string | null;
+}
+
 export interface ConversationMessage {
   id: string;
   role: 'user' | 'assistant';
   timestamp: string;
   senderName: string | null;
+  /** Trust tier of a human sender (multiplayer-family); null for Sunny / unknown. */
+  senderRole: 'owner' | 'family' | null;
   /** Delivered bubbles: the user's text, or each assistant `send_message`. */
   delivered: string[];
   /** Inline image attachments (inbound + outbound), served via the auth gate. */

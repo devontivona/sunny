@@ -55,6 +55,11 @@ function Bubble({ m }: { m: ConversationMessage }) {
         <span className={isSunny ? 'text-secondary' : 'text-primary'}>
           {isSunny ? 'サニー' : m.senderName || 'You'}
         </span>
+        {!isSunny && m.senderRole && (
+          <span className={m.senderRole === 'owner' ? 'text-primary' : 'text-secondary'}>
+            [{m.senderRole}]
+          </span>
+        )}
         {isSunny && m.recovered && (
           <span
             className="text-error"
