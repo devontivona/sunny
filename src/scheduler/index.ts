@@ -21,6 +21,8 @@ export interface CreateScheduleInput {
   threadId: string;
   timezone: string;
   label?: string;
+  /** Output target for the fired run (durable-subagents D-DS1); defaults to 'user'. */
+  outputTarget?: 'user' | 'silent';
 }
 
 /** Parse a duration like '45s', '30m', '2h', '1d' into milliseconds. */
@@ -63,6 +65,7 @@ export async function createSchedule(db: Db, input: CreateScheduleInput): Promis
       threadId: input.threadId,
       timezone: input.timezone,
       label: input.label ?? null,
+      outputTarget: input.outputTarget ?? 'user',
       nextRunAt,
       active: true,
     })
@@ -103,6 +106,9 @@ export async function ensureConsolidationSchedule(
     threadId,
     timezone: tz,
     label: 'nightly-consolidation',
+    // Maintenance with no news value: record the outcome but send NO proactive message
+    // (durable-subagents D-DS1/§3 — the fix for the unwanted 2am consolidation text).
+    outputTarget: 'silent',
   });
   log.info('seeded nightly-consolidation schedule', { threadId });
 }

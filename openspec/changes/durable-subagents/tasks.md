@@ -5,14 +5,14 @@
 - [ ] 1.1 Extract the shared `WorkflowAgent` shell into `runAgent(profile)`: `profile = {threadId (inbox), instructionsBuilder, tools, model, providerOptions, output_target, finalize}`; one `agent.stream` body with `loadSteers` in `prepareStep` and the stream-bridge/telemetry-off boilerplate factored in once
 - [ ] 1.2 Define the `finalize` strategy parameterized by `recoverOnMiss ∈ {model, rawtext, none}` (D-DS14); the conversation profile uses `model` (delivery-classification + recovery backstop + turn-record persistence — unchanged behavior), jobs use `rawtext`, silent uses `none`
 - [ ] 1.3 Re-express `conversation.ts` as the conversation profile of `runAgent` (perpetual run-supply; full tools; `output_target=user`; `recoverOnMiss: model`) with behavior identical to today
-- [ ] 1.4 Re-express `job.ts` (`runJob`) as the background-job profile (single run; host tools; `output_target=user`; `recoverOnMiss: rawtext`) — delete its bespoke `deliver()` (now the backstop branch of the shared finalize)
-- [ ] 1.5 Re-express `scheduledJob.ts` (`runScheduledJob`) as the scheduled-job profile (single run; memory tools; `recoverOnMiss: rawtext`); anti-recursion (D-SC4) preserved by the profile toolset
+- [x] 1.4 Re-express `job.ts` (`runJob`) as the background-job profile (single run; host tools; `output_target=user`; `recoverOnMiss: rawtext`) — delete its bespoke `deliver()` (now the backstop branch of the shared finalize)
+- [x] 1.5 Re-express `scheduledJob.ts` (`runScheduledJob`) as the scheduled-job profile (single run; memory tools; `recoverOnMiss: rawtext`); anti-recursion (D-SC4) preserved by the profile toolset
 
 ## 2. Configurable output target + the single emit path (D-DS1/12/14)
 - [ ] 2.1 `output_target ∈ {user, parent, silent}` on the run profile; resolve to `{transport, destThreadId}`: `user`→`(gateway, ownerThread)`, `parent`→`(appendInbound+supervisor, parentInbox)`, `silent`→none
-- [ ] 2.2 Single `emit(text) → route(output_target)` step; `send_message.execute` and the finalize backstop both call it (no separate `deliver`); invisible at the tool surface (no `target` arg)
+- [x] 2.2 Single `emit(text) → route(output_target)` step (`workflows/runShell.ts` `emitStep`); `send_message.execute` and the finalize backstop both call it (no separate `deliver`); invisible at the tool surface (no `target` arg)
 - [ ] 2.3 Record-always ⟂ emit-by-target: every run persists its turn record to its own inbox thread regardless of `output_target`; `silent` profiles omit the `send_message` tool entirely
-- [ ] 2.4 Set the nightly memory-consolidation schedule to `output_target=silent` (stop the 2am text); default scheduled/promoted jobs remain `user` — verify result still recorded
+- [x] 2.4 Set the nightly memory-consolidation schedule to `output_target=silent` (stop the 2am text); default scheduled/promoted jobs remain `user` — verify result still recorded
 
 ## 3. Run-supply policy: generalize the router into the supervisor (D-DS13)
 - [ ] 3.1 Generalize `DurableTurnRouter` into the delegation supervisor: a registry of `thread → {profile, run-supply policy ∈ {perpetual, single}}`; owner/group threads = perpetual, jobs/children = single

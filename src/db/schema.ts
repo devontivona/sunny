@@ -65,6 +65,9 @@ export const schedules = pgTable(
     spec: text('spec').notNull(), // ISO timestamp | duration (e.g. '2h') | cron expr
     prompt: text('prompt').notNull(), // what Sunny should do when it fires
     threadId: text('thread_id').notNull(), // delivery target (default: owner DM)
+    /** Output target for the fired run (durable-subagents D-DS1): 'user' | 'silent'. A `silent`
+     *  schedule records its result but sends no proactive message (e.g. nightly consolidation). */
+    outputTarget: text('output_target').notNull().default('user'),
     timezone: text('timezone').notNull(),
     label: text('label'),
     nextRunAt: timestamp('next_run_at', { withTimezone: true }),

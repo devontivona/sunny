@@ -24,6 +24,14 @@ export interface Runtime {
   gateway: Gateway;
   store: ConversationStore;
   db: Db;
+  /**
+   * Wake a thread's run-supply (durable-subagents D-DS13): ensure the supervisor is draining
+   * `threadId` as durable runs. Lets a `'use step'` (which can reach the runtime singleton but
+   * not the in-process supervisor directly — task 3.3) nudge the supervisor after writing to a
+   * recipient's inbox — e.g. a child reporting to its parent. Optional: undefined until the
+   * supervisor is wired and in entrypoints that don't run conversations.
+   */
+  wakeThread?: (threadId: string) => void;
 }
 
 /**
@@ -142,6 +150,8 @@ async function start(): Promise<Runtime> {
             threadId: schedule.threadId,
             prompt: schedule.prompt,
             ownerName: config.owner.name,
+            // Route the fired run's reply by the schedule's target (D-DS1); 'silent' = record-only.
+            outputTarget: schedule.outputTarget === 'silent' ? 'silent' : 'user',
           },
         ]);
       },
