@@ -80,7 +80,9 @@ describe('runSubagent (workflow integration — real Local World)', () => {
     const reports = (await ctx.store.recentWindow(PARENT)).filter(
       (m) => m.role === 'user' && m.senderName === 'summarizer',
     );
-    expect(reports.map((r) => r.text)).toEqual(['summary: done']); // exactly one, from the tool
+    expect(reports).toHaveLength(1); // exactly one — the tool send, not also a terminal rawtext
+    expect(reports[0]?.text).toContain('summary: done');
+    expect(reports[0]?.text).toContain('summarizer'); // attributed so the parent knows the sender
     const [link] = await ctx.db.db
       .select()
       .from(subagentLinks)

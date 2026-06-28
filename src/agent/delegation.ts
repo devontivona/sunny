@@ -140,11 +140,16 @@ export async function reportToParent(
   text: string,
 ): Promise<void> {
   const name = out.fromName ?? 'subagent';
+  // Attribute the report so the parent reads it as a message from a NAMED subagent, not from the
+  // owner — the parent inbox can be the owner's own DM thread (D-DS12), where a bare report would
+  // be indistinguishable from the owner speaking. `Name: text` is the same speaker convention the
+  // model already follows in group threads, so no DM-specific rendering is needed.
+  const attributed = `${name} (subagent): ${text}`;
   const inserted = await appendInterRunMessage(
     runtime.store,
     out.destThreadId,
     { id: out.fromId ?? 'subagent', name },
-    text,
+    attributed,
   );
   if (!inserted) return;
   // Wake the parent's run-supply: an idle parent is restarted by the supervisor/router.
