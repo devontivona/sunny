@@ -71,6 +71,7 @@ export function assistantUIMessageFromResponse(messages: ModelMessage[]): UIMess
     }
   }
   const parts: UIMessage['parts'] = [];
+  const seenToolCallIds = new Set<string>();
   let sawAssistant = false;
   for (const m of messages) {
     if (m.role !== 'assistant') continue;
@@ -84,6 +85,12 @@ export function assistantUIMessageFromResponse(messages: ModelMessage[]): UIMess
         parts.push({ type: 'text', text: p.text as string } as UIMessage['parts'][number]);
       } else if (p.type === 'tool-call') {
         const id = p.toolCallId as string;
+        // Defense-in-depth: never emit the same tool-call id twice. A duplicate `tool_use` id
+        // makes Anthropic reject the whole prompt ("`tool_use` ids must be unique") on EVERY
+        // later turn, poisoning the thread so it can never make progress. The caller should pass
+        // only this turn's generated messages; this guard guarantees a valid row regardless.
+        if (seenToolCallIds.has(id)) continue;
+        seenToolCallIds.add(id);
         parts.push({
           type: `tool-${p.toolName as string}`,
           toolCallId: id,

@@ -220,5 +220,27 @@ multi-step turn shows `cachedIn > 0` (prefix re-read at ~0.1×); single-step tur
 After the v7 migration (`@ai-sdk/workflow` `WorkflowAgent`), **durable conversational turns + jobs do NOT emit OpenTelemetry/Langfuse spans**, and this is **intentional, not broken**: the durable `agent.stream(...)` calls set `telemetry: { isEnabled: false }` (see `workflows/{conversation,job,scheduledJob}.ts`). v7 dispatches agent telemetry from inside the WDK's `node:vm` realm, which the global `registerTelemetry` integration (in `src/observability/instrumentation.ts`) cannot reach, so any `isEnabled: true` there would produce zero spans while *looking* enabled. We disable it explicitly instead. Upstream: vercel/ai#12164 (draft in the change's `UPSTREAM-12164.md`).
 
 - **Still works:** main-process AI-SDK telemetry — the delivery-recovery `generateText` pass and any in-process loop calls still emit to Langfuse (`registerTelemetry(new OpenTelemetry(...))` stays wired). The `TracePromotingSpanProcessor` reads the v7 attribute names (`ai.settings.context.*`, `gen_ai.agent.name`).
-- **Workflow runs ARE still inspectable** via the WDK runs/dashboard (the runtime emits its own spans).
+- **Workflow runs ARE still inspectable** via the WDK CLI — see "Inspect durable runs" below (this is the primary observability for the durable path, since Langfuse is off here).
 - **To re-enable durable telemetry** (when Langfuse matters or upstream fixes it): pull the proven, shelved event-forwarding bridge — git branch `worktree-agent-af47988b13eeb3162` (a custom per-call `Telemetry` integration that forwards lifecycle events out of the VM via a journaled `'use step'`; journaling also dedupes replays). See the `migrate-ai-sdk-v7-workflow-agent` change notes.
+
+### Inspect durable runs — `npx workflow inspect` (durable path's primary observability)
+
+Since the durable path emits NO Langfuse spans (above), the WDK CLI is how you debug a **stuck or
+failing turn/job**. The Postgres world is already wired via `WORKFLOW_TARGET_WORLD=@workflow/world-postgres`
+in `.env`, so the CLI reads the live `sunny-postgres` `workflow.*` tables directly — just source `.env` first:
+
+```bash
+set -a; . ./.env; set +a
+npx workflow inspect runs --status failed --limit 10  # recent failing runs (a STORM = many for one workflow)
+npx workflow inspect run <runId>                      # the run's error.message + stack + input (incl. threadId) — decoded, no manual CBOR
+npx workflow inspect steps -r <runId> [-d]            # which step failed; -d includes step input/output data
+npx workflow inspect runs --web                       # local dashboard (also -i to paginate, --decrypt for encrypted fields)
+```
+
+A **retry storm** reads as a burst of `failed` runs for ONE workflow every few seconds (each run
+exhausts its 3 step-retries, then the router starts a fresh run for the still-unanswered inbound).
+`inspect run <id>` gives the real cause in one shot — e.g. a poisoned history surfaces as
+``AI_APICallError: messages.N.content.M: `tool_use` ids must be unique`` failing the `doStreamStep`.
+The offending thread is the run's `input.threadId`; from there read the window (`store.recentWindow`
+/ the `messages` table) to find the bad turn row. Prefer this CLI over hand-querying the `workflow.*`
+tables + decoding `*_cbor` columns (the error/IO live in CBOR, so raw SQL alone won't show them).
