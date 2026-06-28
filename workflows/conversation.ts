@@ -229,7 +229,8 @@ function buildTools(ctx: { threadId: string; ownerName: string; ownerDm: boolean
       ? {
           delegate_task: tool({
             ...DELEGATE_TASK_SPEC,
-            execute: ({ task, label, toolset }) => delegateStep(threadId, { task, label, toolset }),
+            execute: ({ task, label, toolset, model }) =>
+              delegateStep(threadId, { task, label, toolset, model }),
           }),
           message_subagent: tool({
             ...MESSAGE_SUBAGENT_SPEC,
@@ -388,11 +389,17 @@ async function startJobStep(threadId: string, task: string, ownerName: string): 
  */
 async function delegateStep(
   parentThreadId: string,
-  args: { task: string; label?: string; toolset?: 'host' | 'readonly' | 'memory' | 'none' },
+  args: {
+    task: string;
+    label?: string;
+    toolset?: 'host' | 'readonly' | 'memory' | 'none';
+    model?: 'sonnet' | 'opus' | 'haiku';
+  },
 ): Promise<string> {
   'use step';
 
   const { getRuntime } = await import('../src/runtime.js');
+  const { resolveChildModel } = await import('../src/agent/tools/delegationSpecs.js');
   const rt = await getRuntime();
   if (!rt.spawnChild) return 'Delegation is unavailable in this runtime.';
   const res = await rt.spawnChild({
@@ -400,6 +407,7 @@ async function delegateStep(
     task: args.task,
     label: args.label,
     toolset: args.toolset,
+    model: resolveChildModel(args.model),
     depth: 1,
     orchestrator: false,
   });

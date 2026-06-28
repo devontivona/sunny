@@ -41,8 +41,35 @@ export const DELEGATE_TASK_SPEC = {
           '(bash + file_read, for work that must act), "none" (NO tools — for containing ' +
           'untrusted content), "memory" (memory reads).',
       ),
+    model: z
+      .enum(['sonnet', 'opus', 'haiku'])
+      .optional()
+      .describe(
+        'Which model the child runs on (D-DS9): "sonnet" (the default — bounded, well-specified ' +
+          'work: research, reads, extraction, single-purpose subtasks), "opus" (hard reasoning, ' +
+          'synthesis, or high-stakes/adversarial verification), "haiku" (cheap + fast for simple, ' +
+          'high-volume classification/extraction). Tier deliberately — a strong lead delegating ' +
+          'to cheaper workers is the cost-effective shape; reserve opus for children whose ' +
+          'judgement quality actually matters.',
+      ),
   }),
 } as const;
+
+/** Friendly delegate model names → concrete model ids (matches the codebase's lineup;
+ *  `haiku` aligns with the recovery model). Keeps the agent-facing tool surface stable even
+ *  if the underlying ids change. */
+export const CHILD_MODELS = {
+  sonnet: 'claude-sonnet-4-6',
+  opus: 'claude-opus-4-8',
+  haiku: 'claude-haiku-4-5',
+} as const;
+
+export type ChildModelName = keyof typeof CHILD_MODELS;
+
+/** Resolve a friendly model name to its id, or undefined (→ the child's default model). */
+export function resolveChildModel(name?: string): string | undefined {
+  return name && name in CHILD_MODELS ? CHILD_MODELS[name as ChildModelName] : undefined;
+}
 
 export const MESSAGE_SUBAGENT_SPEC = {
   description:

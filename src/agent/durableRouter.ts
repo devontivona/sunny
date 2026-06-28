@@ -10,11 +10,8 @@ import { logger } from '../logger.js';
 
 const log = logger('durable-router');
 
-/** Re-fire typing at most this often per thread while a turn streams. */
+/** Re-fire typing at most this often per thread while a turn streams (before its first send). */
 const TYPING_THROTTLE_MS = 4000;
-/** Suppress typing for this long after a delivery so it doesn't reappear during a turn's
- *  post-send housekeeping (the model's wrap-up step still emits chunks after the last send). */
-const TYPING_POST_SEND_COOLDOWN_MS = 6000;
 
 /**
  * Durable Tier-1 router (durable-main-loop), the gateway-side counterpart of the per-turn
@@ -128,6 +125,7 @@ export class DurableTurnRouter {
       model: this.meta.modelId,
       effort: this.meta.effort,
     });
+    const runStartedAt = Date.now();
     void (async () => {
       let reader: ReadableStreamDefaultReader<UIMessageChunk> | null = null;
       try {
@@ -142,8 +140,15 @@ export class DurableTurnRouter {
           if (done) break;
           bus.publishTurnChunk(runId, value);
           const now = Date.now();
-          // Don't show typing right after a delivery (post-send wrap-up chunks).
-          if (now - (this.gateway.lastSentAt?.(threadId) ?? 0) < TYPING_POST_SEND_COOLDOWN_MS) {
+          // Stop showing typing once THIS turn has delivered a message. The reply itself clears the
+          // recipient's "…" indicator; Sendblue has no stop-typing API (only a fire-and-forget,
+          // auto-expiring one), so re-sending typing after the reply re-shows "…" with nothing
+          // following — and it then lingers for Sendblue's full expiry window (the stuck-on-after-
+          // reply bug). `lastSentAt` is per-thread, so compare against this run's start to mean
+          // "delivered THIS turn" (not a previous one). Before the first send, typing streams
+          // normally (throttled). Trade-off: no typing between multiple sends in one turn — accepted
+          // over a stuck indicator.
+          if ((this.gateway.lastSentAt?.(threadId) ?? 0) > runStartedAt) {
             continue;
           }
           if (now - (this.lastTyped.get(threadId) ?? 0) >= TYPING_THROTTLE_MS) {
