@@ -62,12 +62,12 @@ A child run's tools and credential references SHALL be a subset of its parent's,
 - **THEN** it can grant the child no credentials and no high-consequence tools
 
 ### Requirement: Bidirectional asynchronous parent-child messaging
-A parent run SHALL be able to send a message to a still-running child, and a child run SHALL be able to proactively send messages (progress or result) to its parent. Messages in both directions SHALL be delivered to the in-flight recipient run and folded in at its next step boundary, using the same mechanism as owner double-text steering, without the recipient polling.
+A parent run SHALL be able to send a message to a still-running child, and a child run SHALL be able to proactively send messages (progress or result) to its parent. Messages in both directions SHALL be delivered to the recipient — folded into its in-flight run at the next step boundary if it is running, otherwise picked up by the next run started for the recipient — using the same mechanism as owner double-text steering, without the recipient polling.
 
 #### Scenario: Child reports without the parent polling
 - **WHEN** a child has progress or a result to report
-- **THEN** it sends a message that is delivered to the parent run
-- **AND** the parent processes it at its next step boundary or wakes from idle to handle it, without having polled
+- **THEN** it sends a message that is delivered to the parent
+- **AND** the parent processes it at its next step boundary if running, or a fresh parent run is started to handle it if idle, without the parent having polled
 
 #### Scenario: Parent steers a running child
 - **WHEN** the parent sends a message to a child that is still working
