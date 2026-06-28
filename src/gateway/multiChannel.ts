@@ -58,6 +58,10 @@ export class MultiChannelGateway implements Gateway {
     return this.route(threadId).startTyping(threadId);
   }
 
+  stopTyping(threadId: string): Promise<void> {
+    return this.route(threadId).stopTyping?.(threadId) ?? Promise.resolve();
+  }
+
   lastSentAt(threadId: string): number | undefined {
     return this.route(threadId).lastSentAt?.(threadId);
   }

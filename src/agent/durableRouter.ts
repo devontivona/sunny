@@ -125,7 +125,6 @@ export class DurableTurnRouter {
       model: this.meta.modelId,
       effort: this.meta.effort,
     });
-    const runStartedAt = Date.now();
     void (async () => {
       let reader: ReadableStreamDefaultReader<UIMessageChunk> | null = null;
       try {
@@ -139,18 +138,11 @@ export class DurableTurnRouter {
           const { done, value } = await reader.read();
           if (done) break;
           bus.publishTurnChunk(runId, value);
+          // Show typing while the turn streams (throttled). It is cleared with an explicit
+          // `stopTyping` when the turn ends (the `finally` below) — Sendblue's typing-v2 supports
+          // `state: 'stop'`, so "…" disappears the moment Sunny is done instead of lingering for
+          // the transport's auto-expiry window (the stuck-on-after-reply bug).
           const now = Date.now();
-          // Stop showing typing once THIS turn has delivered a message. The reply itself clears the
-          // recipient's "…" indicator; Sendblue has no stop-typing API (only a fire-and-forget,
-          // auto-expiring one), so re-sending typing after the reply re-shows "…" with nothing
-          // following — and it then lingers for Sendblue's full expiry window (the stuck-on-after-
-          // reply bug). `lastSentAt` is per-thread, so compare against this run's start to mean
-          // "delivered THIS turn" (not a previous one). Before the first send, typing streams
-          // normally (throttled). Trade-off: no typing between multiple sends in one turn — accepted
-          // over a stuck indicator.
-          if ((this.gateway.lastSentAt?.(threadId) ?? 0) > runStartedAt) {
-            continue;
-          }
           if (now - (this.lastTyped.get(threadId) ?? 0) >= TYPING_THROTTLE_MS) {
             this.lastTyped.set(threadId, now);
             await this.gateway.startTyping(threadId).catch(() => {});
@@ -160,6 +152,9 @@ export class DurableTurnRouter {
         log.debug('run stream bridge ended', { runId, threadId, err: String(err) });
       } finally {
         await reader?.cancel().catch(() => {});
+        // Clear the typing indicator now that the turn is done (explicit stop; falls back to the
+        // transport's auto-expiry if the driver has no `stopTyping`).
+        await this.gateway.stopTyping?.(threadId).catch(() => {});
         let status: 'finished' | 'errored' = 'finished';
         try {
           status = (await getRun<unknown>(runId).status) === 'failed' ? 'errored' : 'finished';

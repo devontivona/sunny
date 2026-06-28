@@ -41,6 +41,8 @@ export class FakeGateway implements Gateway {
   readonly sent: SentMessage[] = [];
   /** Threads on which `startTyping` was called, in order. */
   readonly typingStarted: string[] = [];
+  /** Threads on which `stopTyping` was called, in order. */
+  readonly typingStopped: string[] = [];
 
   private handler: InboundHandler | null = null;
 
@@ -74,6 +76,10 @@ export class FakeGateway implements Gateway {
 
   async startTyping(threadId: string): Promise<void> {
     this.typingStarted.push(threadId);
+  }
+
+  async stopTyping(threadId: string): Promise<void> {
+    this.typingStopped.push(threadId);
   }
 
   lastSentAt(threadId: string): number | undefined {

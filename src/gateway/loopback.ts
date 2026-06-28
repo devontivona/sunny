@@ -79,6 +79,7 @@ export class LoopbackGateway implements Gateway {
   private readonly sentAt = new Map<string, number>();
   private readonly sendChain = new Map<string, Promise<unknown>>();
   private readonly typingFires = new Map<string, number>();
+  private readonly typingStops = new Map<string, number>();
   private seq = 0;
 
   constructor(deps: LoopbackGatewayDeps) {
@@ -126,6 +127,10 @@ export class LoopbackGateway implements Gateway {
 
   async startTyping(threadId: string): Promise<void> {
     this.typingFires.set(threadId, (this.typingFires.get(threadId) ?? 0) + 1);
+  }
+
+  async stopTyping(threadId: string): Promise<void> {
+    this.typingStops.set(threadId, (this.typingStops.get(threadId) ?? 0) + 1);
   }
 
   lastSentAt(threadId: string): number | undefined {
@@ -187,6 +192,11 @@ export class LoopbackGateway implements Gateway {
   /** How many times typing was fired for a thread (for typing-behavior assertions). */
   typingCount(threadId: string): number {
     return this.typingFires.get(threadId) ?? 0;
+  }
+
+  /** How many times the typing indicator was explicitly cleared for a thread. */
+  typingStopCount(threadId: string): number {
+    return this.typingStops.get(threadId) ?? 0;
   }
 }
 
