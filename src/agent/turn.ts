@@ -22,6 +22,7 @@ import { groupSpeakerPrefix } from './delivery.js';
  * media), so this module is NOT safe to import from workflow/orchestrator code.
  */
 export {
+  assistantUIMessageFromResponse,
   buildTurnRecord,
   calledStaySilent,
   classifyDelivery,

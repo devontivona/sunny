@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { setTestModelResponses, testModelResponses, TEST_TURN_MODEL_KEY } from './turnModel.js';
-import type { MockResponseDescriptor } from '@workflow/ai/test';
+import type { MockResponseDescriptor } from './mockModel.js';
 
 const reply = (text: string): MockResponseDescriptor[] => [
   { type: 'tool-call', toolName: 'send_message', input: JSON.stringify({ text }) },

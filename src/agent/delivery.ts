@@ -52,6 +52,61 @@ export function trimTrailingNonUser(messages: ModelMessage[]): ModelMessage[] {
   return out;
 }
 
+/**
+ * Reconstruct the turn's single assistant `UIMessage` from a `WorkflowAgent` result's
+ * `ModelMessage[]` (D-MG9, AI SDK v7). v6 `DurableAgent.stream({ collectUIMessages: true })`
+ * gave us `result.uiMessages`; v7 removed `collectUIMessages`, so we rebuild the same shape
+ * the persistence + delivery classification expect: ALL assistant content across steps merged
+ * into one UIMessage (`text` scratch parts + `tool-<name>` parts), with each tool part's
+ * `output` matched from the corresponding `tool`-role result message. Reasoning/file parts are
+ * dropped (reasoning is private and re-sending it is rejected by Anthropic — see `stripReasoning`).
+ * Returns undefined when the turn produced no assistant message.
+ */
+export function assistantUIMessageFromResponse(messages: ModelMessage[]): UIMessage | undefined {
+  const outputs = new Map<string, unknown>();
+  for (const m of messages) {
+    if (m.role !== 'tool' || !Array.isArray(m.content)) continue;
+    for (const p of m.content as Array<Record<string, unknown>>) {
+      if (p.type === 'tool-result') outputs.set(p.toolCallId as string, unwrapToolOutput(p.output));
+    }
+  }
+  const parts: UIMessage['parts'] = [];
+  let sawAssistant = false;
+  for (const m of messages) {
+    if (m.role !== 'assistant') continue;
+    sawAssistant = true;
+    if (typeof m.content === 'string') {
+      if (m.content) parts.push({ type: 'text', text: m.content } as UIMessage['parts'][number]);
+      continue;
+    }
+    for (const p of m.content as Array<Record<string, unknown>>) {
+      if (p.type === 'text') {
+        parts.push({ type: 'text', text: p.text as string } as UIMessage['parts'][number]);
+      } else if (p.type === 'tool-call') {
+        const id = p.toolCallId as string;
+        parts.push({
+          type: `tool-${p.toolName as string}`,
+          toolCallId: id,
+          state: 'output-available',
+          input: p.input,
+          output: outputs.has(id) ? outputs.get(id) : 'ok',
+        } as UIMessage['parts'][number]);
+      }
+      // reasoning / file parts intentionally dropped (see doc above).
+    }
+  }
+  return sawAssistant ? { id: 'turn', role: 'assistant', parts } : undefined;
+}
+
+/** Unwrap a v7 tool-result `output` ({ type, value }) to its plain value for the persisted
+ *  UIMessage part (history round-trips via `convertToModelMessages`); pass through anything else. */
+function unwrapToolOutput(output: unknown): unknown {
+  if (output && typeof output === 'object' && 'value' in output && 'type' in output) {
+    return (output as { value: unknown }).value;
+  }
+  return output;
+}
+
 /** The private scratchpad text of a turn: all `text` parts, joined and trimmed. */
 export function extractScratch(parts: UIMessage['parts']): string {
   return parts

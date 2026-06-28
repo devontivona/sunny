@@ -46,7 +46,9 @@ export interface ToolCatalogEntry {
 }
 
 interface ToolLike {
-  description?: string;
+  // v7 widened a tool's `description` to `string | ((options) => string)`; the catalog only
+  // reads static string descriptions (purposeOf guards non-strings).
+  description?: string | ((options: never) => string);
   inputSchema?: unknown;
 }
 
@@ -73,8 +75,8 @@ function paramsOf(inputSchema: unknown): ToolParam[] {
 
 /** Distill a model-facing description into a one-line directory purpose: the
  *  first sentence, whitespace-collapsed and length-capped. */
-function purposeOf(description: string | undefined): string {
-  const oneLine = (description ?? '').replace(/\s+/g, ' ').trim();
+function purposeOf(description: string | ((options: never) => string) | undefined): string {
+  const oneLine = (typeof description === 'string' ? description : '').replace(/\s+/g, ' ').trim();
   if (!oneLine) return '';
   const sentence = /^(.*?[.!?])(\s|$)/.exec(oneLine)?.[1]?.trim() ?? oneLine;
   return sentence.length > 160 ? `${sentence.slice(0, 159)}…` : sentence;

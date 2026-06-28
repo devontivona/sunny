@@ -1,14 +1,13 @@
-import {
-  tool,
-  type LanguageModelUsage,
-  type ModelMessage,
-  type SystemModelMessage,
-  type UIMessage,
-  type UIMessageChunk,
-} from 'ai';
-import type { SharedV3ProviderOptions } from '@ai-sdk/provider';
-import { DurableAgent } from '@workflow/ai/agent';
-import type { MockResponseDescriptor } from '@workflow/ai/test';
+import type {
+  LanguageModelUsage,
+  ModelCallStreamPart,
+  ModelMessage,
+  SystemModelMessage,
+} from '../src/agent/aiTypes.js';
+import { tool } from '@ai-sdk/provider-utils';
+import type { SharedV4ProviderOptions } from '@ai-sdk/provider';
+import { WorkflowAgent } from '@ai-sdk/workflow';
+import type { MockResponseDescriptor } from '../src/agent/mockModel.js';
 import { getWritable } from 'workflow';
 import { buildTurnModel } from '../src/agent/turnModel.js';
 import { z } from 'zod';
@@ -20,6 +19,7 @@ import {
 import { MEMORY_TOOL_SPECS } from '../src/agent/tools/memorySpecs.js';
 import { SEND_MESSAGE_SPEC, STAY_SILENT_SPEC } from '../src/agent/tools/sendMessageSpec.js';
 import {
+  assistantUIMessageFromResponse,
   buildTurnRecord,
   calledStaySilent,
   classifyDelivery,
@@ -30,7 +30,6 @@ import {
   usageOf,
   type Delivery,
 } from '../src/agent/delivery.js';
-import { telemetryEnabled } from '../src/observability/enabled.js';
 import { AGENT_STEP_LIMIT } from '../src/agent/limits.js';
 
 /**
@@ -60,7 +59,7 @@ export interface ConversationInput {
 interface TurnSetup {
   instructions: SystemModelMessage;
   modelId: string;
-  providerOptions: SharedV3ProviderOptions;
+  providerOptions: SharedV4ProviderOptions;
   deliveryMode: 'tool' | 'text';
   ownerName: string;
   /** Mock model responses set by a workflow test (plain serializable data), read in the step
@@ -82,7 +81,6 @@ export async function runConversation(input: ConversationInput): Promise<void> {
   // owner on DMs), so ownerDm ⇔ not-a-group — derived from the id alone (no extra input).
   const isGroup = threadId.split(':')[2] === 'g';
   const ownerDm = !isGroup;
-  const writable = getWritable<UIMessageChunk>();
 
   const setup = await setupTurn(ownerDm, threadId);
   const ownerName = setup.ownerName;
@@ -93,25 +91,12 @@ export async function runConversation(input: ConversationInput): Promise<void> {
   // Captured from the durable stream's completion (deterministic on replay).
   let finish: { totalUsage: LanguageModelUsage } | undefined;
 
-  const agent = new DurableAgent({
+  const agent = new WorkflowAgent({
     model: buildTurnModel(setup.modelId, setup.testModelResponses),
     instructions: setup.instructions,
     tools: buildTools({ threadId, ownerName, ownerDm }),
     providerOptions: setup.providerOptions,
-    // OpenTelemetry → Langfuse (D-OB1/2): one session per thread (langfuseSessionId)
-    // preserves the existing per-thread grouping. No-op when tracing is disabled.
-    experimental_telemetry: {
-      isEnabled: telemetryEnabled(),
-      functionId: 'agent-turn',
-      metadata: {
-        langfuseSessionId: threadId,
-        langfuseUserId: ownerDm ? ownerName : 'group',
-        isGroup,
-        deliveryMode: setup.deliveryMode,
-        tier: 'durable',
-      },
-    },
-    onFinish: (e) => {
+    onEnd: (e) => {
       finish = { totalUsage: e.totalUsage };
     },
   });
@@ -120,11 +105,22 @@ export async function runConversation(input: ConversationInput): Promise<void> {
   // any steers folded so far — so `loadSteers` only returns genuinely new mid-turn arrivals.
   const foldedIds: string[] = [];
 
+  // WorkflowAgent writes raw model-call parts to the durable run stream; the dashboard reader
+  // converts them to UIMessageChunk via `createModelCallToUIChunkTransform()` (design 3.1 — the
+  // transform can't run in the workflow sandbox, so it lives at the reader boundary). v7 dropped
+  // `collectUIMessages`, so the persisted turn is rebuilt from `result.messages` in `finalizeTurn`.
   const result = await agent.stream({
     messages: pending.messages,
-    writable,
-    collectUIMessages: true,
-    maxSteps: AGENT_STEP_LIMIT,
+    writable: getWritable<ModelCallStreamPart>(),
+    stopWhen: ({ steps }) => steps.length >= AGENT_STEP_LIMIT,
+    // Durable AI-SDK telemetry is INTENTIONALLY OFF (not silently failing). v7 emits agent spans
+    // from the agent loop, which the WDK runs in an isolated `node:vm` realm that the global
+    // `registerTelemetry` integration can't reach — so any `isEnabled: true` here produces ZERO
+    // spans, just looking enabled. We disable it explicitly until the upstream gap is fixed
+    // (vercel/ai #12164) or we adopt the event-forwarding bridge (proven, shelved — see the
+    // migrate-ai-sdk-v7-workflow-agent change notes / git branch worktree-agent-af47988b13eeb3162).
+    // Main-process telemetry (recovery `generateText`, etc.) is unaffected and still emits.
+    telemetry: { isEnabled: false },
     // Double-text steering (R12): before each model step (after the first — the window was
     // just read, so nothing new can have arrived yet), fold any message that landed mid-turn
     // into the next step. Reads the store in a step (deterministic on replay); excludes
@@ -152,7 +148,8 @@ export async function runConversation(input: ConversationInput): Promise<void> {
     threadId,
     ownerName,
     setup,
-    result,
+    messages: result.messages,
+    steps: result.steps.length,
     usage: finish?.totalUsage,
     priorMessages: pending.messages,
   });
@@ -167,12 +164,14 @@ async function finalizeTurn(args: {
   threadId: string;
   ownerName: string;
   setup: TurnSetup;
-  result: { uiMessages?: UIMessage[]; steps: readonly unknown[] };
+  /** The agent's response messages (D-MG9: rebuilds the turn's assistant UIMessage in v7). */
+  messages: ModelMessage[];
+  steps: number;
   usage: LanguageModelUsage | undefined;
   priorMessages: ModelMessage[];
 }): Promise<void> {
-  const { threadId, ownerName, setup, result, priorMessages } = args;
-  const assistant = result.uiMessages?.filter((m) => m.role === 'assistant').pop();
+  const { threadId, ownerName, setup, priorMessages } = args;
+  const assistant = assistantUIMessageFromResponse(args.messages);
   if (!assistant) return;
 
   // Drop private `reasoning` (extended-thinking) parts before persisting (D-MG8): they are
@@ -211,7 +210,7 @@ async function finalizeTurn(args: {
       usage,
       delivered,
       recovered,
-      steps: result.steps.length,
+      steps: args.steps,
     });
     await appendTurnStep(threadId, record, projection);
   }

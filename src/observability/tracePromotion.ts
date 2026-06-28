@@ -11,10 +11,16 @@ import type { AttributeValue } from '@opentelemetry/api';
  * though every child span carries the data. The in-process `ToolLoopAgent` looked fine only
  * because its `ai.streamText` span WAS the OTel root.
  *
- * Fix: the AI-SDK records `ai.telemetry.functionId`/`ai.telemetry.metadata.langfuse*` and the
- * prompt/response (`ai.prompt.messages`, `ai.response.text`/`toolCalls`) on its spans; Langfuse
- * promotes `langfuse.trace.{name,session.id,user.id,input,output}` to the trace from ANY span in
- * it (per the Langfuse OpenTelemetry mapping). So we copy them across on every AI-SDK span:
+ * Fix: the AI-SDK records the function id + per-call metadata and the prompt/response
+ * (`ai.prompt.messages`, `ai.response.text`/`toolCalls`) on its spans; Langfuse promotes
+ * `langfuse.trace.{name,session.id,user.id,input,output}` to the trace from ANY span in it (per
+ * the Langfuse OpenTelemetry mapping). So we copy them across on every AI-SDK span.
+ *
+ * AI SDK v7 (the `@ai-sdk/otel` integration) renamed the SOURCE attributes vs v6: the function id
+ * moved `ai.telemetry.functionId` → `gen_ai.agent.name`, and per-call metadata moved from the
+ * `ai.telemetry.metadata.*` channel to runtime-context attributes `ai.settings.context.*` (we feed
+ * `langfuseSessionId`/`langfuseUserId` via `telemetry.includeRuntimeContext`). The prompt/response
+ * attribute names are unchanged. We read the v7 names with the v6 names as fallback. So we copy:
  * - name/session/user are constant across a turn's spans → set once, idempotent.
  * - input  = the user's message (last user turn in the prompt) — same on every step → consistent.
  * - output = the delivered reply (model text, or `send_message` text) — set last-write-wins so the
@@ -26,12 +32,29 @@ import type { AttributeValue } from '@opentelemetry/api';
  * Registered BEFORE the `LangfuseSpanProcessor` so the promoted attributes are present when it
  * exports (mirrors `RedactingSpanProcessor`: `onEnding` while writable, `onEnd` as a fallback).
  */
-const SESSION_META = 'ai.telemetry.metadata.langfuseSessionId';
-const USER_META = 'ai.telemetry.metadata.langfuseUserId';
-const FUNCTION_ID = 'ai.telemetry.functionId';
-const PROMPT_MESSAGES = 'ai.prompt.messages';
-const RESPONSE_TEXT = 'ai.response.text';
-const RESPONSE_TOOLCALLS = 'ai.response.toolCalls';
+// Source attribute candidates, v7 first then v6 fallback (see header). `pick` returns the first
+// present string value among them.
+const SESSION_META = [
+  'ai.settings.context.langfuseSessionId',
+  'ai.telemetry.metadata.langfuseSessionId',
+];
+const USER_META = ['ai.settings.context.langfuseUserId', 'ai.telemetry.metadata.langfuseUserId'];
+const FUNCTION_ID = ['gen_ai.agent.name', 'ai.telemetry.functionId'];
+const PROMPT_MESSAGES = ['ai.prompt.messages'];
+const RESPONSE_TEXT = ['ai.response.text'];
+const RESPONSE_TOOLCALLS = ['ai.response.toolCalls'];
+
+/** First present string attribute among `keys`, else undefined. */
+function pick(
+  attrs: Record<string, AttributeValue | undefined>,
+  keys: string[],
+): string | undefined {
+  for (const k of keys) {
+    const v = attrs[k];
+    if (typeof v === 'string') return v;
+  }
+  return undefined;
+}
 
 const TRACE_NAME = 'langfuse.trace.name';
 const SESSION_ID = 'langfuse.session.id';
@@ -129,16 +152,16 @@ export class TracePromotingSpanProcessor implements SpanProcessor {
     attrs: Record<string, AttributeValue | undefined>,
     set: (key: string, value: string) => void,
   ): void {
-    const session = attrs[SESSION_META];
+    const session = pick(attrs, SESSION_META);
     if (typeof session !== 'string') return; // not one of our AI-SDK agent/job spans
     if (typeof attrs[SESSION_ID] !== 'string') set(SESSION_ID, session);
 
-    const user = attrs[USER_META];
+    const user = pick(attrs, USER_META);
     if (typeof user === 'string' && typeof attrs[USER_ID] !== 'string') set(USER_ID, user);
 
     // Name from the primary turn/job operation — NOT the `delivery-recovery` checkpoint, which
     // runs within a turn and would otherwise hijack the trace name from `agent-turn`.
-    const functionId = attrs[FUNCTION_ID];
+    const functionId = pick(attrs, FUNCTION_ID);
     const isRecovery = typeof functionId === 'string' && functionId.startsWith('delivery-recovery');
     if (typeof functionId === 'string' && !isRecovery && typeof attrs[TRACE_NAME] !== 'string') {
       set(TRACE_NAME, functionId);
@@ -146,15 +169,15 @@ export class TracePromotingSpanProcessor implements SpanProcessor {
 
     // Input = the user's message (constant across a turn's steps; the recovery checkpoint's prompt
     // has no user turn, so it contributes nothing).
-    const input = lastUserText(attrs[PROMPT_MESSAGES]);
+    const input = lastUserText(pick(attrs, PROMPT_MESSAGES));
     if (input && typeof attrs[TRACE_INPUT] !== 'string') set(TRACE_INPUT, input.slice(0, MAX_IO));
 
     // Output = the DELIVERED reply: the `send_message` text on a turn/job (plain model text is
     // scratch, D-MG8), or the model text on the recovery checkpoint (which generates the reply).
     // Last non-empty wins → the final reply.
     const output = isRecovery
-      ? modelText(attrs[RESPONSE_TEXT])
-      : sendMessageText(attrs[RESPONSE_TOOLCALLS]);
+      ? modelText(pick(attrs, RESPONSE_TEXT))
+      : sendMessageText(pick(attrs, RESPONSE_TOOLCALLS));
     if (output) set(TRACE_OUTPUT, output.slice(0, MAX_IO));
   }
 }

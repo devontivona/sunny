@@ -1,4 +1,4 @@
-import type { MockResponseDescriptor } from '@workflow/ai/test';
+import type { MockResponseDescriptor } from '../../src/agent/mockModel.js';
 import { ConversationStore } from '../../src/gateway/store.js';
 import type { SunnyConfig } from '../../src/config/index.js';
 import { initMemory } from '../../src/memory/index.js';

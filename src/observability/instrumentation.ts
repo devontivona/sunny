@@ -3,7 +3,8 @@
  * change `observability` task 3).
  *
  * Sunny emits OpenTelemetry spans for LLM/tool/step activity (via the AI SDK's
- * `experimental_telemetry`) and durable jobs (WDK), exported over OTLP to a
+ * `telemetry` option + the `@ai-sdk/otel` `OpenTelemetry` integration registered in
+ * `startTelemetry` — v7 moved OTel out of `ai`) and durable jobs (WDK), exported over OTLP to a
  * self-hosted Langfuse instance — no egress. We use Langfuse's own
  * `LangfuseSpanProcessor` on a `NodeSDK` (the framework integration the Langfuse
  * docs recommend for the Vercel AI SDK), which speaks OTLP under the hood.
@@ -26,6 +27,8 @@ import { NodeSDK } from '@opentelemetry/sdk-node';
 import { LangfuseSpanProcessor } from '@langfuse/otel';
 import type { SpanProcessor, ReadableSpan, Span } from '@opentelemetry/sdk-trace-base';
 import type { AttributeValue } from '@opentelemetry/api';
+import { registerTelemetry } from 'ai';
+import { OpenTelemetry } from '@ai-sdk/otel';
 import { defaultRedactor, type Redactor } from './redact.js';
 import { TracePromotingSpanProcessor } from './tracePromotion.js';
 import { telemetryEnabled } from './enabled.js';
@@ -116,6 +119,15 @@ export function startTelemetry(): void {
     ],
   });
   sdk.start();
+  // AI SDK v7 moved telemetry OUT of `ai` into `@ai-sdk/otel`: emitting spans now requires
+  // registering an OpenTelemetry integration globally (the v6 `experimental_telemetry` auto-emit
+  // is gone). `runtimeContext: true` emits the per-call runtime-context values our call sites opt
+  // into via `telemetry.includeRuntimeContext` (e.g. `langfuseSessionId`) as span attributes — the
+  // v7 replacement for the removed `experimental_telemetry.metadata` channel. Uses the global
+  // tracer registered by the NodeSDK above, so spans flow through our redaction + trace-promotion
+  // processors to Langfuse. (Span attribute names for session/user grouping are re-confirmed in
+  // task 4.2 against a live trace.)
+  registerTelemetry(new OpenTelemetry({ runtimeContext: true }));
   log.info('tracing enabled → Langfuse', {
     baseUrl: process.env.LANGFUSE_BASE_URL ?? 'https://cloud.langfuse.com',
   });

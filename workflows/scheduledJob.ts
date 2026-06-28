@@ -1,9 +1,9 @@
-import { tool, type ModelMessage, type UIMessageChunk } from 'ai';
-import { DurableAgent } from '@workflow/ai/agent';
-import { anthropic } from '@workflow/ai/anthropic';
+import type { ModelCallStreamPart, ModelMessage } from '../src/agent/aiTypes.js';
+import { tool } from '@ai-sdk/provider-utils';
+import { WorkflowAgent } from '@ai-sdk/workflow';
+import { buildModel } from '../src/agent/turnModel.js';
 import { getWritable } from 'workflow';
 import { MEMORY_TOOL_SPECS } from '../src/agent/tools/memorySpecs.js';
-import { telemetryEnabled } from '../src/observability/enabled.js';
 import { AGENT_STEP_LIMIT } from '../src/agent/limits.js';
 
 /**
@@ -31,8 +31,8 @@ export async function runScheduledJob(input: ScheduledJobInput): Promise<void> {
 
   const instructions = await buildInstructions();
 
-  const agent = new DurableAgent({
-    model: anthropic('claude-opus-4-8'),
+  const agent = new WorkflowAgent({
+    model: buildModel('claude-opus-4-8'),
     instructions,
     tools: {
       memory_write: tool({
@@ -53,18 +53,16 @@ export async function runScheduledJob(input: ScheduledJobInput): Promise<void> {
     },
   });
 
+  // WorkflowAgent writes raw model-call parts to the durable run stream; the dashboard reader
+  // converts them to UIMessageChunk (design 3.1 — transform runs at the reader, not the sandbox).
   const result = await agent.stream({
     messages: [{ role: 'user', content: input.prompt }],
-    writable: getWritable<UIMessageChunk>(),
+    writable: getWritable<ModelCallStreamPart>(),
     // No work cap — runaway backstop only.
-    maxSteps: AGENT_STEP_LIMIT,
-    // OpenTelemetry → Langfuse (observability D-OB1): trace the scheduled run's
-    // LLM + memory-tool steps. No-op when tracing is disabled.
-    experimental_telemetry: {
-      isEnabled: telemetryEnabled(),
-      functionId: 'scheduled-job',
-      metadata: { langfuseSessionId: input.threadId, scheduleId: input.scheduleId },
-    },
+    stopWhen: ({ steps }) => steps.length >= AGENT_STEP_LIMIT,
+    // Durable AI-SDK telemetry INTENTIONALLY OFF (WDK `node:vm` realm the telemetry integration
+    // can't reach — emits nothing while looking enabled). See conversation.ts (vercel/ai #12164).
+    telemetry: { isEnabled: false },
   });
 
   const text = finalAssistantText(result.messages);

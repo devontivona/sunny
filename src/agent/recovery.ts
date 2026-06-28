@@ -99,20 +99,21 @@ export async function runRecoveryPass(opts: RecoveryOptions): Promise<string> {
     `Write the message Sunny should send to ${opts.ownerName} now.`;
   const result = await generateText({
     model: opts.model,
-    system: recoverySystem(opts.ownerName),
+    instructions: recoverySystem(opts.ownerName),
     messages: [{ role: 'user', content: userMessage }],
-    // Trace the recovery pass too (observability D-OB1), tagged as a recovery so
-    // it is filterable in Langfuse — how often this path fires is itself a signal
-    // worth watching (the elicitation miss it backstops; D-MG8). Linked to the
-    // turn's session via threadId. No-op when tracing is disabled.
-    experimental_telemetry: {
+    // Trace the recovery pass too (observability D-OB1), tagged as a recovery so it is
+    // filterable in Langfuse — how often this path fires is itself a signal worth watching
+    // (the elicitation miss it backstops; D-MG8). Linked to the turn's session via threadId.
+    // v7 carries metadata via runtimeContext (the v6 telemetry.metadata channel was removed).
+    runtimeContext: {
+      recovery: true,
+      trigger: 'elicitation-miss',
+      langfuseSessionId: opts.threadId,
+    },
+    telemetry: {
       isEnabled: telemetryEnabled(),
       functionId: 'delivery-recovery',
-      metadata: {
-        recovery: true,
-        trigger: 'elicitation-miss',
-        langfuseSessionId: opts.threadId,
-      },
+      includeRuntimeContext: { recovery: true, trigger: true, langfuseSessionId: true },
     },
   });
   return result.text.trim();
