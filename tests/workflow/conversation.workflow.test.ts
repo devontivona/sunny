@@ -9,6 +9,7 @@ import {
   type TestRuntimeCtx,
 } from './harness.js';
 import { makeChannelEvent } from '../factories.js';
+import type { UIMessage } from 'ai';
 
 /**
  * End-to-end `runConversation` against a real in-process WDK Local World (durable-main-loop,
@@ -36,6 +37,83 @@ describe('runConversation (workflow integration — real Local World)', () => {
     const window = await ctx.store.recentWindow(event.threadId);
     expect(window.filter((m) => m.role === 'assistant')).toHaveLength(1); // one persisted turn
     expect(await ctx.store.hasUnansweredInbound(event.threadId)).toBe(false); // marked processed
+  });
+
+  it('persists ONLY this turn — never re-merges prior tool calls from the window (no dup tool_use ids)', async () => {
+    // Regression for the thread-poisoning storm: the durable turn was persisted from
+    // `result.messages` (the FULL conversation = input window + generated), so every prior
+    // assistant turn already in the window got re-merged into the new row. That compounds each
+    // turn and reintroduces earlier `tool_use` ids — Anthropic then rejects every later turn with
+    // "`tool_use` ids must be unique", and the durable run retries forever. The turn must persist
+    // ONLY its own generated content.
+    ctx = await setupTestRuntime();
+
+    // A prior, already-answered turn whose payload carries a distinctive tool-call id.
+    const first = makeChannelEvent({ text: 'earlier question' });
+    await ctx.store.appendInbound(first);
+    await ctx.store.markProcessedMany('imessage', [first.messageId]);
+    const priorTurn: UIMessage = {
+      id: 'prior',
+      role: 'assistant',
+      parts: [
+        {
+          type: 'tool-bash',
+          toolCallId: 'toolu_PRIOR_UNIQUE',
+          state: 'output-available',
+          input: { command: 'echo hi' },
+          output: 'hi',
+        } as UIMessage['parts'][number],
+        {
+          type: 'tool-send_message',
+          toolCallId: 'send-prior',
+          state: 'output-available',
+          input: { text: 'earlier reply' },
+          output: 'delivered',
+        } as UIMessage['parts'][number],
+      ],
+    };
+    await ctx.store.appendTurn(first.threadId, priorTurn, 'earlier reply');
+
+    // A new, unanswered inbound; the model just sends once. The mock indexes its response by the
+    // count of assistant messages already in the prompt, and the seeded prior turn is one such
+    // message — so the first step here lands at index 1. Pad index 0 so the send fires on step 1.
+    const second = makeChannelEvent({ text: 'new question' });
+    await ctx.store.appendInbound(second);
+    setTurnModel([
+      { type: 'text', text: '' },
+      {
+        type: 'tool-call',
+        toolName: 'send_message',
+        input: JSON.stringify({ text: 'fresh reply' }),
+      },
+      { type: 'text', text: '' },
+    ]);
+
+    const run = await start(runConversation, [{ threadId: second.threadId }]);
+    await run.returnValue;
+    expect(await run.status).toBe('completed');
+
+    const window = await ctx.store.recentWindow(second.threadId);
+    const assistantTurns = window.filter((m) => m.role === 'assistant');
+    expect(assistantTurns).toHaveLength(2); // prior + this turn, each persisted once
+
+    const toolIdsOf = (m: (typeof assistantTurns)[number]) =>
+      ((m.payload as UIMessage | null)?.parts ?? [])
+        .filter((p) => p.type.startsWith('tool-'))
+        .map((p) => (p as { toolCallId: string }).toolCallId);
+
+    // The NEW turn (the one that delivered 'fresh reply') must contain only its own tool call —
+    // never the prior turn's id. And `toolu_PRIOR_UNIQUE` must appear in exactly ONE row total.
+    const freshTurn = assistantTurns.find((m) =>
+      ((m.payload as UIMessage).parts ?? []).some(
+        (p) => p.type === 'tool-send_message' && (p as any).input?.text === 'fresh reply',
+      ),
+    )!;
+    expect(toolIdsOf(freshTurn)).not.toContain('toolu_PRIOR_UNIQUE');
+
+    const allToolIds = assistantTurns.flatMap(toolIdsOf);
+    expect(allToolIds.filter((id) => id === 'toolu_PRIOR_UNIQUE')).toHaveLength(1);
+    expect(new Set(allToolIds).size).toBe(allToolIds.length); // no duplicate tool_use ids anywhere
   });
 
   it('is a no-op when there is no unanswered inbound', async () => {
