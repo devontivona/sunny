@@ -1,27 +1,47 @@
-import type { LanguageModelV3 } from '@ai-sdk/provider';
-import { anthropic } from '@workflow/ai/anthropic';
-import { mockSequenceModel, type MockResponseDescriptor } from '@workflow/ai/test';
+import type { LanguageModel } from 'ai';
+import { anthropic } from '@ai-sdk/anthropic';
+import { mockSequenceModel, type MockResponseDescriptor } from './mockModel.js';
+
+export type { MockResponseDescriptor };
 
 /** Test seam key: a workflow integration test sets an array of mock response descriptors
  *  (plain, serializable data) here on `globalThis`. */
 const TEST_TURN_MODEL = Symbol.for('sunny.testTurnModel');
 
 /**
- * The conversational turn's model factory (durable-main-loop). Production returns the real
- * Anthropic provider. A `@workflow/vitest` integration test scripts the turn by setting mock
- * RESPONSES (not the model itself) on `globalThis[TEST_TURN_MODEL_KEY]`; `setupTurn` reads
- * them with {@link testModelResponses} (in a step, where the global is visible) and threads
- * them to this builder, which runs in the workflow body to construct the mock. We pass plain
- * data through the step boundary because a model FACTORY is not serializable across it.
+ * The conversational turn's model factory (durable-main-loop, AI SDK v7 / `WorkflowAgent`).
+ * Production returns the real Anthropic provider INSTANCE; `WorkflowAgent` journals it across
+ * the `doStreamStep` boundary via the WDK class-serialization protocol the v7 providers
+ * implement (`@ai-sdk/anthropic`'s `AnthropicLanguageModel` has `WORKFLOW_SERIALIZE`/
+ * `WORKFLOW_DESERIALIZE`), so no gateway and no shim are needed.
  *
- * Node-free (only `@workflow/ai` providers + a type import), so it is safe to import from the
- * workflow, matching `bashSpecs`/`memorySpecs`.
+ * A `@workflow/vitest` integration test scripts the turn by setting mock RESPONSES (not the
+ * model itself) on `globalThis[TEST_TURN_MODEL_KEY]`; `setupTurn` reads them with {@link
+ * testModelResponses} (in a step, where the global is visible) and threads them to this builder,
+ * which runs in the workflow body to construct the mock. We pass plain data through the step
+ * boundary because the responses are serializable; the mock model itself is made serializable by
+ * {@link SerializableMockModel} (mock instances are otherwise non-serializable closures).
+ *
+ * Node-free (only `@ai-sdk/anthropic` + the serializable mock + a type import), so it is safe to
+ * import from the workflow, matching `bashSpecs`/`memorySpecs`.
  */
 export function buildTurnModel(
   modelId: string,
   responses?: MockResponseDescriptor[],
-): () => Promise<LanguageModelV3> {
+): LanguageModel {
   if (responses && responses.length > 0) return mockSequenceModel(responses);
+  return anthropic(modelId);
+}
+
+/**
+ * Build a plain Anthropic model INSTANCE for the Tier-2 job workflows (`job.ts`/`scheduledJob.ts`).
+ * Constructed here, in a Node-free module, rather than importing `@ai-sdk/anthropic` directly into
+ * a `'use workflow'` module — the WDK bundler rejects Node-tainted packages imported directly in
+ * workflow code, but allows them behind a helper module (same reason `buildTurnModel` lives here).
+ * The instance is WDK-serializable (`AnthropicLanguageModel` implements the serde protocol), so
+ * `WorkflowAgent` can journal it across the `doStreamStep` boundary.
+ */
+export function buildModel(modelId: string): LanguageModel {
   return anthropic(modelId);
 }
 

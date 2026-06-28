@@ -16,6 +16,7 @@ import {
 import { auth as completeMcpOAuth } from '@ai-sdk/mcp';
 import { getRun } from 'workflow/api';
 import type { UIMessageChunk } from 'ai';
+import { createModelCallToUIChunkTransform, type ModelCallStreamPart } from '@ai-sdk/workflow';
 import { getRuntime } from '../../../../src/runtime.js';
 import { getLiveBus, type LiveRun } from '../../../../src/observability/live.js';
 import { defaultRedactor } from '../../../../src/observability/redact.js';
@@ -474,8 +475,11 @@ async function startJobStream(
   }
   await stream.push({ event: 'status', data: JSON.stringify(await jobRunMeta(runId, initStatus)) });
   try {
+    // The run stream carries raw model-call parts (v7 WorkflowAgent writable); convert to
+    // UIMessageChunk here at the reader boundary (the transform can't run in the workflow sandbox).
     reader = getRun<unknown>(runId)
-      .getReadable<UIMessageChunk>({ startIndex: resumeFrom })
+      .getReadable<ModelCallStreamPart>({ startIndex: resumeFrom })
+      .pipeThrough(createModelCallToUIChunkTransform())
       .getReader();
     let idx = resumeFrom;
     try {

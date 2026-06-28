@@ -1,6 +1,7 @@
-import { tool, type ModelMessage, type UIMessageChunk } from 'ai';
-import { DurableAgent } from '@workflow/ai/agent';
-import { anthropic } from '@workflow/ai/anthropic';
+import type { ModelCallStreamPart, ModelMessage } from '../src/agent/aiTypes.js';
+import { tool } from '@ai-sdk/provider-utils';
+import { WorkflowAgent } from '@ai-sdk/workflow';
+import { buildModel } from '../src/agent/turnModel.js';
 import { getWritable } from 'workflow';
 import {
   BASH_TOOL_SPECS,
@@ -36,8 +37,8 @@ export async function runJob(input: JobInput): Promise<void> {
 
   const instructions = await buildInstructions();
 
-  const agent = new DurableAgent({
-    model: anthropic('claude-opus-4-8'),
+  const agent = new WorkflowAgent({
+    model: buildModel('claude-opus-4-8'),
     instructions,
     tools: {
       bash: tool({ ...BASH_TOOL_SPECS.bash, execute: (args) => bashStep(args) }),
@@ -46,20 +47,25 @@ export async function runJob(input: JobInput): Promise<void> {
     providerOptions: {
       anthropic: { thinking: { type: 'adaptive', display: 'omitted' }, effort: 'high' },
     },
+    // OpenTelemetry → Langfuse (observability D-OB1): langfuseSessionId = the thread, so a job
+    // groups with the conversation that spawned it. v7 carries this via runtimeContext (the v6
+    // `experimental_telemetry.metadata` channel was removed) — opted into spans below.
+    runtimeContext: { langfuseSessionId: input.threadId, langfuseUserId: input.ownerName },
   });
 
+  // WorkflowAgent writes raw model-call parts to the durable run stream; the dashboard reader
+  // converts them to UIMessageChunk via `createModelCallToUIChunkTransform()` (design 3.1 —
+  // the transform can't run in the workflow sandbox, so it lives at the reader boundary).
   const result = await agent.stream({
     messages: [{ role: 'user', content: input.task }],
-    writable: getWritable<UIMessageChunk>(),
+    writable: getWritable<ModelCallStreamPart>(),
     // No work cap — runaway backstop only (the old 30-step cap could cut off a build).
-    maxSteps: AGENT_STEP_LIMIT,
-    // OpenTelemetry → Langfuse (observability D-OB1): trace the background job's
-    // LLM + tool steps. langfuseSessionId = the thread, so a job groups with the
-    // conversation that spawned it. No-op when tracing is disabled.
-    experimental_telemetry: {
+    stopWhen: ({ steps }) => steps.length >= AGENT_STEP_LIMIT,
+    // Trace the background job's LLM + tool steps (no-op when tracing is disabled).
+    telemetry: {
       isEnabled: telemetryEnabled(),
       functionId: 'background-job',
-      metadata: { langfuseSessionId: input.threadId, langfuseUserId: input.ownerName },
+      includeRuntimeContext: { langfuseSessionId: true, langfuseUserId: true },
     },
   });
 

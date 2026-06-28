@@ -1,5 +1,6 @@
 import { getRun, start } from 'workflow/api';
 import type { UIMessageChunk } from 'ai';
+import { createModelCallToUIChunkTransform, type ModelCallStreamPart } from '@ai-sdk/workflow';
 import { runConversation } from '../../workflows/conversation.js';
 import type { ChannelEvent, Gateway } from '../gateway/types.js';
 import type { ConversationStore } from '../gateway/store.js';
@@ -120,7 +121,12 @@ export class DurableTurnRouter {
     void (async () => {
       let reader: ReadableStreamDefaultReader<UIMessageChunk> | null = null;
       try {
-        reader = getRun<unknown>(runId).getReadable<UIMessageChunk>().getReader();
+        // The run stream carries raw model-call parts (v7 WorkflowAgent writable); convert to
+        // UIMessageChunk here at the reader boundary (the transform can't run in the workflow sandbox).
+        reader = getRun<unknown>(runId)
+          .getReadable<ModelCallStreamPart>()
+          .pipeThrough(createModelCallToUIChunkTransform())
+          .getReader();
         for (;;) {
           const { done, value } = await reader.read();
           if (done) break;

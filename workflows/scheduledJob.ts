@@ -1,6 +1,7 @@
-import { tool, type ModelMessage, type UIMessageChunk } from 'ai';
-import { DurableAgent } from '@workflow/ai/agent';
-import { anthropic } from '@workflow/ai/anthropic';
+import type { ModelCallStreamPart, ModelMessage } from '../src/agent/aiTypes.js';
+import { tool } from '@ai-sdk/provider-utils';
+import { WorkflowAgent } from '@ai-sdk/workflow';
+import { buildModel } from '../src/agent/turnModel.js';
 import { getWritable } from 'workflow';
 import { MEMORY_TOOL_SPECS } from '../src/agent/tools/memorySpecs.js';
 import { telemetryEnabled } from '../src/observability/enabled.js';
@@ -31,8 +32,8 @@ export async function runScheduledJob(input: ScheduledJobInput): Promise<void> {
 
   const instructions = await buildInstructions();
 
-  const agent = new DurableAgent({
-    model: anthropic('claude-opus-4-8'),
+  const agent = new WorkflowAgent({
+    model: buildModel('claude-opus-4-8'),
     instructions,
     tools: {
       memory_write: tool({
@@ -51,19 +52,23 @@ export async function runScheduledJob(input: ScheduledJobInput): Promise<void> {
     providerOptions: {
       anthropic: { thinking: { type: 'adaptive', display: 'omitted' }, effort: 'high' },
     },
+    // OpenTelemetry → Langfuse (observability D-OB1): group with the thread's session. v7
+    // carries this via runtimeContext (the v6 telemetry.metadata channel was removed).
+    runtimeContext: { langfuseSessionId: input.threadId, scheduleId: input.scheduleId },
   });
 
+  // WorkflowAgent writes raw model-call parts to the durable run stream; the dashboard reader
+  // converts them to UIMessageChunk (design 3.1 — transform runs at the reader, not the sandbox).
   const result = await agent.stream({
     messages: [{ role: 'user', content: input.prompt }],
-    writable: getWritable<UIMessageChunk>(),
+    writable: getWritable<ModelCallStreamPart>(),
     // No work cap — runaway backstop only.
-    maxSteps: AGENT_STEP_LIMIT,
-    // OpenTelemetry → Langfuse (observability D-OB1): trace the scheduled run's
-    // LLM + memory-tool steps. No-op when tracing is disabled.
-    experimental_telemetry: {
+    stopWhen: ({ steps }) => steps.length >= AGENT_STEP_LIMIT,
+    // Trace the scheduled run's LLM + memory-tool steps. No-op when tracing is disabled.
+    telemetry: {
       isEnabled: telemetryEnabled(),
       functionId: 'scheduled-job',
-      metadata: { langfuseSessionId: input.threadId, scheduleId: input.scheduleId },
+      includeRuntimeContext: { langfuseSessionId: true, scheduleId: true },
     },
   });
 

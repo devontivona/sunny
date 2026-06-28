@@ -1,5 +1,5 @@
 import { defineEventHandler } from 'nitro/h3';
-import type { MockResponseDescriptor } from '@workflow/ai/test';
+import type { MockResponseDescriptor } from '../../../src/agent/mockModel.js';
 import { getRuntime } from '../../../src/runtime.js';
 import {
   asLoopback,

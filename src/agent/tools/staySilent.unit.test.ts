@@ -5,7 +5,7 @@ describe('createStaySilentTool', () => {
   it('sets the silence flag when executed', async () => {
     const flag: SilenceFlag = { silent: false };
     const tool = createStaySilentTool(flag);
-    const result = await tool.execute!({}, { toolCallId: 't1', messages: [] });
+    const result = await tool.execute!({}, { toolCallId: 't1', messages: [], context: {} });
     expect(flag.silent).toBe(true);
     expect(result).toMatch(/silent/i);
   });

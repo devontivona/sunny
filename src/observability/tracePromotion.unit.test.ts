@@ -27,6 +27,19 @@ describe('TracePromotingSpanProcessor', () => {
     expect(attrs['langfuse.user.id']).toBe('Devon');
   });
 
+  it('promotes from AI SDK v7 attribute names (gen_ai.agent.name + ai.settings.context.*)', () => {
+    // v7 (`@ai-sdk/otel`) renamed the source attrs; confirmed live against Langfuse (task 4.2).
+    const attrs: Record<string, unknown> = {
+      'gen_ai.agent.name': 'agent-turn',
+      'ai.settings.context.langfuseSessionId': 'sendblue:owner:contact',
+      'ai.settings.context.langfuseUserId': 'Devon',
+    };
+    proc.onEnding(fakeSpan(attrs) as never);
+    expect(attrs['langfuse.trace.name']).toBe('agent-turn');
+    expect(attrs['langfuse.session.id']).toBe('sendblue:owner:contact');
+    expect(attrs['langfuse.user.id']).toBe('Devon');
+  });
+
   it('uses the per-run functionId as the trace name (turns vs jobs distinguishable)', () => {
     const job: Record<string, unknown> = {
       'ai.telemetry.functionId': 'background-job',
