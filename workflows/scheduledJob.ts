@@ -129,8 +129,8 @@ async function recallStep(query: string, limit?: number): Promise<string> {
 
   const { getRuntime } = await import('../src/runtime.js');
   const { execRecall } = await import('../src/agent/tools/memory.js');
-  const { store } = await getRuntime();
-  return execRecall(store, query, limit);
+  const { store, config } = await getRuntime();
+  return execRecall(store, config, query, limit);
 }
 
 async function recordRun(runId: string, output: string): Promise<void> {

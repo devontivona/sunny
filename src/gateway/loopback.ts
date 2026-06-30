@@ -1,6 +1,7 @@
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import type { SunnyConfig } from '../config/index.js';
 import { logger } from '../logger.js';
+import { Authorizer } from './auth.js';
 import type { ConversationStore } from './store.js';
 import { runSerial } from './serial.js';
 import { isGroupThreadId } from './threadId.js';
@@ -74,6 +75,7 @@ export class LoopbackGateway implements Gateway {
   };
 
   private readonly store: ConversationStore;
+  private readonly authorizer: Authorizer;
   private inboundHandler: InboundHandler | null = null;
   private readonly outbox: CapturedSend[] = [];
   private readonly sentAt = new Map<string, number>();
@@ -84,7 +86,7 @@ export class LoopbackGateway implements Gateway {
 
   constructor(deps: LoopbackGatewayDeps) {
     this.store = deps.store;
-    void deps.config;
+    this.authorizer = new Authorizer(deps.config);
   }
 
   onInbound(handler: InboundHandler): void {
@@ -151,9 +153,42 @@ export class LoopbackGateway implements Gateway {
     senderId?: string;
     senderName?: string;
     text: string;
+    /** Group roster for the all-trusted membership check (multiplayer-family D5). Only used when
+     *  the thread is a group AND `senderId` is provided (the tiered-auth path). */
+    participants?: string[];
   }): Promise<{ messageId: string; threadId: string; cursor: number; accepted: boolean }> {
     const threadId = input.threadId ?? LOOPBACK_DEFAULT_THREAD;
     const isGroup = isGroupThreadId(threadId);
+
+    // Two modes: (1) legacy default — no `senderId` ⇒ treat as the owner in a DM (the channel is
+    // secret-gated at the HTTP layer); (2) tiered-auth — a `senderId` is run through the real
+    // Authorizer so tests can exercise family/owner/outsider and group membership end to end.
+    let isOwner: boolean;
+    let isTrusted: boolean;
+    let role: 'owner' | 'family' | null;
+    let authorized: boolean;
+    if (input.senderId === undefined) {
+      isOwner = !isGroup;
+      isTrusted = !isGroup;
+      role = isGroup ? null : 'owner';
+      authorized = !isGroup; // legacy: only the synthetic owner DM is auto-authorized
+    } else {
+      const auth = this.authorizer.authorize(input.senderId, isGroup, input.participants);
+      isOwner = auth.isOwner;
+      isTrusted = auth.isTrusted;
+      role = auth.role;
+      authorized = auth.authorized;
+    }
+
+    if (!authorized) {
+      log.info('loopback inbound rejected (unauthorized sender)', {
+        threadId,
+        senderId: input.senderId,
+        isGroup,
+      });
+      return { messageId: randomUUID(), threadId, cursor: this.seq, accepted: false };
+    }
+
     const event: ChannelEvent = {
       channel: this.channel,
       threadId,
@@ -164,7 +199,9 @@ export class LoopbackGateway implements Gateway {
       attachments: [],
       timestamp: new Date(),
       isGroup,
-      isOwner: !isGroup, // DM ⇒ owner; the test channel is secret-gated at the HTTP layer
+      isOwner,
+      isTrusted,
+      senderRole: role,
     };
     const inserted = await this.store.appendInbound(event);
     const cursor = this.seq;

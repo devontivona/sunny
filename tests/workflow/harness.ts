@@ -41,9 +41,11 @@ export interface TestRuntimeCtx {
 }
 
 /** Stand up a PGlite-backed test runtime and inject it for the workflow's steps. */
-export async function setupTestRuntime(): Promise<TestRuntimeCtx> {
+export async function setupTestRuntime(
+  configOverrides: Partial<SunnyConfig> = {},
+): Promise<TestRuntimeCtx> {
   const db = await createTestDb();
-  const config = makeConfig();
+  const config = makeConfig(configOverrides);
   await initMemory(config); // create the memory tree so instruction assembly reads clean files
   const store = new ConversationStore(db.db, 30);
   const gateway = new FakeGateway();

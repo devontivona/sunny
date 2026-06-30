@@ -1,6 +1,7 @@
 import { tool } from 'ai';
 import type { SunnyConfig } from '../../config/index.js';
 import type { ConversationStore } from '../../gateway/store.js';
+import { normalize } from '../../gateway/auth.js';
 import {
   applyMemoryWrite,
   MemoryOverflowError,
@@ -31,9 +32,14 @@ export function execReadTopic(config: SunnyConfig, name: string): string {
   return content ?? `(no topic doc named "${name}")`;
 }
 
-/** Keyword-recall older messages, formatted for the model to summarize. */
+/**
+ * Keyword-recall older messages across ALL conversations (multiplayer-family: cross-thread
+ * recall), formatted for the model to summarize. Each hit is attributed with WHO said it and
+ * WHICH conversation it was in, so Sunny can cross-reference (e.g. "in your chat with Kate…").
+ */
 export async function execRecall(
   store: ConversationStore,
+  config: SunnyConfig,
   query: string,
   limit?: number,
 ): Promise<string> {
@@ -42,9 +48,36 @@ export async function execRecall(
   return hits
     .map((m) => {
       const who = m.role === 'assistant' ? 'Sunny' : (m.senderName ?? m.senderId);
-      return `[${m.timestamp.toISOString().slice(0, 10)}] ${who}: ${m.text}`;
+      const where = labelForThread(config, m.threadId);
+      return `[${m.timestamp.toISOString().slice(0, 10)}] ${who} (in ${where}): ${m.text}`;
     })
     .join('\n');
+}
+
+/**
+ * A human label for a thread, so recall hits read as "in your chat with Kate" rather than an
+ * opaque id. Resolves a Sendblue DM's contact number against the owner/family roster; groups and
+ * unknown threads get a generic label. Best-effort — never throws.
+ */
+function labelForThread(config: SunnyConfig, threadId: string): string {
+  const parts = threadId.split(':');
+  if (parts[0] !== 'sendblue') return 'another conversation';
+  if (parts[2] === 'g') return 'a group chat';
+  let number = '';
+  try {
+    number = Buffer.from(parts[2] ?? '', 'base64url').toString('utf8');
+  } catch {
+    number = '';
+  }
+  if (!number) return 'another conversation';
+  const norm = normalize(number);
+  if (config.owner.identities.map(normalize).includes(norm)) {
+    return `the chat with ${config.owner.name}`;
+  }
+  for (const p of config.family) {
+    if (p.identities.map(normalize).includes(norm)) return `the chat with ${p.name}`;
+  }
+  return `the chat with ${number}`;
 }
 
 /**
@@ -65,7 +98,7 @@ export function createMemoryTools(config: SunnyConfig, store: ConversationStore)
     }),
     recall_history: tool({
       ...MEMORY_TOOL_SPECS.recall_history,
-      execute: ({ query, limit }) => execRecall(store, query, limit),
+      execute: ({ query, limit }) => execRecall(store, config, query, limit),
     }),
   };
 }

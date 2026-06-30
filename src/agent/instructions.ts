@@ -2,7 +2,7 @@ import type { SystemModelMessage } from 'ai';
 import type { SunnyConfig } from '../config/index.js';
 import { loadCore, memoryPaths } from '../memory/index.js';
 import { loadAllSkills, renderSkillIndex } from '../skills/index.js';
-import { buildSystemPrompt, type DeliveryMode } from './prompt.js';
+import { buildSystemPrompt, type DeliveryMode, type PeoplePromptContext } from './prompt.js';
 
 /**
  * Assemble a conversational turn's `instructions` (durable-main-loop task 1.1).
@@ -25,6 +25,7 @@ import { buildSystemPrompt, type DeliveryMode } from './prompt.js';
 export function assembleTurnInstructions(
   config: SunnyConfig,
   deliveryMode: DeliveryMode = 'tool',
+  people?: PeoplePromptContext,
 ): SystemModelMessage {
   const paths = memoryPaths(config.runtimeDir);
   return {
@@ -34,6 +35,7 @@ export function assembleTurnInstructions(
       loadCore(paths),
       deliveryMode,
       renderSkillIndex(loadAllSkills(config), config.skills),
+      people,
     ),
     providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
   };

@@ -18,7 +18,28 @@ interface ThreadList {
 interface ThreadDetail {
   threadId: string;
   label: string;
+  participants: string[];
+  channel: string;
+  isGroup: boolean;
   messages: ConversationMessage[];
+}
+
+/** Compact channel/type/id metadata line shown under a thread's participants. */
+function ThreadMeta({
+  channel,
+  isGroup,
+  threadId,
+}: {
+  channel: string;
+  isGroup: boolean;
+  threadId: string;
+}) {
+  return (
+    <span className="font-mono text-fg-dim" title={threadId}>
+      {channel}
+      {isGroup ? ' · group' : ' · dm'} · {threadId}
+    </span>
+  );
 }
 
 function Bubble({ m }: { m: ConversationMessage }) {
@@ -34,6 +55,11 @@ function Bubble({ m }: { m: ConversationMessage }) {
         <span className={isSunny ? 'text-secondary' : 'text-primary'}>
           {isSunny ? 'サニー' : m.senderName || 'You'}
         </span>
+        {!isSunny && m.senderRole && (
+          <span className={m.senderRole === 'owner' ? 'text-primary' : 'text-secondary'}>
+            [{m.senderRole}]
+          </span>
+        )}
         {isSunny && m.recovered && (
           <span
             className="text-error"
@@ -181,15 +207,18 @@ function ConversationIndex() {
       ) : threads.data.threads.length === 0 ? (
         <p className="text-fg-dim">No threads yet.</p>
       ) : (
-        <ul>
+        <ul className="space-y-sm">
           {threads.data.threads.map((t) => (
             <li key={t.threadId} className="flex items-baseline justify-between gap-md">
-              <span className="min-w-0 truncate">
+              <span className="flex min-w-0 flex-col">
                 <LinkButton
                   onClick={() => navigate(`conversation/${encodeURIComponent(t.threadId)}`)}
                 >
-                  {t.label}
+                  {t.participants.length > 0 ? t.participants.join(', ') : t.label}
                 </LinkButton>
+                <span className="min-w-0 truncate">
+                  <ThreadMeta channel={t.channel} isGroup={t.isGroup} threadId={t.threadId} />
+                </span>
               </span>
               <span className="shrink-0 whitespace-nowrap text-fg-dim">
                 {t.count} · {formatTime(t.lastAt)}
@@ -210,7 +239,8 @@ function ThreadPage({ threadId }: { threadId: string }) {
     [threadId],
   );
   const reload = state.reload;
-  const label = state.status === 'ready' ? state.data.label : '…';
+  const detail = state.status === 'ready' ? state.data : null;
+  const label = detail?.label ?? '…';
 
   // Stream this thread live over one persistent SSE connection opened on mount —
   // whatever turn runs now or next, with no run-id discovery and no polling gap.
@@ -257,8 +287,19 @@ function ThreadPage({ threadId }: { threadId: string }) {
       version={version}
       header={
         <>
-          <Link to="conversation">Conversation</Link>
-          <span className="font-normal text-fg-dim"> / {label}</span>
+          <div>
+            <Link to="conversation">Conversation</Link>
+            <span> / {label}</span>
+          </div>
+          {detail && (
+            <div className="font-normal">
+              <ThreadMeta
+                channel={detail.channel}
+                isGroup={detail.isGroup}
+                threadId={detail.threadId}
+              />
+            </div>
+          )}
         </>
       }
     >

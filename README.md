@@ -60,6 +60,13 @@ cp .env.example .env   # fill keys; DATABASE_URL=postgres://sunny:<pw>@localhost
 WORKFLOW_POSTGRES_URL="$DATABASE_URL" npx workflow-postgres-setup
 
 # 4. Owner identity — add your iMessage phone/email to ~/.sunny/config.json → owner.identities
+#    Family (optional) — add trusted people who get the SAME elevated permissions as the owner:
+#      "family": [{ "name": "Kate", "identities": ["+17195551234"] }]
+#    Family DMs are fully empowered; group threads are answered only when EVERY participant is
+#    owner/family (one outsider silences the whole group). Trust here is the phone/email itself —
+#    the same trust class as the owner; tighter lockdown (approvals, pairing) lands with
+#    security-permissions. Each family member gets an auto-created profile doc under
+#    ~/.sunny/state/memory/people/<id>.md, the per-person analogue of the owner's USER.md.
 
 # 5. (Observability) Stand up self-hosted Langfuse — Sunny's trace backend (D-OB7)
 cp deploy/langfuse/.env.example deploy/langfuse/.env   # fill generated secrets + INIT keys (see that file)

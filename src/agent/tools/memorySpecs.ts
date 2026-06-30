@@ -12,8 +12,9 @@ export const MEMORY_TOOL_SPECS = {
   memory_write: {
     description:
       'Record durable memory. Use for facts worth remembering across conversations. ' +
-      'file: "USER" (facts about the user), "SUNNY" (your own operating notes), ' +
-      '"INDEX" (one line per topic doc), or "topic:<name>" (deeper, unbounded notes). ' +
+      'file: "USER" (facts about the owner), "SUNNY" (your own operating notes), ' +
+      '"INDEX" (one line per topic doc), "people:<id>" (facts about a specific family member — ' +
+      'use the handle shown for them in the PEOPLE block), or "topic:<name>" (deeper notes). ' +
       'action: "add" appends content; "replace" swaps `target` for `content` (or, with no ' +
       'target, rewrites the whole file — use to consolidate); "remove" deletes `target`. ' +
       'Core files (USER/SUNNY/INDEX) are capped: if a write overflows you get an error — ' +
@@ -42,8 +43,12 @@ export const MEMORY_TOOL_SPECS = {
   },
   recall_history: {
     description:
-      'Search older message history by keyword when something is beyond the recent window. ' +
-      'Returns matching past messages (newest first) for you to summarize. Use sparingly.',
+      'Search past message history by keyword across ALL conversations — every thread, not just ' +
+      'this one (the owner\'s and family members\' chats alike). Use it to recall things beyond ' +
+      'the recent window OR to cross-reference another conversation (e.g. someone mentions a ' +
+      'person or event you don\'t see here). Returns matching messages (newest first), each ' +
+      'attributed with who said it and which chat it was in, for you to summarize. Use discretion ' +
+      'about repeating one person\'s private remarks to another.',
     inputSchema: z.object({
       query: z.string().describe('Keywords to search for in past messages.'),
       limit: z

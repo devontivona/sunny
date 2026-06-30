@@ -13,6 +13,7 @@ import { Credentials } from './pages/Credentials';
 import { Mcp } from './pages/Mcp';
 import { Skills } from './pages/Skills';
 import { Conversation } from './pages/Conversation';
+import { People } from './pages/People';
 import { Schedules } from './pages/Schedules';
 import { Jobs } from './pages/Jobs';
 import { Activity, Health } from './pages/Activity';
@@ -41,6 +42,8 @@ function RouteView() {
       return <Skills name={second ? decodeURIComponent(second) : null} />;
     case 'conversation':
       return <Conversation threadId={second ? decodeURIComponent(second) : null} />;
+    case 'people':
+      return <People personId={second ? decodeURIComponent(second) : null} />;
     case 'schedules':
       return <Schedules />;
     case 'jobs':

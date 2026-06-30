@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { asSchema } from '@ai-sdk/provider-utils';
 import type { Gateway } from '../../gateway/types.js';
 import type { Db } from '../../db/client.js';
 import type { ConversationStore } from '../../gateway/store.js';
@@ -52,12 +52,14 @@ interface ToolLike {
   inputSchema?: unknown;
 }
 
-/** Derive the input parameters from a tool's zod schema (observe-only; the same
- *  schema the model is given). Best-effort — a non-zod/odd schema yields []. */
+/** Derive the input parameters from a tool's schema (observe-only; the same schema the model is
+ *  given). Uses the SDK's `asSchema`, so it works for both zod schemas and hand-authored
+ *  `jsonSchema()` schemas (e.g. bash, whose provider schema is hand-authored to dodge the v7
+ *  `z.record` conversion bug). Best-effort — an odd schema yields []. */
 function paramsOf(inputSchema: unknown): ToolParam[] {
   if (!inputSchema) return [];
   try {
-    const js = z.toJSONSchema(inputSchema as Parameters<typeof z.toJSONSchema>[0]) as {
+    const js = asSchema(inputSchema as Parameters<typeof asSchema>[0]).jsonSchema as {
       properties?: Record<string, { type?: string; description?: string }>;
       required?: string[];
     };

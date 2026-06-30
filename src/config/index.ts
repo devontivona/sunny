@@ -33,6 +33,21 @@ export const ConfigSchema = z.object({
       identities: z.array(z.string()).default([]),
     })
     .default({ name: 'Devon', identities: [] }),
+  /**
+   * Family roster (multiplayer-family D1): people who message Sunny with the SAME elevated
+   * trust tier as the owner. Each entry has a display name and one or more stable identities
+   * (phone/email), matched with the same normalization as `owner`. Shaped generally so a
+   * future lower-trust `friend` tier is a data change, not a schema change. Identity here is
+   * the channel-stable address — no cryptographic pairing yet (that lands in security-permissions).
+   */
+  family: z
+    .array(
+      z.object({
+        name: z.string(),
+        identities: z.array(z.string()).default([]),
+      }),
+    )
+    .default([]),
   /** Whether to answer in authorized group chats (R1: answerable, owner-only actions). */
   allowGroups: z.boolean().default(true),
   /** Recent-window size for the conversation store (task 2.3). */
@@ -98,6 +113,7 @@ const DEFAULT_CONFIG_JSON = `{
     "name": "Devon",
     "identities": []
   },
+  "family": [],
   "allowGroups": true,
   "recentWindowSize": 30,
   "memory": {

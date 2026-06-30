@@ -284,6 +284,13 @@ export default defineEventHandler(async (event) => {
           const doc = data.topic(name);
           return doc ?? json(404, { error: 'topic not found' });
         }
+        case path === 'people':
+          return data.people();
+        case path.startsWith('people/'): {
+          const id = decodeURIComponent(path.slice('people/'.length));
+          const person = data.person(id);
+          return person ?? json(404, { error: 'person not found' });
+        }
         case path === 'conversation/threads':
           return { threads: await data.threads() };
         case path === 'conversation/thread': {
