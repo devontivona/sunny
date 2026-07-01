@@ -5,11 +5,11 @@
 > the skill. (Formalizing Chat SDK `Thread` / retiring `isGroupThreadId` is a **separate deferred
 > change**, not in scope here.)
 
-## Phase 1a — Unblock the regression (existing model, no new abstractions)
-- [ ] 1a.1 Re-register `schedule_create` / `schedule_list` / `schedule_delete` in `workflows/conversation.ts` `buildTools`, gated to trusted DMs (owner **or** family), using the existing `createScheduleTools` + `threadId`/`outputTarget` (D-RA8).
-- [ ] 1a.2 Re-wire `ensureConsolidationSchedule` (currently defined-but-never-called) so fresh installs seed nightly consolidation — call it once at runtime startup (not per-inbound); for Phase 1a keep the existing `outputTarget: 'silent'` mechanism (Phase 2 migrates it to "no messaging grant").
-- [ ] 1a.3 Fix the dashboard tool catalog (`src/agent/tools/catalog.ts`): stop referencing the deleted `loop.ts`; surface exactly the tools the durable turn registers.
-- [ ] 1a.4 Regression test: a trusted-DM turn (owner or family) can create/list/delete a schedule and it fires; a scheduled run still cannot self-schedule (existing anti-recursion).
+## Phase 1a — Unblock the regression (existing model, no new abstractions) ✅
+- [x] 1a.1 Re-register `schedule_create` / `schedule_list` / `schedule_delete` in `workflows/conversation.ts` `buildTools`, gated to trusted DMs (owner **or** family), via node-free `scheduleToolSpecs` + `'use step'`-wrapped executes (`src/agent/tools/scheduleSpecs.ts`) (D-RA8).
+- [x] 1a.2 Re-wire `ensureConsolidationSchedule` (was defined-but-never-called) — seeded once at runtime startup, addressed to the owner's DM thread (constructed from config + `SENDBLUE_FROM_NUMBER`), keeping the existing `outputTarget: 'silent'` mechanism (Phase 2 migrates it to "no messaging grant").
+- [x] 1a.3 Fix the dashboard tool catalog (`src/agent/tools/catalog.ts`): dropped the deleted-`loop.ts` reference; now mirrors `conversation.ts` `buildTools` and the trusted-DM (owner OR family) gate.
+- [x] 1a.4 Regression test: `tests/workflow/scheduleTools.workflow.test.ts` — trusted-DM turn creates a schedule (delivered back to its thread); a non-owner family DM can schedule too; `schedule_delete` cancels one. Drives the real `runConversation` workflow with a scripted model.
 
 ## Phase 2 — The model: Audience / delivery bus / authority
 - [ ] 2.1 Define `Audience` (`person | household | thread | parent`) and `authority` (a `Set<grant-name string>`, WDK-serializable) as node-free types alongside `outputTarget.ts`; add `resolveAudience(audience) → { instructions, contextDocs, deliver, tools }` as a durable step (D-RA1, D-RA2, D-RA7). Ownership derives from the audience (D-RA4) — **no `Principal` type/field**.

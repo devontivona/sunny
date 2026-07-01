@@ -12,6 +12,7 @@ import { BASH_TOOL_SPECS } from '../src/agent/tools/bashSpecs.js';
 import { MEMORY_TOOL_SPECS } from '../src/agent/tools/memorySpecs.js';
 import { SEND_MESSAGE_SPEC, STAY_SILENT_SPEC } from '../src/agent/tools/sendMessageSpec.js';
 import { MESSAGE_PERSON_SPEC } from '../src/agent/tools/messagePersonSpec.js';
+import { formatScheduleList, scheduleToolSpecs } from '../src/agent/tools/scheduleSpecs.js';
 import {
   DELEGATE_TASK_SPEC,
   MESSAGE_SUBAGENT_SPEC,
@@ -62,6 +63,9 @@ interface TurnSetup {
   providerOptions: SharedV4ProviderOptions;
   deliveryMode: 'tool' | 'text';
   ownerName: string;
+  /** The owner's configured timezone — used for `schedule_create` cron/timestamp evaluation
+   *  and interpolated into the tool description (run-audiences Phase 1a). */
+  timezone: string;
   /** Whether the owner is a participant of this thread — gates the owner-only USER.md carve-out
    *  (multiplayer-family D2/D3). False in a family-only DM/group. */
   ownerPresent: boolean;
@@ -100,7 +104,13 @@ export async function runConversation(input: ConversationInput): Promise<void> {
   const { result, usage, foldedIds } = await streamAgent({
     model: buildTurnModel(setup.modelId, setup.testModelResponses),
     instructions: setup.instructions,
-    tools: buildTools({ threadId, ownerName, trustedDm, ownerPresent: setup.ownerPresent }),
+    tools: buildTools({
+      threadId,
+      ownerName,
+      trustedDm,
+      ownerPresent: setup.ownerPresent,
+      timezone: setup.timezone,
+    }),
     providerOptions: setup.providerOptions,
     messages: pending.messages,
     steering: { inboxThreadId: threadId, isGroup, baseExcludeIds: pending.windowUserIds },
@@ -200,8 +210,10 @@ function buildTools(ctx: {
   ownerName: string;
   trustedDm: boolean;
   ownerPresent: boolean;
+  timezone: string;
 }) {
-  const { threadId, ownerName, trustedDm, ownerPresent } = ctx;
+  const { threadId, ownerName, trustedDm, ownerPresent, timezone } = ctx;
+  const scheduleSpecs = scheduleToolSpecs(timezone);
   return {
     send_message: tool({
       ...SEND_MESSAGE_SPEC,
@@ -259,6 +271,23 @@ function buildTools(ctx: {
           message_person: tool({
             ...MESSAGE_PERSON_SPEC,
             execute: ({ person, text, image }) => messagePersonStep(person, text, image),
+          }),
+          // Self-scheduling (scheduling D-SC3; run-audiences Phase 1a). Trusted DMs only (owner
+          // OR family — the durable-main-loop migration dropped these entirely, the regression
+          // this restores). A fired schedule delivers back to THIS thread by default. Scheduled
+          // runs never get these tools (anti-recursion, D-SC4). Each execute is a `'use step'`
+          // so a replay never double-inserts / double-deletes.
+          schedule_create: tool({
+            ...scheduleSpecs.schedule_create,
+            execute: (args) => scheduleCreateStep(threadId, args),
+          }),
+          schedule_list: tool({
+            ...scheduleSpecs.schedule_list,
+            execute: () => scheduleListStep(),
+          }),
+          schedule_delete: tool({
+            ...scheduleSpecs.schedule_delete,
+            execute: ({ id }) => scheduleDeleteStep(id),
           }),
         }
       : {}),
@@ -320,6 +349,7 @@ async function setupTurn(threadId: string, isGroup: boolean): Promise<TurnSetup>
     providerOptions: anthropicProviderOptions(config),
     deliveryMode,
     ownerName: config.owner.name,
+    timezone: config.timezone,
     ownerPresent,
     // Read here (in the step, where a test's globalThis override is visible) and threaded to
     // the body to build a mock; undefined in production. Keyed per-thread (persists until the
@@ -569,6 +599,55 @@ async function readTopicStep(name: string): Promise<string> {
   const { execReadTopic } = await import('../src/agent/tools/memory.js');
   const { config } = await getRuntime();
   return execReadTopic(config, name);
+}
+
+/**
+ * Self-scheduling steps (run-audiences Phase 1a). `'use step'`-wrapped so a durable replay never
+ * re-inserts (create appends a row) or re-deletes. The fired schedule delivers back to
+ * `threadId` — the thread where it was created — using the existing `outputTarget` model
+ * (Phase 2 migrates delivery to the audience/bus). Timezone comes from config in the step.
+ */
+async function scheduleCreateStep(
+  threadId: string,
+  args: { kind: 'once' | 'interval' | 'cron'; spec: string; prompt: string; label?: string },
+): Promise<string> {
+  'use step';
+
+  const { getRuntime } = await import('../src/runtime.js');
+  const { createSchedule } = await import('../src/scheduler/index.js');
+  const { db, config } = await getRuntime();
+  try {
+    const row = await createSchedule(db, {
+      kind: args.kind,
+      spec: args.spec,
+      prompt: args.prompt,
+      threadId,
+      timezone: config.timezone,
+      label: args.label,
+    });
+    return `Scheduled ${row.id} (${row.kind}); next run ${row.nextRunAt?.toISOString() ?? 'n/a'}.`;
+  } catch (err) {
+    return `ERROR: ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
+async function scheduleListStep(): Promise<string> {
+  'use step';
+
+  const { getRuntime } = await import('../src/runtime.js');
+  const { listSchedules } = await import('../src/scheduler/index.js');
+  const { db } = await getRuntime();
+  return formatScheduleList(await listSchedules(db));
+}
+
+async function scheduleDeleteStep(id: string): Promise<string> {
+  'use step';
+
+  const { getRuntime } = await import('../src/runtime.js');
+  const { deleteSchedule } = await import('../src/scheduler/index.js');
+  const { db } = await getRuntime();
+  const ok = await deleteSchedule(db, id);
+  return ok ? `Deleted schedule ${id}.` : `No schedule with id ${id}.`;
 }
 
 async function recallStep(query: string, limit?: number): Promise<string> {
