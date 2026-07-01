@@ -1,19 +1,34 @@
 ## ADDED Requirements
 
 ### Requirement: Audience is the logical recipient of a run
-Every durable run SHALL have an **Audience** — the logical recipient it is for — that is one of: a **person** (a roster member, keyed by a channel-stable identity), the **household** (delivery either the run's own choice among roster members, or silent), a **thread** (an existing conversation), or a **parent** (the run that spawned it). The Audience SHALL be resolved to a delivery Thread at emit time. Audience replaces the fixed `user`/`parent`/`silent` output target.
+Every durable run SHALL have an **Audience** — the logical recipient it is for — that is one of: a **person** (a roster member, keyed by a channel-stable identity), the **household** (the run may message any roster member it chooses), a **thread** (an existing conversation), or a **parent** (the run that spawned it). The Audience SHALL be resolved to a delivery Thread at emit time. The Audience SHALL be **pure addressing**: it SHALL NOT encode whether the run speaks (that is governed by the run's authority — see "Delivery is tool-driven"). Audience replaces the fixed `user`/`parent` output target.
 
 #### Scenario: Person audience delivers to that person
 - **WHEN** a run with a `person` audience produces output
 - **THEN** it is delivered to that person's own conversation, resolved from the roster, regardless of who created the run
 
-#### Scenario: Household-silent audience records without messaging
-- **WHEN** a run with a `household(silent)` audience (e.g. nightly consolidation) completes
-- **THEN** no proactive message is sent, and its result is still recorded for inspection
+#### Scenario: Household audience has no delivery mode parameter
+- **WHEN** a run is given a `household` audience
+- **THEN** the audience alone carries no notion of silence or delivery mode; whether and to whom it speaks depends on the messaging grants in its authority
 
 #### Scenario: Parent audience folds back into the spawning run
 - **WHEN** a run with a `parent` audience reports
 - **THEN** the report is delivered to the spawning run, not to a human
+
+### Requirement: Delivery is tool-driven; silence is the absence of a messaging grant
+A run SHALL reach a human ONLY by invoking a messaging tool, whose destination is resolved from the run's Audience. Whether a run may emit SHALL be governed by its authority: a run not endowed a messaging grant SHALL NOT emit, and SHALL complete silently while still recording its result. There SHALL be no separate `silent` delivery mode on the Audience, and no terminal auto-emit of a run's final text. A run that holds a messaging grant but produced deliverable text without invoking the messaging tool MAY have that output recovered by the delivery backstop.
+
+#### Scenario: A memory-only run is structurally silent
+- **WHEN** a run endowed only memory grants (e.g. nightly consolidation) completes
+- **THEN** it sends nothing — because it holds no messaging tool — and its result is still recorded for inspection
+
+#### Scenario: Conditional delivery is emergent, not a flag
+- **WHEN** a run holding a messaging grant determines no message is warranted (e.g. the reminder condition is not met)
+- **THEN** it simply does not invoke the messaging tool, and nothing is delivered — with no empty-message or `silent`-mode convention
+
+#### Scenario: Elicitation miss is caught by the backstop
+- **WHEN** a run holding a messaging grant produces deliverable text but does not invoke the messaging tool
+- **THEN** the delivery backstop may compose and send that output, the same mechanism used for conversational turns
 
 ### Requirement: Delivery grounds out in a channel-bound Thread
 A **Thread** SHALL be a durable message log with an OPTIONAL channel binding: **bound** (backed by a messaging adapter — the delivery path to a human) or **detached** (no channel — used as a run's inbox/workspace for steering and logging, never a human destination). Resolving any Audience for actual delivery SHALL terminate at a bound Thread. A detached-audience run that needs to reach a person SHALL resolve that person to their bound Thread and deliver there.

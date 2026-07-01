@@ -36,14 +36,16 @@ triggers; cross-system agent identity; changes to the `WorkflowAgent` shell or W
   where output goes), and **authority** (which tools it may use). `threadId` conflated the last
   two (and, in conversations, the first). Name them; stop deriving all three from a string.
 
-- **D-RA2 — Audience: the logical recipient.** `Audience = person(userKey) | household(deliver:
-  'agent-choice' | 'silent') | thread(threadId) | parent(parentThreadId)`. It **resolves** to a
-  Thread for delivery (person → their DM via `bot.openDM`; thread → itself; parent → the parent's
-  inbox; household → the agent chooses recipients via `message_person`, each resolving to that
-  person's DM). Delivery **always grounds out in a channel-bound Thread** — that is the physical
-  address, and is deliberately not abstractable away. Replaces the `user`/`parent`/`silent` output
-  target (`silent` → `household(silent)`; `parent` → `parent(...)`; `user` → whatever the audience
-  resolves to). **We keep the name "Audience"** — see Naming.
+- **D-RA2 — Audience: the logical recipient (pure addressing).** `Audience = person(userKey) |
+  household | thread(threadId) | parent(parentThreadId)`. It **resolves** to a Thread for delivery
+  (person → their DM via `bot.openDM`; thread → itself; parent → the parent's inbox; household →
+  whichever members the run chooses to message, each resolving to their DM). Delivery **always
+  grounds out in a channel-bound Thread** — the physical address, deliberately not abstractable
+  away. Audience carries **no notion of whether the run speaks** — that is a communication/authority
+  question (D-RA14), not an addressing one; `household` therefore takes no `deliver` parameter.
+  Replaces the `user`/`parent` output target (`parent` → `parent(...)`; `user` → whatever the
+  audience resolves to; `silent` is no longer an audience — see D-RA14). **We keep the name
+  "Audience"** — see Naming.
 
 - **D-RA3 — Thread: the physical mailbox.** A Thread is a durable message log plus an **optional**
   channel binding: **`bound`** (backed by a real adapter — iMessage/Sendblue; delivery = the
@@ -109,9 +111,9 @@ triggers; cross-system agent identity; changes to the `WorkflowAgent` shell or W
   unified activity/ownership view later demands it (the embedded shape migrates cleanly).
 
 - **D-RA12 — Time-triggered only; failure detection already present.** Triggers stay
-  `once`/`interval`/`cron`. Conditional "remind if X hasn't happened" is expressible today via
-  **empty-reply-means-no-send** (already how `silent`+non-empty works) *provided the run has the
-  authority to read the state* (hence D-RA5 letting a schedule hold `host`). Checkpointing alone is
+  `once`/`interval`/`cron`. Conditional "remind if X hasn't happened" is just the run calling
+  `send_message` iff the condition holds (D-RA14) *provided it also holds the authority to read the
+  state* (hence D-RA5 letting a schedule hold `host`). Checkpointing alone is
   not durable execution, but Sunny already has the failure-detection layer (delegation watchdog,
   scheduler ticker, startup recovery pass) — state/webhook triggers deferred (mirror A2A task
   lifecycle when added).
@@ -123,6 +125,23 @@ triggers; cross-system agent identity; changes to the `WorkflowAgent` shell or W
   collision is **in our stack**: **`workspace` → `detached`** (Chat SDK `ChannelVisibility` has a
   `"workspace"` value) and, for the ocap sense, prefer **"authority"/"grant"** over "capability"
   (MCP uses "capabilities" for its `initialize` handshake, and we run MCP).
+
+- **D-RA14 — Delivery is tool-driven; silence is the absence of a messaging grant.** A run reaches
+  a human ONLY by invoking a messaging tool (`send_message`, whose destination is resolved from the
+  Audience; or `message_person` for household fan-out). Whether a run *may* speak is therefore an
+  **authority** question, not an audience one: a run not endowed a messaging grant cannot and does
+  not emit — silence is **structural** (guaranteed by the absent tool), not a `silent` flag someone
+  can forget. This makes delivery uniform with how conversational turns already work (no
+  `send_message` call ⇒ nothing reaches the user) and removes both the `silent` output mode and the
+  job/scheduled **terminal auto-emit** (`rawtext`): conditional delivery (e.g. "remind only if Leo
+  hasn't been fed") is just the run calling `send_message` iff the condition holds, exactly like a
+  turn choosing to stay silent (no empty-message convention). The elicitation-miss reliability net
+  is the existing **recovery backstop** (a cheap model rewrites the run's private scratch into a
+  message), applied to any run holding a messaging grant; a run with none has nothing to recover. A
+  `household` maintenance run (consolidation) is thus simply endowed `{memory}` and no messaging
+  grant — its silence needs no dedicated concept. The messaging tool set *is* the communication
+  posture (`send_message` = reactive reply to the audience; `message_person` = proactive fan-out),
+  so no separate "communication mode" axis is introduced.
 
 ## The model
 
@@ -149,9 +168,9 @@ triggers; cross-system agent identity; changes to the `WorkflowAgent` shell or W
 | owner+family group | thread(T) | T (bound, group) | T window + each doc | group-limited | T → the group | messages | — |
 | start_job | thread(T) | T (bound) | brief; framed from T's participants | ⊆ creator | T → whoever T is | inline | — |
 | subagent | parent(pThread) | child inbox (detached) | brief | ⊆ parent | parent inbox → folds up | subagent_links | — |
-| Leo reminder | person(kate) | resolved at fire | Kate doc + core | {host, send} ⊆ Kate's | resolve Kate → her DM (empty = silent) | schedules | Kate + owner |
-| follow-up sweep | household(agent-choice) | household inbox (detached) | core + index + open loops | {relay, send, memory} | message_person → each DM | schedules | owner |
-| nightly consolidation | household(silent) | household inbox (detached) | core (shared) | {memory} | nobody (records only) | schedules | owner |
+| Leo reminder | person(kate) | resolved at fire | Kate doc + core | {host, send} ⊆ Kate's | resolve Kate → her DM (calls send_message iff due) | schedules | Kate + owner |
+| follow-up sweep | household | household inbox (detached) | core + index + open loops | {relay, send, memory} | message_person → each DM | schedules | owner |
+| nightly consolidation | household | household inbox (detached) | core (shared) | {memory} — no messaging grant | nobody (structurally silent) | schedules | owner |
 | per-person briefing | person(p) × N | resolved per p | p's doc + core | {memory, send} | resolve p → p's DM | schedules (N rows) | each p + owner |
 
 ## Prior art & library alignment

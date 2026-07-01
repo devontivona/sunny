@@ -27,14 +27,14 @@ A job executing as a scheduled run SHALL NOT be able to create, modify, or delet
 - **THEN** it can create, modify, or delete schedules
 
 ### Requirement: Scheduled output delivery and history
-A scheduled run SHALL deliver its result by **resolving its audience** to a delivery thread through the gateway, without the job issuing an explicit send — defaulting to the schedule's principal (the creating conversation), NOT a hardcoded owner thread. A `household(silent)` schedule SHALL record its outcome and send nothing. Run outcomes SHALL be retained for later inspection.
+A scheduled run SHALL deliver by invoking a messaging tool whose destination is **resolved from its audience** through the gateway — defaulting to the schedule's principal (the creating conversation), NOT a hardcoded owner thread. A schedule whose run holds no messaging grant (e.g. nightly consolidation) SHALL record its outcome and send nothing. Run outcomes SHALL be retained for later inspection.
 
 #### Scenario: Scheduled result is delivered to its audience
 - **WHEN** a scheduled run created by a family member completes with a result
 - **THEN** the result is delivered to that family member's conversation via the gateway
 
 #### Scenario: Silent maintenance schedule sends nothing
-- **WHEN** a `household(silent)` schedule (e.g. nightly consolidation) completes
+- **WHEN** a `household` schedule whose run holds no messaging grant (e.g. nightly consolidation) completes
 - **THEN** no proactive message is sent, and its outcome is still recorded
 
 #### Scenario: Run history retained
