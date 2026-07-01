@@ -29,3 +29,15 @@ Every **spawned** run — a delegated child, a background job, or a scheduled ru
 #### Scenario: Endowment is explicit, not ambient
 - **WHEN** a spawned run was not endowed a given tool grant
 - **THEN** it cannot invoke that tool even though the tool is registered in the process
+
+### Requirement: Durable background jobs survive crashes and resume
+Tier 2 jobs SHALL be durable: a job that is interrupted by a crash, reboot, or timeout SHALL resume rather than restart from scratch. On completion a job SHALL deliver its result through the **delivery bus**, resolved from its **Audience** (see *Configurable output target*), rather than always notifying the user; a job with no messaging grant delivers nothing and records its result. Side-effecting operations within a job SHALL be expressed as retryable durable steps.
+
+#### Scenario: Job survives a reboot
+- **WHEN** the host reboots while a Tier 2 job is mid-execution
+- **THEN** the job resumes from its last durable step after restart
+- **AND** does not re-run already-completed side-effecting steps
+
+#### Scenario: Completion delivered to the job's audience
+- **WHEN** a Tier 2 job finishes with a result
+- **THEN** its result is delivered through the bus to the job's audience (a bound thread via the gateway, or a parent run's inbox), or nothing is sent if the job holds no messaging grant
