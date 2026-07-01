@@ -1,7 +1,7 @@
 ## MODIFIED Requirements
 
 ### Requirement: Self-scheduling
-Sunny SHALL be able to create, list, update, and delete schedules **during interactive turns of any trusted DM (owner or family)** — not only owner turns. A created schedule SHALL carry an **audience** (defaulting to the creating conversation's principal) so that its fired run frames itself for, and delivers to, that principal rather than the owner by default. The self-scheduling tools SHALL be registered on the durable conversational turn (their omission after the durable-main-loop migration was a regression against this requirement).
+Sunny SHALL be able to create, list, update, and delete schedules **during interactive turns of any trusted DM (owner or family)** — not only owner turns. A created schedule SHALL carry an **audience** (defaulting to the creating conversation's subject) so that its fired run frames itself for, and delivers to, that subject rather than the owner by default. The self-scheduling tools SHALL be registered on the durable conversational turn (their omission after the durable-main-loop migration was a regression against this requirement).
 
 #### Scenario: Agent schedules itself
 - **WHEN** Sunny decides recurring work is needed (e.g. nightly memory consolidation)
@@ -9,7 +9,7 @@ Sunny SHALL be able to create, list, update, and delete schedules **during inter
 
 #### Scenario: A family member can schedule for themselves
 - **WHEN** a family member asks in their DM to be reminded on a recurring basis
-- **THEN** Sunny creates a schedule whose principal/audience is that family member, and the fired run addresses and delivers to them, not the owner
+- **THEN** Sunny creates a schedule whose audience is that family member, and the fired run addresses and delivers to them, not the owner
 
 #### Scenario: Agent inspects and removes a schedule
 - **WHEN** Sunny needs to review or cancel a schedule
@@ -27,7 +27,7 @@ A job executing as a scheduled run SHALL NOT be able to create, modify, or delet
 - **THEN** it can create, modify, or delete schedules
 
 ### Requirement: Scheduled output delivery and history
-A scheduled run SHALL deliver by invoking a messaging tool whose destination is **resolved from its audience** through the gateway — defaulting to the schedule's principal (the creating conversation), NOT a hardcoded owner thread. A schedule whose run holds no messaging grant (e.g. nightly consolidation) SHALL record its outcome and send nothing. Run outcomes SHALL be retained for later inspection.
+A scheduled run SHALL deliver through the single delivery bus, whose destination is **resolved from the schedule's audience** — defaulting to the audience's subject (the creating conversation), NOT a hardcoded owner thread. A schedule whose run holds no messaging grant (e.g. nightly consolidation) SHALL record its outcome and send nothing. Run outcomes SHALL be retained for later inspection.
 
 #### Scenario: Scheduled result is delivered to its audience
 - **WHEN** a scheduled run created by a family member completes with a result

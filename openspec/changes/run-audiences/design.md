@@ -49,28 +49,35 @@ triggers; cross-system agent identity; changes to the `WorkflowAgent` shell or W
 
 - **D-RA3 — Thread: the physical mailbox.** A Thread is a durable message log plus an **optional**
   channel binding: **`bound`** (backed by a real adapter — iMessage/Sendblue; delivery = the
-  gateway) or **`detached`** (no channel — a subagent inbox or a household run's workspace; used
-  for steering/logging, never a human destination). Detached threads already exist by convention
-  (subagent `childThreadId`); this makes the kind explicit. Align with the Chat SDK `Thread`
-  model and serialize the SDK's way (`SerializedThread`) rather than hand-encoding threadId
-  semantics; a detached thread can be backed by `@chat-adapter/state-memory` (already a dependency).
+  gateway) or **`detached`** (no channel — a subagent inbox or a household run's detached inbox;
+  used for steering/logging, never a human destination). Detached threads already exist by
+  convention (subagent `childThreadId`); in this change `detached` stays that existing convention.
+  Formalizing Thread as a first-class Chat SDK `Thread`/`SerializedThread` (and retiring the
+  hand-rolled `isGroupThreadId`) is a **separate, deferred change** — not required for the jobs
+  here, since every in-scope delivery grounds out in a `bound` thread.
 
-- **D-RA4 — Principal ≠ Audience (behalf ≠ recipient).** The **Principal** is the subject a run
-  acts for; it drives prompt framing, which memory it reads/writes, and **ownership**. Usually the
-  principal equals the audience's subject; they diverge when a creator acts for someone else (Devon
-  sets a reminder whose principal is Kate). **Ownership follows the principal, plus the owner
-  always** (Kate can list/cancel `principal=Kate` runs; the owner sees and cancels everything).
-  This falls out of the stored audience/principal — no separate ACL.
+- **D-RA4 — Ownership follows the audience's subject (no separate Principal).** Who a run acts for
+  and who owns it **derive from its audience**, not a separate stored field: `person(kate)` → Kate;
+  `household` → the owner; `thread(T)` → T's trusted sender; `parent` → the parent's owner. A run is
+  listable/cancellable by that subject **plus the owner always** (Kate can cancel her own runs; the
+  owner sees and cancels everything). We considered a distinct `Principal` noun for the "creator
+  acts for someone else" case (Devon sets a reminder for Kate) — but there the audience is already
+  `person(kate)`, so the subject is recoverable from the audience: no divergence, no extra column,
+  no ACL. Introduce a Principal only if a real case appears where ownership ∉ the audience.
 
 - **D-RA5 — Authority: monotone subset attenuation (ocap).** Every spawned run carries an
-  **authority** = a set of named grants (tool capabilities). Invariant: `authority(child) ⊆
-  authority(creator)`, **endowed explicitly at spawn** — **no ambient authority** (a run never
-  inherits the shell's tools implicitly). The spawn relation is a **derivation tree** (enables
-  cascade-revoke / audit lineage). This generalizes durable-execution's existing "least-privilege
-  child runs" from delegated children to **all** spawned runs (scheduled jobs included), and
-  **replaces the bespoke anti-recursion guard**: a scheduled run simply isn't endowed with the
-  `schedule` grant by default (with the derivation-tree depth cap as backstop), rather than a
-  special case checked in code.
+  **authority** = a set of **grant-name strings** (tool/capability names; WDK-serializable, so it
+  rides in the RunSpec). Invariant: `authority(child) ⊆ authority(creator)` (set inclusion),
+  **endowed explicitly at spawn** — **no ambient authority** (a run never inherits the shell's tools
+  implicitly; a tool existing in-process does not make it invocable). This generalizes
+  durable-execution's existing "least-privilege child runs" from delegated children to **all**
+  spawned runs (scheduled jobs included), and **replaces the bespoke anti-recursion guard**: a
+  scheduled run simply isn't endowed the `schedule` grant by default (the existing delegation depth
+  cap remains the runaway backstop). The conversation turn's own authority is the **root** of the
+  tree, reified from its trust gates (`trustedDm`/`ownerPresent`) so the first `⊆` check has
+  something concrete to compare against. *(Cascade-revoke, audit lineage, and within-tool "membrane"
+  attenuation are natural extensions but are **out of scope** here — no in-scope requirement
+  exercises them.)*
 
 - **D-RA6 — Enforce with the real SDK mechanism.** `activeTools` is advisory in-loop narrowing,
   **not** a trust boundary. The boundary is which `tools` the child agent is **constructed** with
@@ -81,7 +88,7 @@ triggers; cross-system agent identity; changes to the `WorkflowAgent` shell or W
   Conversation / job / schedule / subagent are the same `WorkflowAgent` shell over a RunSpec; a
   single `resolveAudience(audience) → { instructions, contextDocs, deliver, tools }` step replaces
   the four bespoke `buildSetup`s. `buildJobPrompt`'s hardcoded owner framing is removed; framing is
-  derived from audience/principal (person-framed for `person`, steward-framed for `household`,
+  derived from the audience (person-framed for `person`, steward-framed for `household`,
   participant-aware for `thread` — reusing what `setupTurn` already does for conversations). Net
   code **deletion**, not addition.
 
@@ -91,7 +98,8 @@ triggers; cross-system agent identity; changes to the `WorkflowAgent` shell or W
   reliably among a few tightly-described verbs than from one polymorphic `spawn_run(mode, …)`. But
   they **share the `{ audience, authority }` argument shape** (promoting `delegate_task`'s existing
   `toolset` into the shared `authority` arg), and inspection/cancel unify into audience-agnostic
-  **`list_runs` / `cancel_run`** spanning schedules + jobs + subagents.
+  **`list_runs` / `cancel_run`** spanning schedules + subagents. (Background jobs are fire-and-forget
+  with no persisted row — out of scope for `list_runs` until a run ledger exists; D-RA11.)
 
 - **D-RA9 — Skills: one skill for the whole spawn taxonomy.** The decision "spawn a run: now or
   later? for whom? with what least authority?" is a single judgment. Extend the subagent-only
@@ -100,20 +108,23 @@ triggers; cross-system agent identity; changes to the `WorkflowAgent` shell or W
   can't act on).
 
 - **D-RA10 — Household runs may proactively message household members.** A `household` run is a
-  **fan-out hub**: it holds `message_person` (roster-scoped — refuses arbitrary numbers) and may
-  text any roster member unprompted, each delivery resolving to that member's channel-bound DM.
-  (Owner-configurable / approval-gated variants are possible via `needsApproval` but not required.)
+  **fan-out hub**: it holds the addressed `message` tool (D-RA15, roster-scoped — refuses arbitrary
+  numbers) and may text any roster member unprompted, each delivery resolving to that member's
+  `bound` thread. A rate/dedup guardrail (so a mis-briefed recurring sweep can't text everyone
+  repeatedly) is a **follow-up** requirement, not yet specified.
 
-- **D-RA11 — Storage: minimal (audience/principal/authority on existing rows).** Add `audience`,
-  `principal`, and `authority` columns to `schedules` and `subagent_links`; `start_job` passes its
-  RunSpec inline (fire-and-forget). **No `runs` table** — RunSpec is a *type*; two of its four
-  fields already exist as columns (`prompt`/`task`, `model`). Promote to a ledger table only if a
-  unified activity/ownership view later demands it (the embedded shape migrates cleanly).
+- **D-RA11 — Storage: minimal (audience/authority on existing rows).** Add `audience` and
+  `authority` columns to `schedules` and `subagent_links`; `start_job` passes its RunSpec inline
+  (fire-and-forget). Ownership derives from `audience` (D-RA4), so there is **no `principal`
+  column**. **No `runs` table** — RunSpec is a *type*; two of its four fields already exist as
+  columns (`prompt`/`task`, `model`). Promote to a ledger table only if a unified activity/ownership
+  view later demands it (the embedded shape migrates cleanly).
 
 - **D-RA12 — Time-triggered only; failure detection already present.** Triggers stay
-  `once`/`interval`/`cron`. Conditional "remind if X hasn't happened" is just the run calling
-  `send_message` iff the condition holds (D-RA14) *provided it also holds the authority to read the
-  state* (hence D-RA5 letting a schedule hold `host`). Checkpointing alone is
+  `once`/`interval`/`cron`. Conditional "remind if X hasn't happened" is just the run delivering (or
+  not) iff the condition holds (D-RA14/D-RA15) — a headless run returns empty when there is nothing
+  to say — *provided it also holds the authority to read the state* (hence D-RA5 letting a schedule
+  hold `host`). Checkpointing alone is
   not durable execution, but Sunny already has the failure-detection layer (delegation watchdog,
   scheduler ticker, startup recovery pass) — state/webhook triggers deferred (mirror A2A task
   lifecycle when added).
@@ -126,22 +137,38 @@ triggers; cross-system agent identity; changes to the `WorkflowAgent` shell or W
   `"workspace"` value) and, for the ocap sense, prefer **"authority"/"grant"** over "capability"
   (MCP uses "capabilities" for its `initialize` handshake, and we run MCP).
 
-- **D-RA14 — Delivery is tool-driven; silence is the absence of a messaging grant.** A run reaches
-  a human ONLY by invoking a messaging tool (`send_message`, whose destination is resolved from the
-  Audience; or `message_person` for household fan-out). Whether a run *may* speak is therefore an
-  **authority** question, not an audience one: a run not endowed a messaging grant cannot and does
-  not emit — silence is **structural** (guaranteed by the absent tool), not a `silent` flag someone
-  can forget. This makes delivery uniform with how conversational turns already work (no
-  `send_message` call ⇒ nothing reaches the user) and removes both the `silent` output mode and the
-  job/scheduled **terminal auto-emit** (`rawtext`): conditional delivery (e.g. "remind only if Leo
-  hasn't been fed") is just the run calling `send_message` iff the condition holds, exactly like a
-  turn choosing to stay silent (no empty-message convention). The elicitation-miss reliability net
-  is the existing **recovery backstop** (a cheap model rewrites the run's private scratch into a
-  message), applied to any run holding a messaging grant; a run with none has nothing to recover. A
-  `household` maintenance run (consolidation) is thus simply endowed `{memory}` and no messaging
-  grant — its silence needs no dedicated concept. The messaging tool set *is* the communication
-  posture (`send_message` = reactive reply to the audience; `message_person` = proactive fan-out),
-  so no separate "communication mode" axis is introduced.
+- **D-RA14 — Silence is the absence of a messaging grant (not an output mode).** Whether a run
+  *may* speak is an **authority** question: a run not endowed a messaging grant cannot emit —
+  silence is **structural** (guaranteed by the absent tool), not a `silent` flag someone can forget.
+  A `household` maintenance run (consolidation) is thus simply endowed `{memory}` and no messaging
+  grant. Whether a *granted* run **does** speak is emergent — it delivers, or returns empty when
+  there is nothing to say (conditional delivery, e.g. "remind only if Leo hasn't been fed"), exactly
+  like a conversational turn choosing to stay quiet. This **corrects an earlier over-reach**:
+  silence-as-authority does *not* mean deleting the headless **terminal delivery**. A
+  job/scheduled/subagent's final message is still delivered — now as a single **bus** call (D-RA15)
+  rather than a bespoke `emitStep`/`rawtext` path — so nothing is stranded and a silent-*success*
+  subagent still reports to its parent (rather than emitting nothing and leaving the parent's
+  watchdog, which fires only on `returnValue` rejection, waiting forever). The elicitation-miss net
+  is the existing **recovery backstop**, hoisted into the one shared finalize and **framed by the
+  run's subject** (D-RA4), never hardcoded to the owner.
+
+- **D-RA15 — One delivery bus; two messaging verbs.** All outward messaging collapses to a single
+  seam: `deliver(thread, msg)` that **dispatches on the mailbox binding** — `bound` → `gateway.send`
+  (reaches the human; their own turn also folds it), `detached` → append + wake (reaches the
+  agent-run, folded via `loadSteers`). This replaces the three scattered paths (`emitStep`'s
+  `user`/`parent`/`silent` arms, `message_person`'s `gateway.send`, `steerChild`'s inbox append)
+  with one. Inbound is *already* single — owner double-text, parent→child steer, and child→parent
+  report all fold through `loadSteers`; this makes outbound match. Every bus message carries a
+  **`from`** (sender id + label), so a subagent report is attributed `"<label> (subagent): …"` by
+  construction (no bespoke `EmitTarget.from*`), and parent→child steering stays the inbound-fold it
+  already is (orthogonal to audience-based emit). A run's **terminal delivery is just a bus call** to
+  its audience, wrapped once by the recovery backstop — **one finalize for all four profiles**.
+  **Tool surface** (messaging, distinct from D-RA8's spawn verbs): `send_message(text)` = reply to
+  *my* audience (zero address, the common case); **one addressed `message(recipient, text)`** = send
+  to a *named other* entity, where `recipient` ∈ {roster people} ∪ {my running subagents} — this
+  **unifies `message_person` + `message_subagent`** (relaying to a person and steering a child are
+  the same bus op to a different mailbox). Agent↔agent and agent↔human become the same operation,
+  differing only in the transport the binding selects.
 
 ## The model
 
@@ -154,9 +181,10 @@ triggers; cross-system agent identity; changes to the `WorkflowAgent` shell or W
      AUDIENCE   person · household · thread · parent
         │ resolves (openDM / getParticipants)
    PHYSICAL ─────────────────────────────────────────  where bytes land
-     THREAD     bound (adapter-backed) | detached (state-memory)
-     AUTHORITY  creator ⊇ child ⊇ grandchild   (monotone; explicit endowment; derivation tree)
-     PRINCIPAL  the subject a run acts for → owns it
+     THREAD     bound (adapter-backed) | detached (inbox)
+     DELIVERY   one bus — bound → gateway.send · detached → append + wake
+     AUTHORITY  creator ⊇ child ⊇ grandchild   (monotone set inclusion; explicit endowment)
+     OWNERSHIP  derived from audience → its subject + owner
 ```
 
 ## Scenario mapping
@@ -168,8 +196,8 @@ triggers; cross-system agent identity; changes to the `WorkflowAgent` shell or W
 | owner+family group | thread(T) | T (bound, group) | T window + each doc | group-limited | T → the group | messages | — |
 | start_job | thread(T) | T (bound) | brief; framed from T's participants | ⊆ creator | T → whoever T is | inline | — |
 | subagent | parent(pThread) | child inbox (detached) | brief | ⊆ parent | parent inbox → folds up | subagent_links | — |
-| Leo reminder | person(kate) | resolved at fire | Kate doc + core | {host, send} ⊆ Kate's | resolve Kate → her DM (calls send_message iff due) | schedules | Kate + owner |
-| follow-up sweep | household | household inbox (detached) | core + index + open loops | {relay, send, memory} | message_person → each DM | schedules | owner |
+| Leo reminder | person(kate) | resolved at fire | Kate doc + core | {host, send_message} ⊆ Kate's | bus → Kate's bound DM (delivers iff due) | schedules | Kate + owner |
+| follow-up sweep | household | household inbox (detached) | core + index + open loops | {message, send_message, memory} | bus → each member's bound DM (via `message`) | schedules | owner |
 | nightly consolidation | household | household inbox (detached) | core (shared) | {memory} — no messaging grant | nobody (structurally silent) | schedules | owner |
 | per-person briefing | person(p) × N | resolved per p | p's doc + core | {memory, send} | resolve p → p's DM | schedules (N rows) | each p + owner |
 
