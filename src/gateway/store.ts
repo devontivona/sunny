@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { Db } from '../db/client.js';
 import { messages } from '../db/schema.js';
 import { attachmentRefsOf, type AttachmentRef, type OutboundMediaResult } from './media.js';
+import { sanitizePgJson, sanitizePgText } from './sanitize.js';
 import { isGroupThreadId } from './threadId.js';
 import { normalize } from './auth.js';
 import type { Attachment, ChannelEvent } from './types.js';
@@ -94,8 +95,10 @@ export class ConversationStore {
         role: 'user',
         senderId: event.senderId,
         senderName: event.senderName ?? null,
-        text: event.text,
-        payload: userPayload(event, refs),
+        // Sanitize NUL / lone surrogates: Postgres rejects them in text/jsonb, and an
+        // inbound (or its attachment refs) can carry either. The broad write-boundary backstop.
+        text: sanitizePgText(event.text),
+        payload: sanitizePgJson(userPayload(event, refs)),
         isOwner: event.isOwner,
         timestamp: event.timestamp,
       })
@@ -260,8 +263,8 @@ export class ConversationStore {
       role: 'assistant',
       senderId: 'sunny',
       senderName: 'Sunny',
-      text,
-      payload: assistantSendPayload(id, text, media),
+      text: sanitizePgText(text),
+      payload: sanitizePgJson(assistantSendPayload(id, text, media)),
       isOwner: false,
       timestamp: new Date(),
     });
@@ -285,8 +288,10 @@ export class ConversationStore {
       role: 'assistant',
       senderId: 'sunny',
       senderName: 'Sunny',
-      text,
-      payload,
+      // A turn's payload can embed tool output (e.g. a file_read of a binary) that carries
+      // NUL bytes Postgres rejects; sanitize both projections at the write boundary (D-MG9).
+      text: sanitizePgText(text),
+      payload: sanitizePgJson(payload),
       isOwner: false,
       timestamp: new Date(),
     });

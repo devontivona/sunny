@@ -126,6 +126,39 @@ export function isHeic(mediaType: string): boolean {
   return HEIC_TYPES.has(t);
 }
 
+/** Whether a declared media type is absent or the generic binary fallback — i.e. worth
+ *  sniffing from the bytes. Transports (Sendblue) sometimes deliver a PDF/image unlabeled. */
+export function isGenericBinaryType(mediaType: string | undefined | null): boolean {
+  const t = mediaType?.toLowerCase().split(';')[0]?.trim();
+  return !t || t === 'application/octet-stream' || t === 'binary/octet-stream';
+}
+
+/**
+ * Recover a media type from a file's magic bytes (D-MM3 hardening). Transports don't
+ * always label an attachment — Sendblue can deliver a PDF as `application/octet-stream`,
+ * which then misses native ingestion and gets read as raw text (poisoning the durable
+ * turn's Postgres write). When the declared type is missing/generic, sniff the leading
+ * bytes so a PDF/image routes to native ingestion instead. Falls back to `fallback` when
+ * the signature is unrecognized. Pure; unit-tested.
+ */
+export function sniffMediaType(bytes: Buffer, fallback = 'application/octet-stream'): string {
+  const b = bytes;
+  const at = (i: number, ...sig: number[]) => sig.every((v, k) => b[i + k] === v);
+  if (b.length >= 4 && at(0, 0x25, 0x50, 0x44, 0x46)) return 'application/pdf'; // %PDF
+  if (b.length >= 8 && at(0, 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)) return 'image/png';
+  if (b.length >= 3 && at(0, 0xff, 0xd8, 0xff)) return 'image/jpeg';
+  if (b.length >= 4 && at(0, 0x47, 0x49, 0x46, 0x38)) return 'image/gif'; // GIF8
+  // RIFF....WEBP
+  if (b.length >= 12 && at(0, 0x52, 0x49, 0x46, 0x46) && at(8, 0x57, 0x45, 0x42, 0x50))
+    return 'image/webp';
+  // ISO-BMFF `ftyp` box with a HEIC/HEIF brand.
+  if (b.length >= 12 && at(4, 0x66, 0x74, 0x79, 0x70)) {
+    const brand = b.subarray(8, 12).toString('latin1');
+    if (['heic', 'heix', 'heif', 'hevc', 'mif1', 'msf1'].includes(brand)) return 'image/heic';
+  }
+  return fallback;
+}
+
 /** Prepared image bytes ready to inline as a model content part. */
 export interface PreparedImage {
   bytes: Buffer;

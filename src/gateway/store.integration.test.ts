@@ -25,6 +25,29 @@ describe('ConversationStore (integration, PGlite)', () => {
     });
   });
 
+  describe('write-boundary sanitization (poison-content hardening)', () => {
+    // PGlite is real Postgres, so it rejects NUL / lone surrogates in text+jsonb exactly
+    // like prod — without the store's sanitizer these inserts throw "null character not
+    // permitted", which is what left a turn unpersisted and re-delivered (the dup-reply bug).
+    it('appendTurn persists a payload/text carrying NUL bytes instead of failing', async () => {
+      const poison = 'Got the PDF \u0000\u0000 %PDF-1.6 binary \uD800 tail';
+      const payload = { id: 'turn', role: 'assistant', parts: [{ type: 'text', text: poison }] };
+      await expect(store.appendTurn(OWNER_THREAD, payload, poison)).resolves.toBeUndefined();
+      const win = await store.recentWindow(OWNER_THREAD);
+      expect(win).toHaveLength(1);
+      expect(win[0]!.text).not.toContain('\u0000');
+      expect(win[0]!.text).toContain('Got the PDF');
+      expect(JSON.stringify(win[0]!.payload)).not.toContain('\\u0000');
+    });
+
+    it('appendInbound sanitizes NUL bytes in inbound text', async () => {
+      const ev = makeChannelEvent({ messageId: 'nul-1', text: 'hi\u0000there' });
+      await expect(store.appendInbound(ev)).resolves.toBe(true);
+      const win = await store.recentWindow(ev.threadId);
+      expect(win[0]!.text).toBe('hithere');
+    });
+  });
+
   describe('recentWindow order + limit (5.2)', () => {
     it('returns the newest `windowSize` messages, oldest-first', async () => {
       const small = new ConversationStore(tdb.db, 2);

@@ -104,7 +104,20 @@ export function readFileSafe(path: string, maxBytes = MAX_FILE_BYTES): string {
     const full = expandHome(path);
     if (statSync(full).isDirectory()) return `ERROR: "${path}" is a directory, not a file`;
     const buf = readFileSync(full);
-    const text = buf.subarray(0, maxBytes).toString('utf8');
+    const head = buf.subarray(0, maxBytes);
+    // Binary guard: a NUL byte means this isn't UTF-8 text (a PDF, image, archive, …).
+    // Decoding it to a string yields garbage the model can't use AND embeds NUL/invalid
+    // code points that poison the durable turn's Postgres write. Refuse with a hint —
+    // real documents (PDF/image) should ride in as an ATTACHMENT (natively ingested),
+    // not be read as text.
+    if (head.includes(0)) {
+      return (
+        `ERROR: "${path}" looks like a binary file (${buf.length} bytes), not text — not read. ` +
+        `If it's a PDF/image the user sent, it's already available as an attachment; refer to that ` +
+        `instead of reading the raw file.`
+      );
+    }
+    const text = head.toString('utf8');
     return buf.length > maxBytes
       ? `${text}\n…[truncated ${buf.length - maxBytes} of ${buf.length} bytes]`
       : text;

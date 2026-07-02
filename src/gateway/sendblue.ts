@@ -8,6 +8,7 @@ import { logger } from '../logger.js';
 import { Authorizer } from './auth.js';
 import {
   contentTypeForName,
+  isGenericBinaryType,
   kindForMediaType,
   outboundToken,
   persistInbound,
@@ -15,6 +16,7 @@ import {
   planOutbound,
   publicBaseUrl,
   publishOutbox,
+  sniffMediaType,
   type AttachmentRef,
   type OutboundMediaResult,
 } from './media.js';
@@ -462,11 +464,18 @@ export class SendblueGateway implements Gateway {
       try {
         const bytes = a.data ?? (a.fetchData ? await a.fetchData() : null);
         if (!bytes || bytes.length === 0) throw new Error('no attachment content');
-        const path = persistInbound(this.config.runtimeDir, event.messageId, i, bytes, a.mimeType);
+        // Recover the real type when the transport left it unlabeled/generic (Sendblue
+        // often delivers a PDF as application/octet-stream): sniff the magic bytes so a
+        // PDF/image routes to NATIVE model ingestion instead of being read as raw text
+        // (which poisoned the durable turn). Keeps the declared type when it's specific.
+        const mediaType = isGenericBinaryType(a.mimeType)
+          ? sniffMediaType(bytes, a.mimeType || 'application/octet-stream')
+          : a.mimeType;
+        const path = persistInbound(this.config.runtimeDir, event.messageId, i, bytes, mediaType);
         refs.push({
           path,
-          mediaType: a.mimeType,
-          kind: a.kind,
+          mediaType,
+          kind: kindForMediaType(mediaType),
           name,
           size: bytes.length,
           direction: 'inbound',
