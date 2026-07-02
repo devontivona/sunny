@@ -54,14 +54,18 @@ export async function runScheduledJob(input: ScheduledJobInput): Promise<void> {
         ...MEMORY_TOOL_SPECS.recall_history,
         execute: ({ query, limit }) => recallStep(query, limit),
       }),
-      // Proactive fan-out (run-audiences D-RA10, Phase 3.1): a delivering scheduled run may reach
-      // roster members via the bus. Withheld from the silent `household` maintenance run
-      // (consolidation) — no messaging grant → structurally silent (D-RA14).
+      // Proactive fan-out (run-audiences D-RA10, Phase 3.1): a *delivering* scheduled run may reach
+      // OTHER roster members via the bus. Withheld from `household` — today the only household
+      // schedule is the silent maintenance run (consolidation), which holds no messaging grant → is
+      // structurally silent (D-RA14). (A future household *fan-out* run would need the grant wired
+      // at its creation path, which doesn't exist yet.) The run's OWN audience is reached by its
+      // terminal result — `message` is refused for the audience's own subject (no double-send).
       ...(input.audience.kind !== 'household'
         ? {
             message: tool({
               ...MESSAGE_SPEC,
-              execute: ({ recipient, text }) => scheduledMessageStep(recipient, text),
+              execute: ({ recipient, text }) =>
+                scheduledMessageStep(input.audience, recipient, text),
             }),
           }
         : {}),
@@ -150,40 +154,43 @@ async function recallStep(query: string, limit?: number): Promise<string> {
 }
 
 /**
- * Proactively message a roster member from a scheduled run (run-audiences D-RA10, Phase 3.1).
- * Self-contained `'use step'` (resolves the roster member + sends via the gateway inline, mirroring
- * the conversation relay) so it composes as a tool execute without nesting the `deliver` step.
- * Roster-only — arbitrary numbers are refused.
+ * Proactively message ANOTHER roster member from a scheduled run (run-audiences D-RA10, Phase 3.1).
+ * Self-contained `'use step'` (resolves via the shared `resolveRosterMember`, sends via the gateway
+ * inline) so it composes as a tool execute without nesting the `deliver` step. Roster-only. Refuses
+ * to message the run's OWN audience subject — that person is reached by the run's terminal result,
+ * so self-messaging would double-send.
  */
-async function scheduledMessageStep(recipient: string, text: string): Promise<string> {
+async function scheduledMessageStep(
+  audience: Audience,
+  recipient: string,
+  text: string,
+): Promise<string> {
   'use step';
 
   const { getRuntime } = await import('../src/runtime.js');
   const { normalize } = await import('../src/gateway/auth.js');
   const { sendblueDmThreadId } = await import('../src/gateway/threadId.js');
+  const { resolveRosterMember } = await import('../src/agent/audience.js');
   const { config, store, gateway } = await getRuntime();
 
-  const roster = [
-    { name: config.owner.name, identities: config.owner.identities },
-    ...config.family,
-  ];
-  const wanted = recipient.trim();
-  const match =
-    roster.find((p) => p.name.toLowerCase() === wanted.toLowerCase()) ??
-    roster.find((p) => p.identities.map(normalize).includes(normalize(wanted)));
-  if (!match || match.identities.length === 0) {
-    const known = roster.map((r) => r.name).join(', ');
+  const member = resolveRosterMember(recipient, config);
+  if (!member) {
+    const known = [config.owner.name, ...config.family.map((f) => f.name)].join(', ');
     return `I can only message the family roster (${known}); "${recipient}" isn't one, so I sent nothing.`;
   }
-  const identity = normalize(match.identities[0]!);
+  // No self-send: the run's terminal result already goes to its own audience subject.
+  if (member.name === subjectName(audience, config)) {
+    return `${member.name} already receives this run's result — put it in your final reply instead of messaging them.`;
+  }
+  const identity = normalize(member.identity);
   let threadId = await store.findDmThreadForSender(identity);
   if (!threadId) {
     const from = process.env.SENDBLUE_FROM_NUMBER;
-    if (!from) return `I don't have a conversation with ${match.name} yet and can't start one.`;
+    if (!from) return `I don't have a conversation with ${member.name} yet and can't start one.`;
     threadId = sendblueDmThreadId(from, identity);
   }
   await gateway.send(threadId, { text }, { persist: true });
-  return `Sent to ${match.name}.`;
+  return `Sent to ${member.name}.`;
 }
 
 async function recordRun(runId: string, output: string): Promise<void> {

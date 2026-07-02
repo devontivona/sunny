@@ -34,7 +34,7 @@ describe('runJob (workflow integration — real Local World)', () => {
     expect(ctx.gateway.texts()).toEqual(['done: built the thing']);
   });
 
-  it('detached inbox: appends to the inbox + wakes, with NO gateway egress', async () => {
+  it('detached inbox: appends to the inbox with NO gateway egress and NO wake', async () => {
     ctx = await setupTestRuntime();
     setTurnModel([{ type: 'text', text: 'report for my parent' }]);
 
@@ -47,6 +47,8 @@ describe('runJob (workflow integration — real Local World)', () => {
     expect(ctx.gateway.sendCount).toBe(0); // detached → never hits the gateway
     const steers = await ctx.store.unansweredSteers('subagent:abc', []);
     expect(steers.map((s) => s.text)).toContain('report for my parent');
-    expect(ctx.wakeCalls).toContain('subagent:abc'); // run-supply woken to fold it
+    // A detached inbox is NOT woken (mirrors reportToParent) — waking a `subagent:` thread would
+    // wrongly start a conversation turn on an internal inbox.
+    expect(ctx.wakeCalls).not.toContain('subagent:abc');
   });
 });

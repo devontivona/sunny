@@ -151,10 +151,12 @@ export async function deliver(audience: Audience, text: string): Promise<void> {
     threadId = audience.threadId;
   }
 
-  // Dispatch on the mailbox binding: detached (internal inbox) → append + wake; bound → gateway.
+  // Dispatch on the mailbox binding: detached (internal `subagent:` inbox) → append only; bound →
+  // gateway. A detached inbox is NOT woken here — an in-flight recipient folds it via `loadSteers`,
+  // a finished one is run-to-completion. This mirrors `reportToParent`, which deliberately does not
+  // wake a child inbox (waking would wrongly start a conversation turn on an internal thread).
   if (isChildThread(threadId)) {
     await appendInterRunMessage(runtime.store, threadId, { id: 'run', name: 'run' }, text);
-    runtime.wakeThread?.(threadId);
   } else {
     await runtime.gateway.send(threadId, { text });
   }
@@ -168,16 +170,13 @@ async function resolvePersonThread(
 ): Promise<string | null> {
   const { normalize } = await import('../src/gateway/auth.js');
   const { sendblueDmThreadId } = await import('../src/gateway/threadId.js');
-  const roster = [
-    { name: runtime.config.owner.name, identities: runtime.config.owner.identities },
-    ...runtime.config.family,
-  ];
-  const wanted = person.trim();
-  const match =
-    roster.find((p) => p.name.toLowerCase() === wanted.toLowerCase()) ??
-    roster.find((p) => p.identities.map(normalize).includes(normalize(wanted)));
-  if (!match || match.identities.length === 0) return null;
-  const identity = normalize(match.identities[0]!);
+  const { resolveRosterMember } = await import('../src/agent/audience.js');
+  const member = resolveRosterMember(person, runtime.config);
+  if (!member) return null;
+  // Matching is centralized (resolveRosterMember); thread ENCODING uses the gateway's `normalize`
+  // (the same canonicalization the adapter uses for thread ids), so a resolved member addresses
+  // the same thread the adapter would.
+  const identity = normalize(member.identity);
   const existing = await runtime.store.findDmThreadForSender(identity);
   if (existing) return existing;
   const from = process.env.SENDBLUE_FROM_NUMBER;

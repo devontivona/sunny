@@ -70,25 +70,3 @@ export const RUNS_TOOL_SPECS = {
     }),
   },
 } as const;
-
-/** One active-schedule row's display shape (subset of `ScheduleRow`), kept local so this
- *  module stays node-free (no db/schema value import). */
-interface ScheduleListItem {
-  id: string;
-  kind: string;
-  spec: string;
-  label: string | null;
-  nextRunAt: Date | null;
-  prompt: string;
-}
-
-/** Format an active-schedules listing (shared by the in-process tool and the durable step). */
-export function formatScheduleList(rows: ScheduleListItem[]): string {
-  if (rows.length === 0) return '(no active schedules)';
-  return rows
-    .map(
-      (r) =>
-        `${r.id} [${r.kind} ${r.spec}]${r.label ? ` "${r.label}"` : ''} next ${r.nextRunAt?.toISOString() ?? 'n/a'}: ${r.prompt.slice(0, 60)}`,
-    )
-    .join('\n');
-}

@@ -11,8 +11,10 @@ import type { SunnyConfig } from '../config/index.js';
  *                the thread it came from, which is already the right person in a family.
  *  - person    → resolve a roster member to their bound DM at delivery time (cross-person sends).
  *  - parent    → report to the spawning run's inbox (attributed via from*).
- *  - household → a fan-out hub with no single recipient: NO terminal auto-delivery (the run reaches
- *                people via the `message` tool). A household run with no messaging grant is silent.
+ *  - household → no single recipient and NO terminal auto-delivery. Whether it reaches anyone is a
+ *                grant question (D-RA14): a household run WOULD fan out to members via the `message`
+ *                tool if endowed it, but the only household schedule today is the silent maintenance
+ *                run (consolidation), which holds no messaging grant → is structurally silent.
  */
 export type Audience =
   | { kind: 'thread'; threadId: string }
@@ -107,17 +109,31 @@ export function subjectName(audience: Audience, config: SunnyConfig): string {
   return config.owner.name;
 }
 
-/** Resolve a roster name/identity to a canonical roster name, or null if not on the roster. */
-export function rosterMatch(person: string, config: SunnyConfig): string | null {
+/**
+ * Resolve a roster name/identity to the canonical member (name + first identity), or null if not
+ * on the roster (owner + family). The SINGLE matcher — every person-resolution site (framing,
+ * ownership, relay send, scheduled fan-out) goes through this, so matching precedence and
+ * normalization can't drift between "who is this run framed for" and "where does it deliver".
+ */
+export function resolveRosterMember(
+  person: string,
+  config: SunnyConfig,
+): { name: string; identity: string } | null {
   const roster = [
     { name: config.owner.name, identities: config.owner.identities },
     ...config.family,
   ];
-  const wanted = person.trim().toLowerCase();
-  const byName = roster.find((p) => p.name.toLowerCase() === wanted);
-  if (byName) return byName.name;
-  const byId = roster.find((p) => p.identities.some((id) => normalizeLoose(id) === normalizeLoose(person)));
-  return byId?.name ?? null;
+  const wanted = person.trim();
+  const match =
+    roster.find((p) => p.name.toLowerCase() === wanted.toLowerCase()) ??
+    roster.find((p) => p.identities.some((id) => normalizeLoose(id) === normalizeLoose(wanted)));
+  if (!match || match.identities.length === 0) return null;
+  return { name: match.name, identity: match.identities[0]! };
+}
+
+/** Resolve a roster name/identity to a canonical roster name, or null. Thin over `resolveRosterMember`. */
+export function rosterMatch(person: string, config: SunnyConfig): string | null {
+  return resolveRosterMember(person, config)?.name ?? null;
 }
 
 /** A thread id encodes its contact (Sendblue `...:<base64url(contact)>`); if that decodes to a

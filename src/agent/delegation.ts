@@ -77,7 +77,10 @@ export async function setChildRunId(db: Db, childThreadId: string, runId: string
     .where(eq(subagentLinks.childThreadId, childThreadId));
 }
 
-/** Mark a link terminal (done | failed | timeout) and stamp completion (D-DS6/D-DS7). */
+/** Mark a link terminal (done | failed | timeout | cancelled) and stamp completion (D-DS6/D-DS7).
+ *  Only transitions a **running** link — so a child that finishes AFTER `cancel_run` set it
+ *  `cancelled` can't overwrite that back to `done` (the cancellation stays recorded), and a
+ *  watchdog late-fire can't resurrect an already-terminal link. */
 export async function completeLink(
   db: Db,
   childThreadId: string,
@@ -86,7 +89,7 @@ export async function completeLink(
   await db
     .update(subagentLinks)
     .set({ status, completedAt: new Date() })
-    .where(eq(subagentLinks.childThreadId, childThreadId));
+    .where(and(eq(subagentLinks.childThreadId, childThreadId), eq(subagentLinks.status, 'running')));
 }
 
 /** How many of a parent's children are still running — the concurrency gate (D-DS8). */

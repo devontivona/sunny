@@ -324,6 +324,7 @@ async function setupTurn(threadId: string, isGroup: boolean): Promise<TurnSetup>
   const { testModelResponses } = await import('../src/agent/turnModel.js');
   const { Authorizer } = await import('../src/gateway/auth.js');
   const { personId, ensureAndLoadPeople } = await import('../src/memory/index.js');
+  const { rosterMatch } = await import('../src/agent/audience.js');
   const { config, store } = await getRuntime();
   const deliveryMode = config.deliveryMode;
 
@@ -357,8 +358,15 @@ async function setupTurn(threadId: string, isGroup: boolean): Promise<TurnSetup>
     timezone: config.timezone,
     ownerPresent,
     // A job promoted from a family-only thread acts for that family member (D-RA4); when the
-    // owner is present the subject is the owner (undefined → default owner framing).
-    subjectName: ownerPresent ? undefined : familyRefs[0]?.name,
+    // owner is present the subject is the owner (undefined → default owner framing). Resolve to
+    // the CANONICAL roster name (not the raw iMessage senderName) so it matches the subject
+    // `list_runs`/`cancel_run` derive from a schedule's audience — otherwise a family member whose
+    // push-name ≠ roster name can't see or cancel their own schedules.
+    subjectName: ownerPresent
+      ? undefined
+      : familyRefs[0]
+        ? (rosterMatch(familyRefs[0].identity, config) ?? familyRefs[0].name)
+        : undefined,
     // Read here (in the step, where a test's globalThis override is visible) and threaded to
     // the body to build a mock; undefined in production. Keyed per-thread (persists until the
     // route clears it), so a scripted reply reliably drives this thread's turns and never leaks
@@ -568,20 +576,13 @@ async function personRelayStepBody(
 ): Promise<string> {
   const { normalize } = await import('../src/gateway/auth.js');
   const { sendblueDmThreadId } = await import('../src/gateway/threadId.js');
+  const { resolveRosterMember } = await import('../src/agent/audience.js');
   const { config, store, gateway } = rt;
 
-  // Resolve the recipient against the roster (owner + family). Match by name first, then identity.
-  const roster = [
-    { name: config.owner.name, identities: config.owner.identities },
-    ...config.family,
-  ];
-  const wanted = person.trim();
-  const wantedNorm = normalize(wanted);
-  const match =
-    roster.find((p) => p.name.toLowerCase() === wanted.toLowerCase()) ??
-    roster.find((p) => p.identities.map(normalize).includes(wantedNorm));
-  if (!match || match.identities.length === 0) {
-    const known = roster.map((r) => r.name).join(', ');
+  // Resolve the recipient against the roster (owner + family) — the SINGLE shared matcher.
+  const member = resolveRosterMember(person, config);
+  if (!member) {
+    const known = [config.owner.name, ...config.family.map((f) => f.name)].join(', ');
     return (
       `I can only text people in your family roster (right now: ${known}). ` +
       `"${person}" isn't one of them, so I didn't send anything.`
@@ -589,12 +590,12 @@ async function personRelayStepBody(
   }
 
   // Address their existing DM if we have one; otherwise construct a Sendblue DM id.
-  const identity = normalize(match.identities[0]!);
+  const identity = normalize(member.identity);
   let threadId = await store.findDmThreadForSender(identity);
   if (!threadId) {
     const from = process.env.SENDBLUE_FROM_NUMBER;
     if (!from) {
-      return `I don't have a conversation with ${match.name} yet and can't start one right now.`;
+      return `I don't have a conversation with ${member.name} yet and can't start one right now.`;
     }
     threadId = sendblueDmThreadId(from, identity);
   }
@@ -606,7 +607,7 @@ async function personRelayStepBody(
     { text, ...(image ? { attachment: { pathOrUrl: image } } : {}) },
     { persist: true },
   );
-  return image ? `Sent to ${match.name} (with image).` : `Sent to ${match.name}.`;
+  return image ? `Sent to ${member.name} (with image).` : `Sent to ${member.name}.`;
 }
 
 async function memWriteStep(args: {

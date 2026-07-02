@@ -6,6 +6,7 @@ import {
 } from '../src/agent/delegationSupervisor.js';
 import {
   MAX_CONCURRENT_CHILDREN,
+  completeLink,
   createLink,
   getLinkByChildThread,
 } from '../src/agent/delegation.js';
@@ -75,6 +76,23 @@ describe('DelegationSupervisor', () => {
     const res = await sup.spawn({ parentThreadId: PARENT, task: 'too deep', depth: 99, parentAuthority: TRUSTED_DM_AUTHORITY });
     expect(res).toEqual({ error: 'depth_cap' });
     expect(startSubagent).not.toHaveBeenCalled();
+  });
+
+  it('completeLink only transitions a running link — a cancelled link is never overwritten', async () => {
+    // cancel_run marks a running child 'cancelled'; when the still-running child later finishes,
+    // its closeLink('done') must NOT resurrect it (nor a late watchdog 'failed'), so the
+    // cancellation stays recorded and Sunny's "it will stop reporting" is honest.
+    await createLink(tdb.db, {
+      parentThreadId: PARENT,
+      childThreadId: 'subagent:cancelme',
+      task: 't',
+      depth: 1,
+      orchestrator: false,
+    });
+    await completeLink(tdb.db, 'subagent:cancelme', 'cancelled'); // cancel_run
+    await completeLink(tdb.db, 'subagent:cancelme', 'done'); // child finishes afterward
+    await completeLink(tdb.db, 'subagent:cancelme', 'failed'); // late watchdog fire
+    expect((await getLinkByChildThread(tdb.db, 'subagent:cancelme'))?.status).toBe('cancelled');
   });
 
   it('refuses a child whose authority exceeds the parent (monotone attenuation, D-RA5)', async () => {
