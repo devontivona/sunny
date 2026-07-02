@@ -65,6 +65,9 @@ interface TurnSetup {
   /** Whether the owner is a participant of this thread — gates the owner-only USER.md carve-out
    *  (multiplayer-family D2/D3). False in a family-only DM/group. */
   ownerPresent: boolean;
+  /** Whom a job promoted from this thread acts for (run-audiences D-RA4): the sole family
+   *  participant when the owner is absent, else undefined (→ the job frames for the owner). */
+  subjectName?: string;
   /** Mock model responses set by a workflow test (plain serializable data), read in the step
    *  and used by the body to build a mock; undefined in production. */
   testModelResponses?: MockResponseDescriptor[];
@@ -106,6 +109,7 @@ export async function runConversation(input: ConversationInput): Promise<void> {
       trustedDm,
       ownerPresent: setup.ownerPresent,
       timezone: setup.timezone,
+      subjectName: setup.subjectName,
     }),
     providerOptions: setup.providerOptions,
     messages: pending.messages,
@@ -207,8 +211,9 @@ function buildTools(ctx: {
   trustedDm: boolean;
   ownerPresent: boolean;
   timezone: string;
+  subjectName?: string;
 }) {
-  const { threadId, ownerName, trustedDm, ownerPresent, timezone } = ctx;
+  const { threadId, ownerName, trustedDm, ownerPresent, timezone, subjectName } = ctx;
   const scheduleSpecs = scheduleToolSpecs(timezone);
   return {
     send_message: tool({
@@ -234,7 +239,7 @@ function buildTools(ctx: {
             'A complete, self-contained description of the task to perform in the background.',
           ),
       }),
-      execute: ({ task }) => startJobStep(threadId, task, ownerName),
+      execute: ({ task }) => startJobStep(threadId, task, ownerName, subjectName),
     }),
     memory_write: tool({
       ...MEMORY_TOOL_SPECS.memory_write,
@@ -344,6 +349,9 @@ async function setupTurn(threadId: string, isGroup: boolean): Promise<TurnSetup>
     ownerName: config.owner.name,
     timezone: config.timezone,
     ownerPresent,
+    // A job promoted from a family-only thread acts for that family member (D-RA4); when the
+    // owner is present the subject is the owner (undefined → default owner framing).
+    subjectName: ownerPresent ? undefined : familyRefs[0]?.name,
     // Read here (in the step, where a test's globalThis override is visible) and threaded to
     // the body to build a mock; undefined in production. Keyed per-thread (persists until the
     // route clears it), so a scripted reply reliably drives this thread's turns and never leaks
@@ -442,12 +450,17 @@ async function markAnswered(threadId: string, messageIds: string[]): Promise<voi
   await store.markAnsweredForThread(threadId, messageIds);
 }
 
-async function startJobStep(threadId: string, task: string, ownerName: string): Promise<string> {
+async function startJobStep(
+  threadId: string,
+  task: string,
+  ownerName: string,
+  subjectName?: string,
+): Promise<string> {
   'use step';
 
   const { start } = await import('workflow/api');
   const { runJob } = await import('./job.js');
-  const run = await start(runJob, [{ threadId, task, ownerName }]);
+  const run = await start(runJob, [{ threadId, task, ownerName, subjectName }]);
   return `Started durable background job ${run.runId}; it will message the user on completion.`;
 }
 

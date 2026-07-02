@@ -189,6 +189,11 @@ export function buildSystemPrompt(
 export interface JobPromptOptions {
   /** Fully autonomous scheduled run (vs an owner-initiated background task). */
   autonomous?: boolean;
+  /** Whom this run acts for and reports to (run-audiences D-RA4 — the audience's subject).
+   *  Defaults to the owner; a family-scoped job/schedule frames + addresses this person instead,
+   *  so a run fired in Kate's thread is no longer framed as (or addressed to) the owner. Sunny's
+   *  identity stays the owner's assistant; only the task's beneficiary changes. */
+  subject?: string;
   /** The run has the memory tools (memory_write/read_topic/recall_history). */
   memoryTools?: boolean;
   /** The run has the host tools (bash/file_read) — and so can act on skills. */
@@ -209,8 +214,12 @@ export function buildJobPrompt(
   opts: JobPromptOptions = {},
 ): string {
   const owner = config.owner.name;
+  // Whom the task is FOR (run-audiences D-RA4). Sunny's identity is always the owner's assistant;
+  // the beneficiary/recipient is the audience's subject, defaulting to the owner.
+  const subject = opts.subject ?? owner;
+  const forSubject = subject === owner ? '' : ` for ${subject}`;
   const lines: string[] = [
-    `You are Sunny, ${owner}'s personal AI assistant, completing a task ${
+    `You are Sunny, ${owner}'s personal AI assistant, completing a task${forSubject} ${
       opts.autonomous ? 'on a schedule' : 'in the background'
     } — no human is watching live, so you cannot ask follow-up questions. Make reasonable`,
     `assumptions and finish the task end to end.`,
@@ -234,7 +243,7 @@ export function buildJobPrompt(
   }
 
   lines.push(
-    `When the task is done, reply with a concise, friendly result for ${owner} over iMessage —`,
+    `When the task is done, reply with a concise, friendly result for ${subject} over iMessage —`,
     `plain text, no markdown (e.g. the finished link).` +
       (opts.autonomous
         ? ` Reply with nothing if there is nothing worth sending.`

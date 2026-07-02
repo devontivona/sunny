@@ -103,6 +103,20 @@ describe('buildJobPrompt', () => {
     expect(p).not.toContain('- bash:');
   });
 
+  it('frames + addresses the job for its subject, not always the owner (D-RA4)', () => {
+    const owned = buildJobPrompt(config, core(), skills, { hostTools: true });
+    // Default (no subject) → owner; identity stays the owner's assistant, no "for X" clause.
+    expect(owned).toContain("Devon's personal AI assistant");
+    expect(owned).toContain('a concise, friendly result for Devon');
+    expect(owned).not.toContain('completing a task for Devon');
+
+    // A family-scoped job: identity is still the owner's assistant, but it acts for + reports to Kate.
+    const forKate = buildJobPrompt(config, core(), skills, { hostTools: true, subject: 'Kate' });
+    expect(forKate).toContain("Devon's personal AI assistant");
+    expect(forKate).toContain('completing a task for Kate');
+    expect(forKate).toContain('a concise, friendly result for Kate');
+  });
+
   it('is byte-stable across calls with identical inputs', () => {
     const c = core({ user: '- Name: Devon', sunny: '- Be warm' });
     expect(buildJobPrompt(config, c, skills, { hostTools: true })).toBe(

@@ -24,6 +24,9 @@ export interface JobInput {
   threadId: string;
   task: string;
   ownerName: string;
+  /** Whom the job acts for and reports to (run-audiences D-RA4); defaults to the owner. A job
+   *  promoted from a family member's thread frames + addresses that person, not the owner. */
+  subjectName?: string;
   /** Where the result is reported (D-DS1); defaults to `user` (the owner via the gateway). */
   outputTarget?: OutputTarget;
   /** Model id for this run (D-DS9); defaults to the standard job model. */
@@ -33,7 +36,7 @@ export interface JobInput {
 export async function runJob(input: JobInput): Promise<void> {
   'use workflow';
 
-  const setup = await buildSetup(input.model ?? DEFAULT_JOB_MODEL);
+  const setup = await buildSetup(input.model ?? DEFAULT_JOB_MODEL, input.subjectName);
 
   const { result } = await streamAgent({
     model: buildTurnModel(setup.modelId, setup.testModelResponses),
@@ -75,7 +78,7 @@ interface JobSetup {
  * step, where a test's `globalThis` override is visible) and threads it to the body — the same
  * pattern `conversation.ts`'s `setupTurn` uses, so a job is mockable in the workflow suite.
  */
-async function buildSetup(modelId: string): Promise<JobSetup> {
+async function buildSetup(modelId: string, subject?: string): Promise<JobSetup> {
   'use step';
 
   const { getRuntime } = await import('../src/runtime.js');
@@ -87,7 +90,7 @@ async function buildSetup(modelId: string): Promise<JobSetup> {
   const core = loadCore(memoryPaths(config.runtimeDir));
   const skillsIndex = renderSkillIndex(loadAllSkills(config), config.skills);
   return {
-    instructions: buildJobPrompt(config, core, skillsIndex, { hostTools: true }),
+    instructions: buildJobPrompt(config, core, skillsIndex, { hostTools: true, subject }),
     modelId,
     testModelResponses: testModelResponses(),
   };
