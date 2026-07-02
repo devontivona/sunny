@@ -6,7 +6,7 @@ import { ConfigSchema, runtimeDir } from './index.js';
 describe('ConfigSchema defaults', () => {
   it('fills sensible defaults from an empty object', () => {
     const c = ConfigSchema.parse({});
-    expect(c.modelId).toBe('claude-opus-4-8');
+    expect(c.modelId).toBe('claude-sonnet-5');
     expect(c.recoveryModelId).toBe('claude-haiku-4-5');
     expect(c.thinking).toBe('adaptive');
     expect(c.effort).toBe('high');
@@ -22,7 +22,7 @@ describe('ConfigSchema defaults', () => {
     const c = ConfigSchema.parse({ effort: 'max', owner: { identities: ['+15551230000'] } });
     expect(c.effort).toBe('max');
     expect(c.owner).toEqual({ name: 'Devon', identities: ['+15551230000'] });
-    expect(c.modelId).toBe('claude-opus-4-8');
+    expect(c.modelId).toBe('claude-sonnet-5');
   });
 
   it('rejects an out-of-range effort', () => {

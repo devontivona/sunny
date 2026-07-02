@@ -7,15 +7,15 @@ import type { Grader, GradeResult, Trajectory } from './types.js';
  *
  * Reserved for genuinely fuzzy qualities (tone, helpfulness, natural memory use)
  * that programmatic graders can't check. Built on `autoevals` and judged by
- * **Sonnet** — a different, cheaper model than the Opus under test — to stay
- * independent and bound cost (design D7/D14). The judge model + rubric version
- * are recorded with every result.
+ * **Sonnet 5** — the same tier as the model under test, so grading isn't done by a
+ * weaker model than the one it's scoring (design D7/D14). The judge model + rubric
+ * version are recorded with every result.
  *
  * autoevals talks to an OpenAI-compatible client; we point one at Anthropic's
  * OpenAI-compatible endpoint with the `ANTHROPIC_API_KEY`, so the judge runs on
  * Claude with no extra provider.
  */
-export const JUDGE_MODEL = 'claude-sonnet-4-6';
+export const JUDGE_MODEL = 'claude-sonnet-5';
 export const RUBRIC_VERSION = 'v1';
 
 let cachedClient: OpenAI | undefined;

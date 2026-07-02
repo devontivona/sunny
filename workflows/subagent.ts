@@ -48,7 +48,7 @@ export interface SubagentInput {
 
 /** Default child model — a delegated, bounded subtask should run cheaper than the orchestrator
  *  (D-DS9); the supervisor can override per spawn. */
-const DEFAULT_CHILD_MODEL = 'claude-sonnet-4-6';
+const DEFAULT_CHILD_MODEL = 'claude-sonnet-5';
 
 export async function runSubagent(input: SubagentInput): Promise<void> {
   'use workflow';

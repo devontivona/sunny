@@ -13,7 +13,7 @@ const RUNTIME_KEY = Symbol.for('sunny.runtime');
 const g = globalThis as Record<symbol, unknown>;
 
 /** The production model under test by default (design D14 — "practice like we play"). */
-export const DEFAULT_MODEL_ID = 'claude-opus-4-8';
+export const DEFAULT_MODEL_ID = 'claude-sonnet-5';
 
 /**
  * Behavioral eval harness (task 7.1 / agent-evals spec) — DURABLE path.
@@ -23,7 +23,7 @@ export const DEFAULT_MODEL_ID = 'claude-opus-4-8';
  * `getRuntime()` globalThis key the workflow's steps read, seeds the case's memory/conversation
  * through the real write APIs, `start()`s the workflow per input turn, awaits it, then reconstructs
  * the trajectory (tool calls, sends, `delivered`, started jobs) from the persisted D-MG9 turn for
- * the graders. The real model is selected by `modelId` (default the production Opus) — no model
+ * the graders. The real model is selected by `modelId` (default the production model) — no model
  * mock is set, so `buildTurnModel` returns the real Anthropic provider.
  *
  * MUST run under the workflow Vitest config (`vitest.eval.config.ts`) so the `'use workflow'`

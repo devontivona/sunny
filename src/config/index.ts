@@ -8,8 +8,8 @@ import { z } from 'zod';
  * Secrets are env-only (ANTHROPIC_API_KEY, SENDBLUE_*) and never appear here.
  */
 export const ConfigSchema = z.object({
-  /** AI SDK model id (D-PS3). Provider-agnostic; Opus 4.8 is the default. */
-  modelId: z.string().default('claude-opus-4-8'),
+  /** AI SDK model id (D-PS3). Provider-agnostic; Sonnet 5 is the default. */
+  modelId: z.string().default('claude-sonnet-5'),
   /** Cheap model for the delivery-recovery pass (D-MG8). Defaults to Haiku. */
   recoveryModelId: z.string().default('claude-haiku-4-5'),
   /** Extended thinking for conversational turns: `adaptive` (default) or `off`. */
@@ -104,7 +104,7 @@ export type SunnyConfig = z.infer<typeof ConfigSchema> & {
 };
 
 const DEFAULT_CONFIG_JSON = `{
-  "modelId": "claude-opus-4-8",
+  "modelId": "claude-sonnet-5",
   "recoveryModelId": "claude-haiku-4-5",
   "effort": "high",
   "deliveryMode": "tool",

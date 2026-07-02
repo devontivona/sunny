@@ -3,7 +3,7 @@ import type { LanguageModel } from 'ai';
 import type { SunnyConfig } from '../config/index.js';
 
 /**
- * Model wiring (D-PS3). `anthropic('claude-opus-4-8')` by default, provider-agnostic
+ * Model wiring (D-PS3). `anthropic('claude-sonnet-5')` by default, provider-agnostic
  * so swapping models is a one-line change. `ANTHROPIC_API_KEY` is read from env by
  * the provider — we assert its presence at startup (see index.ts).
  */

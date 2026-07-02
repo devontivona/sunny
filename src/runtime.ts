@@ -77,7 +77,7 @@ async function start(): Promise<Runtime> {
   const config = loadConfig();
 
   if (!process.env.ANTHROPIC_API_KEY) {
-    throw new Error('ANTHROPIC_API_KEY is not set — the agent cannot call Opus.');
+    throw new Error('ANTHROPIC_API_KEY is not set — the agent cannot call the model.');
   }
   if (!process.env.DATABASE_URL) {
     throw new Error('DATABASE_URL is not set — the conversation store needs Postgres.');
