@@ -447,7 +447,7 @@ references/per-site-skills.md.
 // NB: JS template literal — no backticks in the body (use 4-space indented code blocks).
 const DELEGATION_SKILL = `---
 name: delegation
-description: Delegate a subtask to a child subagent that runs in its own isolated context and reports back, to preserve your context and parallelize. Use whenever a task is big enough to blow out your context, parallelizable enough to fan out (research, multi-source digest, summarizing a long thread), or risky enough to contain (untrusted web/email content), or when you want an independent verifier to check a finding. Covers when NOT to delegate, how to brief a child, and the delegate_task / message_subagent tools.
+description: Delegate a subtask to a child subagent that runs in its own isolated context and reports back, to preserve your context and parallelize. Use whenever a task is big enough to blow out your context, parallelizable enough to fan out (research, multi-source digest, summarizing a long thread), or risky enough to contain (untrusted web/email content), or when you want an independent verifier to check a finding. Covers when NOT to delegate, how to brief a child, and the delegate_task / message tools.
 ---
 
 # Delegation — running subagents
@@ -494,9 +494,10 @@ dependent work, pass the relevant decisions/trace, not a one-liner.
     - host: bash + file_read — only when the child must actually act.
     - memory: memory reads.
   A child is never broader than you, and a child cannot itself delegate.
-- message_subagent(child, text) — steer a child that is still working: pass new info or adjust
-  course; it folds your message in at its next step. Prefer this over aborting + re-delegating,
-  unless the task itself is invalidated.
+- message(recipient, text) — steer a child that is still working: pass its id (from delegate_task)
+  as the recipient to fold new info / adjust course into its next step. (Same tool relays to a
+  roster person.) Prefer steering over aborting + re-delegating, unless the task itself is
+  invalidated.
 
 Tell the owner you are on it (send_message) before delegating something slow.
 

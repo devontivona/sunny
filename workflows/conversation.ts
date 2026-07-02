@@ -11,13 +11,9 @@ import { z } from 'zod';
 import { BASH_TOOL_SPECS } from '../src/agent/tools/bashSpecs.js';
 import { MEMORY_TOOL_SPECS } from '../src/agent/tools/memorySpecs.js';
 import { SEND_MESSAGE_SPEC, STAY_SILENT_SPEC } from '../src/agent/tools/sendMessageSpec.js';
-import { MESSAGE_PERSON_SPEC } from '../src/agent/tools/messagePersonSpec.js';
+import { MESSAGE_SPEC } from '../src/agent/tools/messageSpec.js';
 import { formatScheduleList, scheduleToolSpecs } from '../src/agent/tools/scheduleSpecs.js';
-import {
-  DELEGATE_TASK_SPEC,
-  MESSAGE_SUBAGENT_SPEC,
-  type ChildModelName,
-} from '../src/agent/tools/delegationSpecs.js';
+import { DELEGATE_TASK_SPEC, type ChildModelName } from '../src/agent/tools/delegationSpecs.js';
 import type { ChildToolset } from './subagent.js';
 import { isGroupThreadId } from '../src/gateway/threadId.js';
 import {
@@ -262,15 +258,12 @@ function buildTools(ctx: {
             execute: ({ task, label, toolset, model }) =>
               delegateStep(threadId, { task, label, toolset, model }),
           }),
-          message_subagent: tool({
-            ...MESSAGE_SUBAGENT_SPEC,
-            execute: ({ child, text }) => steerChildStep(child, text),
-          }),
-          // Relay a message to ANOTHER roster member on the user's behalf (multiplayer-family).
-          // Roster-only: reaches owner/family, never arbitrary numbers. Trusted DMs only.
-          message_person: tool({
-            ...MESSAGE_PERSON_SPEC,
-            execute: ({ person, text, image }) => messagePersonStep(person, text, image),
+          // One addressed messaging verb over the delivery bus (D-RA15): reach a roster person
+          // (relay → their bound DM) OR steer one of your running subagents (→ its detached
+          // inbox). Unifies the former message_person + message_subagent. Trusted DMs only.
+          message: tool({
+            ...MESSAGE_SPEC,
+            execute: ({ recipient, text, image }) => messageStep(threadId, recipient, text, image),
           }),
           // Self-scheduling (scheduling D-SC3; run-audiences Phase 1a). Trusted DMs only (owner
           // OR family — the durable-main-loop migration dropped these entirely, the regression
@@ -498,32 +491,59 @@ async function delegateStep(
 
 /** Steer a still-working child (durable-subagents D-DS4): append to its inbox; its in-flight run
  *  folds the message via `loadSteers`. A no-op if the child already finished (run-to-completion). */
-async function steerChildStep(childThreadId: string, text: string): Promise<string> {
+/**
+ * One addressed message over the delivery bus (D-RA15). Dispatches on the recipient: a subagent id
+ * (a `subagent:` inbox that is a running child of THIS conversation) → steer it (detached mailbox,
+ * append + wake via `loadSteers`); anything else → relay to a roster person (their bound DM via the
+ * gateway). Memoized as a `'use step'` so a durable replay never double-sends. Unifies the former
+ * `steerChildStep` (message_subagent) + `messagePersonStep` (message_person).
+ */
+async function messageStep(
+  parentThreadId: string,
+  recipient: string,
+  text: string,
+  image?: string,
+): Promise<string> {
   'use step';
 
   const { getRuntime } = await import('../src/runtime.js');
+  const { isChildThread, getLinkByChildThread } = await import('../src/agent/delegation.js');
   const rt = await getRuntime();
-  if (!rt.steerChild) return 'Subagent steering is unavailable in this runtime.';
-  const delivered = await rt.steerChild(childThreadId, text);
-  return delivered
-    ? `Sent to subagent ${childThreadId}; it will fold your message into its work.`
-    : `Subagent ${childThreadId} has already finished, so it did not receive that. If you need ` +
-        `more from it, delegate a fresh task (include the prior result in the brief).`;
+
+  // Subagent recipient — steer one of THIS conversation's running children.
+  if (isChildThread(recipient)) {
+    if (!rt.steerChild) return 'Subagent steering is unavailable in this runtime.';
+    const link = await getLinkByChildThread(rt.db, recipient);
+    if (!link || link.parentThreadId !== parentThreadId) {
+      return `No subagent ${recipient} belongs to this conversation.`;
+    }
+    const delivered = await rt.steerChild(recipient, text);
+    return delivered
+      ? `Sent to subagent ${recipient}; it will fold your message into its work.`
+      : `Subagent ${recipient} has already finished, so it did not receive that. If you need ` +
+          `more from it, delegate a fresh task (include the prior result in the brief).`;
+  }
+
+  // Person recipient — relay to a roster member on their own bound thread.
+  return personRelayStepBody(rt, recipient, text, image);
 }
 
 /**
- * Relay a message to another roster member (multiplayer-family: cross-thread sends). Resolves the
+ * Relay body for a person recipient (multiplayer-family: cross-thread sends). Resolves the
  * recipient against the owner/family roster (ROSTER-ONLY — arbitrary numbers are refused), finds
- * their existing DM thread (or constructs one), and proactively sends + persists into THAT thread.
- * Memoized as a step so a durable replay never double-texts.
+ * their existing bound DM thread (or constructs one), and proactively sends + persists into THAT
+ * thread. Runs INSIDE `messageStep`'s `'use step'`, so it takes the resolved runtime (not its own
+ * step) and a durable replay never double-texts.
  */
-async function messagePersonStep(person: string, text: string, image?: string): Promise<string> {
-  'use step';
-
-  const { getRuntime } = await import('../src/runtime.js');
+async function personRelayStepBody(
+  rt: Awaited<ReturnType<typeof import('../src/runtime.js').getRuntime>>,
+  person: string,
+  text: string,
+  image?: string,
+): Promise<string> {
   const { normalize } = await import('../src/gateway/auth.js');
   const { sendblueDmThreadId } = await import('../src/gateway/threadId.js');
-  const { config, store, gateway } = await getRuntime();
+  const { config, store, gateway } = rt;
 
   // Resolve the recipient against the roster (owner + family). Match by name first, then identity.
   const roster = [
