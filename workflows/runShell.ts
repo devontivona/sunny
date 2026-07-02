@@ -4,7 +4,7 @@ import { getWritable } from 'workflow';
 import { steerMessageText } from '../src/agent/delivery.js';
 import { AGENT_STEP_LIMIT } from '../src/agent/limits.js';
 import type { BashToolInput, FileReadToolInput } from '../src/agent/tools/bashSpecs.js';
-import type { EmitTarget } from '../src/agent/outputTarget.js';
+import type { Audience } from '../src/agent/audience.js';
 
 /**
  * Shared durable-run shell (durable-subagents D-DS11/D-DS14). The conversational turn, background
@@ -107,32 +107,104 @@ export async function streamAgent(opts: StreamAgentOpts): Promise<{
 }
 
 /**
- * The single outward primitive (D-DS14): emit `text`, routed by `output_target`. BOTH the
- * `send_message` tool's `execute` AND the finalize backstop (a job's terminal "deliver") call
- * this — there is no separate `deliver`. Memoized as a `'use step'`, so a replayed run never
- * re-emits.
- *  - silent → nothing (the run still records its result elsewhere; see each profile's finalize)
- *  - user   → `gateway.send(destThreadId)` (owner via the messaging gateway)
- *  - parent → append the message to the parent run's inbox thread as a steer its next run folds
- *             via `loadSteers`, then wake the parent's run-supply (the supervisor) — D-DS4.
+ * The single delivery bus (run-audiences D-RA15). Resolve an `Audience` to a Thread and dispatch on
+ * its binding — the ONE outward seam every profile uses (the `send_message`/`message` tool executes
+ * AND a run's terminal report). Memoized as a `'use step'`, so a replayed run never re-emits.
+ *  - household → nothing (no single recipient; the run fans out via the `message` tool). A household
+ *                run with no messaging grant is thus structurally silent.
+ *  - parent    → append to the parent run's inbox + wake its run-supply (attributed via from*),
+ *                folded by `loadSteers` — the detached-mailbox path (D-DS4).
+ *  - person    → resolve the roster member to their BOUND DM at delivery time; if unresolvable
+ *                (never-contacted / removed), record nothing here and notify the owner (D-RA2).
+ *  - thread    → bound (a real conversation) → gateway; detached (`subagent:` inbox) → append+wake.
  */
-export async function emitStep(out: EmitTarget, text: string): Promise<void> {
+export async function deliver(audience: Audience, text: string): Promise<void> {
   'use step';
 
-  if (out.target === 'silent' || !text) return;
+  if (!text || audience.kind === 'household') return;
 
   const { getRuntime } = await import('../src/runtime.js');
+  const { isChildThread, appendInterRunMessage, reportToParent } = await import(
+    '../src/agent/delegation.js'
+  );
   const runtime = await getRuntime();
 
-  if (out.target === 'parent') {
-    // Delegated child → parent: append to the parent's inbox thread + wake its run-supply.
-    const { reportToParent } = await import('../src/agent/delegation.js');
-    await reportToParent(runtime, out, text);
+  if (audience.kind === 'parent') {
+    await reportToParent(
+      runtime,
+      { threadId: audience.threadId, fromId: audience.fromId, fromName: audience.fromName },
+      text,
+    );
     return;
   }
 
-  // user (the default): deliver to the owner thread via the gateway.
-  await runtime.gateway.send(out.destThreadId, { text });
+  // Resolve a `person` audience to a concrete bound thread, or notify the owner it's undeliverable.
+  let threadId: string;
+  if (audience.kind === 'person') {
+    const resolved = await resolvePersonThread(runtime, audience.person);
+    if (!resolved) {
+      await notifyOwnerUndeliverable(runtime, audience.person, text);
+      return;
+    }
+    threadId = resolved;
+  } else {
+    threadId = audience.threadId;
+  }
+
+  // Dispatch on the mailbox binding: detached (internal inbox) → append + wake; bound → gateway.
+  if (isChildThread(threadId)) {
+    await appendInterRunMessage(runtime.store, threadId, { id: 'run', name: 'run' }, text);
+    runtime.wakeThread?.(threadId);
+  } else {
+    await runtime.gateway.send(threadId, { text });
+  }
+}
+
+/** Resolve a roster member to their existing bound DM thread, or construct one from
+ *  `SENDBLUE_FROM_NUMBER`. Returns null when the person is off-roster or no thread can be formed. */
+async function resolvePersonThread(
+  runtime: Awaited<ReturnType<typeof import('../src/runtime.js').getRuntime>>,
+  person: string,
+): Promise<string | null> {
+  const { normalize } = await import('../src/gateway/auth.js');
+  const { sendblueDmThreadId } = await import('../src/gateway/threadId.js');
+  const roster = [
+    { name: runtime.config.owner.name, identities: runtime.config.owner.identities },
+    ...runtime.config.family,
+  ];
+  const wanted = person.trim();
+  const match =
+    roster.find((p) => p.name.toLowerCase() === wanted.toLowerCase()) ??
+    roster.find((p) => p.identities.map(normalize).includes(normalize(wanted)));
+  if (!match || match.identities.length === 0) return null;
+  const identity = normalize(match.identities[0]!);
+  const existing = await runtime.store.findDmThreadForSender(identity);
+  if (existing) return existing;
+  const from = process.env.SENDBLUE_FROM_NUMBER;
+  return from ? sendblueDmThreadId(from, identity) : null;
+}
+
+/** A `person` audience that couldn't be resolved at delivery time (D-RA2): don't drop the message
+ *  silently — surface it to the owner's DM so a scheduled reminder for a never-contacted person
+ *  becomes visible instead of vanishing. Best-effort. */
+async function notifyOwnerUndeliverable(
+  runtime: Awaited<ReturnType<typeof import('../src/runtime.js').getRuntime>>,
+  person: string,
+  text: string,
+): Promise<void> {
+  try {
+    const { normalize } = await import('../src/gateway/auth.js');
+    const { sendblueDmThreadId } = await import('../src/gateway/threadId.js');
+    const ownerId = runtime.config.owner.identities[0];
+    const from = process.env.SENDBLUE_FROM_NUMBER;
+    if (!ownerId || !from) return;
+    const ownerThread = sendblueDmThreadId(from, normalize(ownerId));
+    await runtime.gateway.send(ownerThread, {
+      text: `I couldn't reach "${person}" (no conversation with them yet), so this went undelivered: ${text}`,
+    });
+  } catch {
+    // best-effort — never throw out of the bus
+  }
 }
 
 /**

@@ -14,6 +14,7 @@ import { SEND_MESSAGE_SPEC, STAY_SILENT_SPEC } from '../src/agent/tools/sendMess
 import { MESSAGE_SPEC } from '../src/agent/tools/messageSpec.js';
 import { formatScheduleList, scheduleToolSpecs } from '../src/agent/tools/scheduleSpecs.js';
 import { DELEGATE_TASK_SPEC, type ChildModelName } from '../src/agent/tools/delegationSpecs.js';
+import { TRUSTED_DM_AUTHORITY } from '../src/agent/audience.js';
 import type { ChildToolset } from './subagent.js';
 import { isGroupThreadId } from '../src/gateway/threadId.js';
 import {
@@ -176,7 +177,10 @@ async function finalizeTurn(args: {
     // stay_silent. The miss took the backstop path, so mark it recovered regardless of the
     // pass's outcome (the dashboard [R] / Activity "Backstop" signal).
     recovered = true;
-    const recoveryText = await recoverDelivery(threadId, ownerName, priorMessages, scratch);
+    // Frame the recovered message for the thread's subject (D-RA4/F6) — a family member when the
+    // owner is absent — not hardcoded to the owner.
+    const subject = setup.subjectName ?? ownerName;
+    const recoveryText = await recoverDelivery(threadId, subject, priorMessages, scratch);
     if (recoveryText) {
       await sendStep(threadId, recoveryText);
       parts = [...parts, sendMessagePart(recoveryText, 'recovery-0')];
@@ -489,16 +493,21 @@ async function delegateStep(
     model: resolveChildModel(args.model),
     depth: 1,
     orchestrator: false,
+    // Delegation is trusted-DM-only, so the parent holds the full authority (D-RA5); the child's
+    // toolset grants are attenuated against it at spawn.
+    parentAuthority: TRUSTED_DM_AUTHORITY,
   });
   if ('error' in res) {
-    return res.error === 'depth_cap'
-      ? 'Delegation refused: max delegation depth reached.'
-      : 'Delegation refused: already at the concurrent-subagent limit (3). Wait for one to finish.';
+    if (res.error === 'depth_cap') return 'Delegation refused: max delegation depth reached.';
+    if (res.error === 'authority') {
+      return 'Delegation refused: the requested tools exceed what this conversation is allowed.';
+    }
+    return 'Delegation refused: already at the concurrent-subagent limit (3). Wait for one to finish.';
   }
   return (
     `Delegated to subagent "${args.label ?? 'subagent'}" (id ${res.childThreadId}). It is working ` +
     `in its own context and will report back here when done; you can keep going or steer it with ` +
-    `message_subagent.`
+    `the message tool (pass its id).`
   );
 }
 

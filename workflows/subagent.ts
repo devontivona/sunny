@@ -9,7 +9,7 @@ import { SEND_MESSAGE_SPEC } from '../src/agent/tools/sendMessageSpec.js';
 import { assistantUIMessageFromResponse, extractSends } from '../src/agent/delivery.js';
 import {
   bashStep,
-  emitStep,
+  deliver,
   fileReadStep,
   finalAssistantText,
   markAnsweredStep,
@@ -77,8 +77,8 @@ export async function runSubagent(input: SubagentInput): Promise<void> {
   const sends = assistant ? extractSends(assistant.parts) : [];
   if (sends.length === 0) {
     const text = finalAssistantText(result.messages) || '(the subagent produced no result)';
-    await emitStep(
-      { target: 'parent', destThreadId: input.parentThreadId, fromName: input.label ?? 'subagent' },
+    await deliver(
+      { kind: 'parent', threadId: input.parentThreadId, fromName: input.label ?? 'subagent' },
       text,
     );
   }
@@ -99,8 +99,8 @@ function buildChildTools(input: SubagentInput) {
         'progress update or your final result. Return a compact, structured summary — not raw ' +
         'tool output. This is the ONLY way to communicate back; your other text is private.',
       execute: ({ text }: { text: string }) =>
-        emitStep(
-          { target: 'parent', destThreadId: input.parentThreadId, fromName: input.label ?? 'subagent' },
+        deliver(
+          { kind: 'parent', threadId: input.parentThreadId, fromName: input.label ?? 'subagent' },
           text,
         ).then(() => 'reported to orchestrator'),
     }),

@@ -1,8 +1,8 @@
 import { tool } from '@ai-sdk/provider-utils';
 import { buildTurnModel, type MockResponseDescriptor } from '../src/agent/turnModel.js';
 import { MEMORY_TOOL_SPECS } from '../src/agent/tools/memorySpecs.js';
-import { type OutputTarget, outputTargetOr } from '../src/agent/outputTarget.js';
-import { emitStep, finalAssistantText, streamAgent } from './runShell.js';
+import { type Audience, subjectName } from '../src/agent/audience.js';
+import { deliver, finalAssistantText, streamAgent } from './runShell.js';
 
 /**
  * Durable job for a fired schedule — the scheduled-job PROFILE of the shared run shell
@@ -20,11 +20,11 @@ import { emitStep, finalAssistantText, streamAgent } from './runShell.js';
 export interface ScheduledJobInput {
   scheduleId: string;
   runId: string;
-  threadId: string;
   prompt: string;
   ownerName: string;
-  /** Where the reply is reported (D-DS1); defaults to `user`. `silent` = record-only. */
-  outputTarget?: OutputTarget;
+  /** Who the fired run is for — resolved to a delivery thread through the bus (run-audiences
+   *  D-RA2). `household` = record-only (structurally silent, e.g. nightly consolidation). */
+  audience: Audience;
   /** Model id for this run (D-DS9); defaults to the standard job model. */
   model?: string;
 }
@@ -35,7 +35,7 @@ const DEFAULT_SCHEDULED_MODEL = 'claude-opus-4-8';
 export async function runScheduledJob(input: ScheduledJobInput): Promise<void> {
   'use workflow';
 
-  const setup = await buildSetup(input.model ?? DEFAULT_SCHEDULED_MODEL);
+  const setup = await buildSetup(input.model ?? DEFAULT_SCHEDULED_MODEL, input.audience);
 
   const { result } = await streamAgent({
     model: buildTurnModel(setup.modelId, setup.testModelResponses),
@@ -65,10 +65,7 @@ export async function runScheduledJob(input: ScheduledJobInput): Promise<void> {
   // 'rawtext'` — the agent's final text is the deliverable.
   const text = finalAssistantText(result.messages);
   await recordRun(input.runId, text);
-  await emitStep(
-    { target: outputTargetOr(input.outputTarget), destThreadId: input.threadId },
-    text,
-  );
+  await deliver(input.audience, text);
 }
 
 interface ScheduledSetup {
@@ -85,7 +82,7 @@ interface ScheduledSetup {
  * the test-model seam here (in the step, where a test's `globalThis` override is visible) and
  * threads it to the body, so a scheduled run is mockable in the workflow suite.
  */
-async function buildSetup(modelId: string): Promise<ScheduledSetup> {
+async function buildSetup(modelId: string, audience: Audience): Promise<ScheduledSetup> {
   'use step';
 
   const { getRuntime } = await import('../src/runtime.js');
@@ -94,8 +91,15 @@ async function buildSetup(modelId: string): Promise<ScheduledSetup> {
   const { testModelResponses } = await import('../src/agent/turnModel.js');
   const { config } = await getRuntime();
   const core = loadCore(memoryPaths(config.runtimeDir));
+  // Frame the run for its subject (D-RA4), derived from the audience — a schedule fired in Kate's
+  // thread reports for Kate, not the owner. `household` (consolidation) → owner framing.
+  const subject = subjectName(audience, config);
   return {
-    instructions: buildJobPrompt(config, core, '', { autonomous: true, memoryTools: true }),
+    instructions: buildJobPrompt(config, core, '', {
+      autonomous: true,
+      memoryTools: true,
+      subject,
+    }),
     modelId,
     testModelResponses: testModelResponses(),
   };

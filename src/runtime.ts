@@ -18,6 +18,7 @@ import { pushState } from './state/index.js';
 import { ensureConsolidationSchedule, startScheduler } from './scheduler/index.js';
 import { sendblueDmThreadId } from './gateway/threadId.js';
 import { normalize } from './gateway/auth.js';
+import { audienceForSchedule } from './agent/audience.js';
 import { logger } from './logger.js';
 
 const log = logger('runtime');
@@ -197,11 +198,11 @@ async function start(): Promise<Runtime> {
           {
             scheduleId: schedule.id,
             runId,
-            threadId: schedule.threadId,
             prompt: schedule.prompt,
             ownerName: config.owner.name,
-            // Route the fired run's reply by the schedule's target (D-DS1); 'silent' = record-only.
-            outputTarget: schedule.outputTarget === 'silent' ? 'silent' : 'user',
+            // Address the fired run by the audience the row implies (run-audiences D-RA11): its
+            // creating thread, or `household` (record-only) for a silent maintenance schedule.
+            audience: audienceForSchedule(schedule.threadId, schedule.outputTarget),
           },
         ]);
       },

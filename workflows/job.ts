@@ -1,8 +1,7 @@
 import { tool } from '@ai-sdk/provider-utils';
 import { buildTurnModel, type MockResponseDescriptor } from '../src/agent/turnModel.js';
 import { BASH_TOOL_SPECS } from '../src/agent/tools/bashSpecs.js';
-import { type OutputTarget, outputTargetOr } from '../src/agent/outputTarget.js';
-import { bashStep, emitStep, fileReadStep, finalAssistantText, streamAgent } from './runShell.js';
+import { bashStep, deliver, fileReadStep, finalAssistantText, streamAgent } from './runShell.js';
 
 /**
  * Tier-2 durable job — the background-job PROFILE of the shared run shell (durable-subagents
@@ -27,8 +26,6 @@ export interface JobInput {
   /** Whom the job acts for and reports to (run-audiences D-RA4); defaults to the owner. A job
    *  promoted from a family member's thread frames + addresses that person, not the owner. */
   subjectName?: string;
-  /** Where the result is reported (D-DS1); defaults to `user` (the owner via the gateway). */
-  outputTarget?: OutputTarget;
   /** Model id for this run (D-DS9); defaults to the standard job model. */
   model?: string;
 }
@@ -51,15 +48,11 @@ export async function runJob(input: JobInput): Promise<void> {
     messages: [{ role: 'user', content: input.task }],
   });
 
-  // `recoverOnMiss: 'rawtext'` — the final assistant text is the deliverable. `emitStep` routes
-  // by output target and is a no-op when `silent` or empty (the empty fallback below only ever
-  // reaches a `user` target). One emit path; no separate deliver.
+  // The final assistant text is the deliverable, delivered terminally through the one bus
+  // (run-audiences D-RA15) to the job's thread — bound → gateway; a `subagent:` thread → append+wake.
   const text = finalAssistantText(result.messages);
   const message = text || 'I finished that background task but came up empty — mind rephrasing?';
-  await emitStep(
-    { target: outputTargetOr(input.outputTarget), destThreadId: input.threadId },
-    message,
-  );
+  await deliver({ kind: 'thread', threadId: input.threadId }, message);
 }
 
 interface JobSetup {
