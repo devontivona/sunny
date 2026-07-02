@@ -25,14 +25,14 @@ function trajectory(overrides: Partial<Trajectory> = {}): Trajectory {
 
 describe('estimateCostUsd', () => {
   it('prices uncached input, cached input, and output separately', () => {
-    // Opus: $15/$1.5/$75 per MTok in/cachedIn/out.
+    // Opus 4.8: $5/$0.5/$25 per MTok in/cachedIn/out.
     const cost = estimateCostUsd('claude-opus-4-8', {
       inputTokens: 1_000_000,
       cachedInputTokens: 200_000,
       outputTokens: 100_000,
     });
-    // uncached 800k*15 + cached 200k*1.5 + out 100k*75, all /1e6
-    expect(cost).toBeCloseTo(0.8 * 15 + 0.2 * 1.5 + 0.1 * 75, 6);
+    // uncached 800k*5 + cached 200k*0.5 + out 100k*25, all /1e6
+    expect(cost).toBeCloseTo(0.8 * 5 + 0.2 * 0.5 + 0.1 * 25, 6);
   });
 
   it('falls back to a price for an unknown model', () => {

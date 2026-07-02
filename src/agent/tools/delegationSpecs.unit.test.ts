@@ -5,7 +5,7 @@ import { CHILD_MODELS, resolveChildModel } from './delegationSpecs.js';
  *  codebase's concrete model ids, and anything else falls back to the child's default. */
 describe('resolveChildModel', () => {
   it('maps friendly names to model ids', () => {
-    expect(resolveChildModel('sonnet')).toBe('claude-sonnet-4-6');
+    expect(resolveChildModel('sonnet')).toBe('claude-sonnet-5');
     expect(resolveChildModel('opus')).toBe('claude-opus-4-8');
     expect(resolveChildModel('haiku')).toBe('claude-haiku-4-5');
   });
