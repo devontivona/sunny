@@ -11,12 +11,10 @@ import { z } from 'zod';
 import { BASH_TOOL_SPECS } from '../src/agent/tools/bashSpecs.js';
 import { MEMORY_TOOL_SPECS } from '../src/agent/tools/memorySpecs.js';
 import { SEND_MESSAGE_SPEC, STAY_SILENT_SPEC } from '../src/agent/tools/sendMessageSpec.js';
-import { MESSAGE_PERSON_SPEC } from '../src/agent/tools/messagePersonSpec.js';
-import {
-  DELEGATE_TASK_SPEC,
-  MESSAGE_SUBAGENT_SPEC,
-  type ChildModelName,
-} from '../src/agent/tools/delegationSpecs.js';
+import { MESSAGE_SPEC } from '../src/agent/tools/messageSpec.js';
+import { RUNS_TOOL_SPECS, scheduleToolSpecs } from '../src/agent/tools/scheduleSpecs.js';
+import { DELEGATE_TASK_SPEC, type ChildModelName } from '../src/agent/tools/delegationSpecs.js';
+import { TRUSTED_DM_AUTHORITY } from '../src/agent/audience.js';
 import type { ChildToolset } from './subagent.js';
 import { isGroupThreadId } from '../src/gateway/threadId.js';
 import {
@@ -62,9 +60,15 @@ interface TurnSetup {
   providerOptions: SharedV4ProviderOptions;
   deliveryMode: 'tool' | 'text';
   ownerName: string;
+  /** The owner's configured timezone — used for `schedule_create` cron/timestamp evaluation
+   *  and interpolated into the tool description (run-audiences Phase 1a). */
+  timezone: string;
   /** Whether the owner is a participant of this thread — gates the owner-only USER.md carve-out
    *  (multiplayer-family D2/D3). False in a family-only DM/group. */
   ownerPresent: boolean;
+  /** Whom a job promoted from this thread acts for (run-audiences D-RA4): the sole family
+   *  participant when the owner is absent, else undefined (→ the job frames for the owner). */
+  subjectName?: string;
   /** Mock model responses set by a workflow test (plain serializable data), read in the step
    *  and used by the body to build a mock; undefined in production. */
   testModelResponses?: MockResponseDescriptor[];
@@ -100,7 +104,14 @@ export async function runConversation(input: ConversationInput): Promise<void> {
   const { result, usage, foldedIds } = await streamAgent({
     model: buildTurnModel(setup.modelId, setup.testModelResponses),
     instructions: setup.instructions,
-    tools: buildTools({ threadId, ownerName, trustedDm, ownerPresent: setup.ownerPresent }),
+    tools: buildTools({
+      threadId,
+      ownerName,
+      trustedDm,
+      ownerPresent: setup.ownerPresent,
+      timezone: setup.timezone,
+      subjectName: setup.subjectName,
+    }),
     providerOptions: setup.providerOptions,
     messages: pending.messages,
     steering: { inboxThreadId: threadId, isGroup, baseExcludeIds: pending.windowUserIds },
@@ -166,7 +177,10 @@ async function finalizeTurn(args: {
     // stay_silent. The miss took the backstop path, so mark it recovered regardless of the
     // pass's outcome (the dashboard [R] / Activity "Backstop" signal).
     recovered = true;
-    const recoveryText = await recoverDelivery(threadId, ownerName, priorMessages, scratch);
+    // Frame the recovered message for the thread's subject (D-RA4/F6) — a family member when the
+    // owner is absent — not hardcoded to the owner.
+    const subject = setup.subjectName ?? ownerName;
+    const recoveryText = await recoverDelivery(threadId, subject, priorMessages, scratch);
     if (recoveryText) {
       await sendStep(threadId, recoveryText);
       parts = [...parts, sendMessagePart(recoveryText, 'recovery-0')];
@@ -200,8 +214,11 @@ function buildTools(ctx: {
   ownerName: string;
   trustedDm: boolean;
   ownerPresent: boolean;
+  timezone: string;
+  subjectName?: string;
 }) {
-  const { threadId, ownerName, trustedDm, ownerPresent } = ctx;
+  const { threadId, ownerName, trustedDm, ownerPresent, timezone, subjectName } = ctx;
+  const scheduleSpecs = scheduleToolSpecs(timezone);
   return {
     send_message: tool({
       ...SEND_MESSAGE_SPEC,
@@ -226,7 +243,7 @@ function buildTools(ctx: {
             'A complete, self-contained description of the task to perform in the background.',
           ),
       }),
-      execute: ({ task }) => startJobStep(threadId, task, ownerName),
+      execute: ({ task }) => startJobStep(threadId, task, ownerName, subjectName),
     }),
     memory_write: tool({
       ...MEMORY_TOOL_SPECS.memory_write,
@@ -250,15 +267,32 @@ function buildTools(ctx: {
             execute: ({ task, label, toolset, model }) =>
               delegateStep(threadId, { task, label, toolset, model }),
           }),
-          message_subagent: tool({
-            ...MESSAGE_SUBAGENT_SPEC,
-            execute: ({ child, text }) => steerChildStep(child, text),
+          // One addressed messaging verb over the delivery bus (D-RA15): reach a roster person
+          // (relay → their bound DM) OR steer one of your running subagents (→ its detached
+          // inbox). Unifies the former message_person + message_subagent. Trusted DMs only.
+          message: tool({
+            ...MESSAGE_SPEC,
+            execute: ({ recipient, text, image }) => messageStep(threadId, recipient, text, image),
           }),
-          // Relay a message to ANOTHER roster member on the user's behalf (multiplayer-family).
-          // Roster-only: reaches owner/family, never arbitrary numbers. Trusted DMs only.
-          message_person: tool({
-            ...MESSAGE_PERSON_SPEC,
-            execute: ({ person, text, image }) => messagePersonStep(person, text, image),
+          // Self-scheduling (scheduling D-SC3; run-audiences Phase 1a). Trusted DMs only (owner
+          // OR family — the durable-main-loop migration dropped these entirely, the regression
+          // this restores). A fired schedule delivers back to THIS thread by default. Scheduled
+          // runs never get these tools (anti-recursion, D-SC4). Each execute is a `'use step'`
+          // so a replay never double-inserts / double-deletes.
+          schedule_create: tool({
+            ...scheduleSpecs.schedule_create,
+            execute: (args) => scheduleCreateStep(threadId, args),
+          }),
+          // Unified run lifecycle (run-audiences Phase 3.2): inspect + cancel schedules AND
+          // this conversation's running subagents, ownership-scoped (owner sees all; a family
+          // member only their own). Replaces schedule_list / schedule_delete.
+          list_runs: tool({
+            ...RUNS_TOOL_SPECS.list_runs,
+            execute: () => listRunsStep(threadId, ownerPresent, subjectName ?? ownerName),
+          }),
+          cancel_run: tool({
+            ...RUNS_TOOL_SPECS.cancel_run,
+            execute: ({ id }) => cancelRunStep(id, threadId, ownerPresent, subjectName ?? ownerName),
           }),
         }
       : {}),
@@ -290,6 +324,7 @@ async function setupTurn(threadId: string, isGroup: boolean): Promise<TurnSetup>
   const { testModelResponses } = await import('../src/agent/turnModel.js');
   const { Authorizer } = await import('../src/gateway/auth.js');
   const { personId, ensureAndLoadPeople } = await import('../src/memory/index.js');
+  const { rosterMatch } = await import('../src/agent/audience.js');
   const { config, store } = await getRuntime();
   const deliveryMode = config.deliveryMode;
 
@@ -320,7 +355,18 @@ async function setupTurn(threadId: string, isGroup: boolean): Promise<TurnSetup>
     providerOptions: anthropicProviderOptions(config),
     deliveryMode,
     ownerName: config.owner.name,
+    timezone: config.timezone,
     ownerPresent,
+    // A job promoted from a family-only thread acts for that family member (D-RA4); when the
+    // owner is present the subject is the owner (undefined → default owner framing). Resolve to
+    // the CANONICAL roster name (not the raw iMessage senderName) so it matches the subject
+    // `list_runs`/`cancel_run` derive from a schedule's audience — otherwise a family member whose
+    // push-name ≠ roster name can't see or cancel their own schedules.
+    subjectName: ownerPresent
+      ? undefined
+      : familyRefs[0]
+        ? (rosterMatch(familyRefs[0].identity, config) ?? familyRefs[0].name)
+        : undefined,
     // Read here (in the step, where a test's globalThis override is visible) and threaded to
     // the body to build a mock; undefined in production. Keyed per-thread (persists until the
     // route clears it), so a scripted reply reliably drives this thread's turns and never leaks
@@ -419,12 +465,17 @@ async function markAnswered(threadId: string, messageIds: string[]): Promise<voi
   await store.markAnsweredForThread(threadId, messageIds);
 }
 
-async function startJobStep(threadId: string, task: string, ownerName: string): Promise<string> {
+async function startJobStep(
+  threadId: string,
+  task: string,
+  ownerName: string,
+  subjectName?: string,
+): Promise<string> {
   'use step';
 
   const { start } = await import('workflow/api');
   const { runJob } = await import('./job.js');
-  const run = await start(runJob, [{ threadId, task, ownerName }]);
+  const run = await start(runJob, [{ threadId, task, ownerName, subjectName }]);
   return `Started durable background job ${run.runId}; it will message the user on completion.`;
 }
 
@@ -453,60 +504,85 @@ async function delegateStep(
     model: resolveChildModel(args.model),
     depth: 1,
     orchestrator: false,
+    // Delegation is trusted-DM-only, so the parent holds the full authority (D-RA5); the child's
+    // toolset grants are attenuated against it at spawn.
+    parentAuthority: TRUSTED_DM_AUTHORITY,
   });
   if ('error' in res) {
-    return res.error === 'depth_cap'
-      ? 'Delegation refused: max delegation depth reached.'
-      : 'Delegation refused: already at the concurrent-subagent limit (3). Wait for one to finish.';
+    if (res.error === 'depth_cap') return 'Delegation refused: max delegation depth reached.';
+    if (res.error === 'authority') {
+      return 'Delegation refused: the requested tools exceed what this conversation is allowed.';
+    }
+    return 'Delegation refused: already at the concurrent-subagent limit (3). Wait for one to finish.';
   }
   return (
     `Delegated to subagent "${args.label ?? 'subagent'}" (id ${res.childThreadId}). It is working ` +
     `in its own context and will report back here when done; you can keep going or steer it with ` +
-    `message_subagent.`
+    `the message tool (pass its id).`
   );
 }
 
 /** Steer a still-working child (durable-subagents D-DS4): append to its inbox; its in-flight run
  *  folds the message via `loadSteers`. A no-op if the child already finished (run-to-completion). */
-async function steerChildStep(childThreadId: string, text: string): Promise<string> {
+/**
+ * One addressed message over the delivery bus (D-RA15). Dispatches on the recipient: a subagent id
+ * (a `subagent:` inbox that is a running child of THIS conversation) → steer it (detached mailbox,
+ * append + wake via `loadSteers`); anything else → relay to a roster person (their bound DM via the
+ * gateway). Memoized as a `'use step'` so a durable replay never double-sends. Unifies the former
+ * `steerChildStep` (message_subagent) + `messagePersonStep` (message_person).
+ */
+async function messageStep(
+  parentThreadId: string,
+  recipient: string,
+  text: string,
+  image?: string,
+): Promise<string> {
   'use step';
 
   const { getRuntime } = await import('../src/runtime.js');
+  const { isChildThread, getLinkByChildThread } = await import('../src/agent/delegation.js');
   const rt = await getRuntime();
-  if (!rt.steerChild) return 'Subagent steering is unavailable in this runtime.';
-  const delivered = await rt.steerChild(childThreadId, text);
-  return delivered
-    ? `Sent to subagent ${childThreadId}; it will fold your message into its work.`
-    : `Subagent ${childThreadId} has already finished, so it did not receive that. If you need ` +
-        `more from it, delegate a fresh task (include the prior result in the brief).`;
+
+  // Subagent recipient — steer one of THIS conversation's running children.
+  if (isChildThread(recipient)) {
+    if (!rt.steerChild) return 'Subagent steering is unavailable in this runtime.';
+    const link = await getLinkByChildThread(rt.db, recipient);
+    if (!link || link.parentThreadId !== parentThreadId) {
+      return `No subagent ${recipient} belongs to this conversation.`;
+    }
+    const delivered = await rt.steerChild(recipient, text);
+    return delivered
+      ? `Sent to subagent ${recipient}; it will fold your message into its work.`
+      : `Subagent ${recipient} has already finished, so it did not receive that. If you need ` +
+          `more from it, delegate a fresh task (include the prior result in the brief).`;
+  }
+
+  // Person recipient — relay to a roster member on their own bound thread.
+  return personRelayStepBody(rt, recipient, text, image);
 }
 
 /**
- * Relay a message to another roster member (multiplayer-family: cross-thread sends). Resolves the
+ * Relay body for a person recipient (multiplayer-family: cross-thread sends). Resolves the
  * recipient against the owner/family roster (ROSTER-ONLY — arbitrary numbers are refused), finds
- * their existing DM thread (or constructs one), and proactively sends + persists into THAT thread.
- * Memoized as a step so a durable replay never double-texts.
+ * their existing bound DM thread (or constructs one), and proactively sends + persists into THAT
+ * thread. Runs INSIDE `messageStep`'s `'use step'`, so it takes the resolved runtime (not its own
+ * step) and a durable replay never double-texts.
  */
-async function messagePersonStep(person: string, text: string, image?: string): Promise<string> {
-  'use step';
-
-  const { getRuntime } = await import('../src/runtime.js');
+async function personRelayStepBody(
+  rt: Awaited<ReturnType<typeof import('../src/runtime.js').getRuntime>>,
+  person: string,
+  text: string,
+  image?: string,
+): Promise<string> {
   const { normalize } = await import('../src/gateway/auth.js');
   const { sendblueDmThreadId } = await import('../src/gateway/threadId.js');
-  const { config, store, gateway } = await getRuntime();
+  const { resolveRosterMember } = await import('../src/agent/audience.js');
+  const { config, store, gateway } = rt;
 
-  // Resolve the recipient against the roster (owner + family). Match by name first, then identity.
-  const roster = [
-    { name: config.owner.name, identities: config.owner.identities },
-    ...config.family,
-  ];
-  const wanted = person.trim();
-  const wantedNorm = normalize(wanted);
-  const match =
-    roster.find((p) => p.name.toLowerCase() === wanted.toLowerCase()) ??
-    roster.find((p) => p.identities.map(normalize).includes(wantedNorm));
-  if (!match || match.identities.length === 0) {
-    const known = roster.map((r) => r.name).join(', ');
+  // Resolve the recipient against the roster (owner + family) — the SINGLE shared matcher.
+  const member = resolveRosterMember(person, config);
+  if (!member) {
+    const known = [config.owner.name, ...config.family.map((f) => f.name)].join(', ');
     return (
       `I can only text people in your family roster (right now: ${known}). ` +
       `"${person}" isn't one of them, so I didn't send anything.`
@@ -514,12 +590,12 @@ async function messagePersonStep(person: string, text: string, image?: string): 
   }
 
   // Address their existing DM if we have one; otherwise construct a Sendblue DM id.
-  const identity = normalize(match.identities[0]!);
+  const identity = normalize(member.identity);
   let threadId = await store.findDmThreadForSender(identity);
   if (!threadId) {
     const from = process.env.SENDBLUE_FROM_NUMBER;
     if (!from) {
-      return `I don't have a conversation with ${match.name} yet and can't start one right now.`;
+      return `I don't have a conversation with ${member.name} yet and can't start one right now.`;
     }
     threadId = sendblueDmThreadId(from, identity);
   }
@@ -531,7 +607,7 @@ async function messagePersonStep(person: string, text: string, image?: string): 
     { text, ...(image ? { attachment: { pathOrUrl: image } } : {}) },
     { persist: true },
   );
-  return image ? `Sent to ${match.name} (with image).` : `Sent to ${match.name}.`;
+  return image ? `Sent to ${member.name} (with image).` : `Sent to ${member.name}.`;
 }
 
 async function memWriteStep(args: {
@@ -569,6 +645,137 @@ async function readTopicStep(name: string): Promise<string> {
   const { execReadTopic } = await import('../src/agent/tools/memory.js');
   const { config } = await getRuntime();
   return execReadTopic(config, name);
+}
+
+/**
+ * Self-scheduling steps (run-audiences Phase 1a). `'use step'`-wrapped so a durable replay never
+ * re-inserts (create appends a row) or re-deletes. The fired schedule delivers back to
+ * `threadId` — the thread where it was created — using the existing `outputTarget` model
+ * (Phase 2 migrates delivery to the audience/bus). Timezone comes from config in the step.
+ */
+async function scheduleCreateStep(
+  threadId: string,
+  args: {
+    kind: 'once' | 'interval' | 'cron';
+    spec: string;
+    prompt: string;
+    label?: string;
+    for?: string;
+  },
+): Promise<string> {
+  'use step';
+
+  const { getRuntime } = await import('../src/runtime.js');
+  const { createSchedule } = await import('../src/scheduler/index.js');
+  const { rosterMatch } = await import('../src/agent/audience.js');
+  const { db, config } = await getRuntime();
+
+  // "for" schedules this on behalf of ANOTHER family member (run-audiences #4): store an explicit
+  // `person:<name>` audience so the fired run acts for + delivers to them, not the creating thread.
+  let audience: string | undefined;
+  if (args.for) {
+    const name = rosterMatch(args.for, config);
+    if (!name) {
+      const known = [config.owner.name, ...config.family.map((f) => f.name)].join(', ');
+      return `I can only schedule for family roster members (${known}); "${args.for}" isn't one.`;
+    }
+    audience = `person:${name}`;
+  }
+
+  try {
+    const row = await createSchedule(db, {
+      kind: args.kind,
+      spec: args.spec,
+      prompt: args.prompt,
+      threadId,
+      timezone: config.timezone,
+      label: args.label,
+      audience,
+    });
+    const forWhom = audience ? ` for ${audience.slice('person:'.length)}` : '';
+    return `Scheduled ${row.id} (${row.kind})${forWhom}; next run ${row.nextRunAt?.toISOString() ?? 'n/a'}.`;
+  } catch (err) {
+    return `ERROR: ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
+/**
+ * List the durable runs the caller can see (run-audiences Phase 3.2): active schedules they own
+ * plus this conversation's running subagents. The owner (present in the thread) sees ALL schedules;
+ * a family member sees only schedules whose audience subject is them. `'use step'` — pure read.
+ */
+async function listRunsStep(
+  threadId: string,
+  ownerPresent: boolean,
+  callerSubject: string,
+): Promise<string> {
+  'use step';
+
+  const { getRuntime } = await import('../src/runtime.js');
+  const { listSchedules } = await import('../src/scheduler/index.js');
+  const { listRunningLinks } = await import('../src/agent/delegation.js');
+  const { subjectName, scheduleAudience } = await import('../src/agent/audience.js');
+  const { db, config } = await getRuntime();
+
+  const scheds = await listSchedules(db);
+  const visible = ownerPresent
+    ? scheds
+    : scheds.filter(
+        (s) => subjectName(scheduleAudience(s), config) === callerSubject,
+      );
+  const children = (await listRunningLinks(db)).filter((l) => l.parentThreadId === threadId);
+
+  const lines: string[] = [];
+  if (visible.length > 0) {
+    lines.push('Schedules:');
+    for (const s of visible) {
+      lines.push(
+        `  ${s.id} [${s.kind} ${s.spec}]${s.label ? ` "${s.label}"` : ''} next ${s.nextRunAt?.toISOString() ?? 'n/a'}: ${s.prompt.slice(0, 50)}`,
+      );
+    }
+  }
+  if (children.length > 0) {
+    lines.push('Subagents (working):');
+    for (const l of children) lines.push(`  ${l.childThreadId} — ${l.task.slice(0, 50)}`);
+  }
+  return lines.length > 0 ? lines.join('\n') : '(no active runs)';
+}
+
+/**
+ * Cancel a schedule or a running subagent of this conversation by id (run-audiences Phase 3.2),
+ * ownership-scoped: the owner may cancel any run; a family member only a schedule whose subject is
+ * them, or a subagent of this thread. `'use step'` so a replay never double-cancels.
+ */
+async function cancelRunStep(
+  id: string,
+  threadId: string,
+  ownerPresent: boolean,
+  callerSubject: string,
+): Promise<string> {
+  'use step';
+
+  const { getRuntime } = await import('../src/runtime.js');
+  const { listSchedules, deleteSchedule } = await import('../src/scheduler/index.js');
+  const { getLinkByChildThread, completeLink } = await import('../src/agent/delegation.js');
+  const { subjectName, scheduleAudience } = await import('../src/agent/audience.js');
+  const { db, config } = await getRuntime();
+
+  const sched = (await listSchedules(db)).find((s) => s.id === id);
+  if (sched) {
+    const owner = subjectName(scheduleAudience(sched), config);
+    if (!ownerPresent && owner !== callerSubject) {
+      return `That schedule belongs to ${owner}, so I didn't cancel it.`;
+    }
+    const ok = await deleteSchedule(db, id);
+    return ok ? `Cancelled schedule ${id}.` : `No schedule with id ${id}.`;
+  }
+
+  const link = await getLinkByChildThread(db, id);
+  if (link && link.parentThreadId === threadId && link.status === 'running') {
+    await completeLink(db, id, 'cancelled');
+    return `Cancelled subagent ${id}; it will stop reporting to this conversation.`;
+  }
+  return `No run with id ${id} that you can cancel.`;
 }
 
 async function recallStep(query: string, limit?: number): Promise<string> {

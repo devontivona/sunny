@@ -1,8 +1,9 @@
 import { tool } from '@ai-sdk/provider-utils';
 import { buildTurnModel, type MockResponseDescriptor } from '../src/agent/turnModel.js';
 import { MEMORY_TOOL_SPECS } from '../src/agent/tools/memorySpecs.js';
-import { type OutputTarget, outputTargetOr } from '../src/agent/outputTarget.js';
-import { emitStep, finalAssistantText, streamAgent } from './runShell.js';
+import { MESSAGE_SPEC } from '../src/agent/tools/messageSpec.js';
+import { type Audience, subjectName } from '../src/agent/audience.js';
+import { deliver, finalAssistantText, streamAgent } from './runShell.js';
 
 /**
  * Durable job for a fired schedule — the scheduled-job PROFILE of the shared run shell
@@ -20,11 +21,11 @@ import { emitStep, finalAssistantText, streamAgent } from './runShell.js';
 export interface ScheduledJobInput {
   scheduleId: string;
   runId: string;
-  threadId: string;
   prompt: string;
   ownerName: string;
-  /** Where the reply is reported (D-DS1); defaults to `user`. `silent` = record-only. */
-  outputTarget?: OutputTarget;
+  /** Who the fired run is for — resolved to a delivery thread through the bus (run-audiences
+   *  D-RA2). `household` = record-only (structurally silent, e.g. nightly consolidation). */
+  audience: Audience;
   /** Model id for this run (D-DS9); defaults to the standard job model. */
   model?: string;
 }
@@ -35,7 +36,7 @@ const DEFAULT_SCHEDULED_MODEL = 'claude-opus-4-8';
 export async function runScheduledJob(input: ScheduledJobInput): Promise<void> {
   'use workflow';
 
-  const setup = await buildSetup(input.model ?? DEFAULT_SCHEDULED_MODEL);
+  const setup = await buildSetup(input.model ?? DEFAULT_SCHEDULED_MODEL, input.audience);
 
   const { result } = await streamAgent({
     model: buildTurnModel(setup.modelId, setup.testModelResponses),
@@ -53,6 +54,21 @@ export async function runScheduledJob(input: ScheduledJobInput): Promise<void> {
         ...MEMORY_TOOL_SPECS.recall_history,
         execute: ({ query, limit }) => recallStep(query, limit),
       }),
+      // Proactive fan-out (run-audiences D-RA10, Phase 3.1): a *delivering* scheduled run may reach
+      // OTHER roster members via the bus. Withheld from `household` — today the only household
+      // schedule is the silent maintenance run (consolidation), which holds no messaging grant → is
+      // structurally silent (D-RA14). (A future household *fan-out* run would need the grant wired
+      // at its creation path, which doesn't exist yet.) The run's OWN audience is reached by its
+      // terminal result — `message` is refused for the audience's own subject (no double-send).
+      ...(input.audience.kind !== 'household'
+        ? {
+            message: tool({
+              ...MESSAGE_SPEC,
+              execute: ({ recipient, text }) =>
+                scheduledMessageStep(input.audience, recipient, text),
+            }),
+          }
+        : {}),
     },
     providerOptions: {
       anthropic: { thinking: { type: 'adaptive', display: 'omitted' }, effort: 'high' },
@@ -65,10 +81,7 @@ export async function runScheduledJob(input: ScheduledJobInput): Promise<void> {
   // 'rawtext'` — the agent's final text is the deliverable.
   const text = finalAssistantText(result.messages);
   await recordRun(input.runId, text);
-  await emitStep(
-    { target: outputTargetOr(input.outputTarget), destThreadId: input.threadId },
-    text,
-  );
+  await deliver(input.audience, text);
 }
 
 interface ScheduledSetup {
@@ -85,7 +98,7 @@ interface ScheduledSetup {
  * the test-model seam here (in the step, where a test's `globalThis` override is visible) and
  * threads it to the body, so a scheduled run is mockable in the workflow suite.
  */
-async function buildSetup(modelId: string): Promise<ScheduledSetup> {
+async function buildSetup(modelId: string, audience: Audience): Promise<ScheduledSetup> {
   'use step';
 
   const { getRuntime } = await import('../src/runtime.js');
@@ -94,8 +107,15 @@ async function buildSetup(modelId: string): Promise<ScheduledSetup> {
   const { testModelResponses } = await import('../src/agent/turnModel.js');
   const { config } = await getRuntime();
   const core = loadCore(memoryPaths(config.runtimeDir));
+  // Frame the run for its subject (D-RA4), derived from the audience — a schedule fired in Kate's
+  // thread reports for Kate, not the owner. `household` (consolidation) → owner framing.
+  const subject = subjectName(audience, config);
   return {
-    instructions: buildJobPrompt(config, core, '', { autonomous: true, memoryTools: true }),
+    instructions: buildJobPrompt(config, core, '', {
+      autonomous: true,
+      memoryTools: true,
+      subject,
+    }),
     modelId,
     testModelResponses: testModelResponses(),
   };
@@ -131,6 +151,46 @@ async function recallStep(query: string, limit?: number): Promise<string> {
   const { execRecall } = await import('../src/agent/tools/memory.js');
   const { store, config } = await getRuntime();
   return execRecall(store, config, query, limit);
+}
+
+/**
+ * Proactively message ANOTHER roster member from a scheduled run (run-audiences D-RA10, Phase 3.1).
+ * Self-contained `'use step'` (resolves via the shared `resolveRosterMember`, sends via the gateway
+ * inline) so it composes as a tool execute without nesting the `deliver` step. Roster-only. Refuses
+ * to message the run's OWN audience subject — that person is reached by the run's terminal result,
+ * so self-messaging would double-send.
+ */
+async function scheduledMessageStep(
+  audience: Audience,
+  recipient: string,
+  text: string,
+): Promise<string> {
+  'use step';
+
+  const { getRuntime } = await import('../src/runtime.js');
+  const { normalize } = await import('../src/gateway/auth.js');
+  const { sendblueDmThreadId } = await import('../src/gateway/threadId.js');
+  const { resolveRosterMember } = await import('../src/agent/audience.js');
+  const { config, store, gateway } = await getRuntime();
+
+  const member = resolveRosterMember(recipient, config);
+  if (!member) {
+    const known = [config.owner.name, ...config.family.map((f) => f.name)].join(', ');
+    return `I can only message the family roster (${known}); "${recipient}" isn't one, so I sent nothing.`;
+  }
+  // No self-send: the run's terminal result already goes to its own audience subject.
+  if (member.name === subjectName(audience, config)) {
+    return `${member.name} already receives this run's result — put it in your final reply instead of messaging them.`;
+  }
+  const identity = normalize(member.identity);
+  let threadId = await store.findDmThreadForSender(identity);
+  if (!threadId) {
+    const from = process.env.SENDBLUE_FROM_NUMBER;
+    if (!from) return `I don't have a conversation with ${member.name} yet and can't start one.`;
+    threadId = sendblueDmThreadId(from, identity);
+  }
+  await gateway.send(threadId, { text }, { persist: true });
+  return `Sent to ${member.name}.`;
 }
 
 async function recordRun(runId: string, output: string): Promise<void> {

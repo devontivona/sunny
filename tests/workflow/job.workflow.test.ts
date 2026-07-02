@@ -9,10 +9,11 @@ import {
 } from './harness.js';
 
 /**
- * `runJob` against a real in-process WDK Local World (durable-subagents tasks 1.4 / 2.x).
- * Verifies the background-job profile reports through the SHARED `emitStep` (proving a
- * `'use step'` in `workflows/runShell.ts` bundles + runs across workflow entrypoints), and
- * that `output_target` routes: `user` delivers via the gateway, `silent` sends nothing.
+ * `runJob` against a real in-process WDK Local World (durable-subagents tasks 1.4 / 2.x;
+ * run-audiences D-RA15). Verifies the background-job profile delivers its final text through the
+ * SHARED delivery bus (`deliver` in `workflows/runShell.ts`, proving a `'use step'` bundles + runs
+ * across entrypoints), and that the bus dispatches on the thread's binding: a bound thread →
+ * gateway; a detached (`subagent:`) inbox → append + wake, no gateway egress.
  */
 describe('runJob (workflow integration — real Local World)', () => {
   let ctx: TestRuntimeCtx;
@@ -20,7 +21,7 @@ describe('runJob (workflow integration — real Local World)', () => {
     if (ctx) await teardownTestRuntime(ctx);
   });
 
-  it('user target: emits the final assistant text via the gateway', async () => {
+  it('bound thread: delivers the final assistant text via the gateway', async () => {
     ctx = await setupTestRuntime();
     setTurnModel([{ type: 'text', text: 'done: built the thing' }]);
 
@@ -33,21 +34,21 @@ describe('runJob (workflow integration — real Local World)', () => {
     expect(ctx.gateway.texts()).toEqual(['done: built the thing']);
   });
 
-  it('silent target: records nothing outward (no 2am text)', async () => {
+  it('detached inbox: appends to the inbox with NO gateway egress and NO wake', async () => {
     ctx = await setupTestRuntime();
-    setTurnModel([{ type: 'text', text: 'tidied 3 facts' }]);
+    setTurnModel([{ type: 'text', text: 'report for my parent' }]);
 
     const run = await start(runJob, [
-      {
-        threadId: 'imessage:owner',
-        task: 'consolidate memory',
-        ownerName: 'Devon',
-        outputTarget: 'silent',
-      },
+      { threadId: 'subagent:abc', task: 'do a subtask', ownerName: 'Devon' },
     ]);
     await run.returnValue;
     expect(await run.status).toBe('completed');
 
-    expect(ctx.gateway.sendCount).toBe(0); // silent → nothing delivered
+    expect(ctx.gateway.sendCount).toBe(0); // detached → never hits the gateway
+    const steers = await ctx.store.unansweredSteers('subagent:abc', []);
+    expect(steers.map((s) => s.text)).toContain('report for my parent');
+    // A detached inbox is NOT woken (mirrors reportToParent) — waking a `subagent:` thread would
+    // wrongly start a conversation turn on an internal inbox.
+    expect(ctx.wakeCalls).not.toContain('subagent:abc');
   });
 });

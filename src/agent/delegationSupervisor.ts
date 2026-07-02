@@ -1,6 +1,7 @@
 import type { Db } from '../db/client.js';
 import type { ConversationStore } from '../gateway/store.js';
 import { runSerial } from '../gateway/serial.js';
+import { type Authority, authorityForToolset, isAuthoritySubset } from './audience.js';
 import type { SubagentInput, ChildToolset } from '../../workflows/subagent.js';
 import {
   MAX_CONCURRENT_CHILDREN,
@@ -31,11 +32,14 @@ export interface SpawnInput {
   orchestrator?: boolean;
   /** Spawn depth: a top-level (Sunny) delegation is depth 1; an orchestrator child's children 2… */
   depth: number;
+  /** The spawning run's authority (run-audiences D-RA5). The child's toolset grants MUST be a
+   *  subset — monotone attenuation, enforced here at spawn (no ambient authority). */
+  parentAuthority: Authority;
 }
 
 export type SpawnResult =
   | { childThreadId: string; childRunId: string }
-  | { error: 'depth_cap' | 'concurrency_cap' };
+  | { error: 'depth_cap' | 'concurrency_cap' | 'authority' };
 
 /**
  * The delegation supervisor (durable-subagents D-DS13/D-DS6) — the run-supply engine for
@@ -76,6 +80,17 @@ export class DelegationSupervisor {
     if (active >= MAX_CONCURRENT_CHILDREN) {
       log.warn('delegation refused: concurrency cap', { active, parent: input.parentThreadId });
       return { error: 'concurrency_cap' };
+    }
+    // Monotone attenuation (D-RA5): the child's toolset may not grant authority the parent lacks.
+    // Structurally always true for a top-level delegation (delegation is trusted-DM-only, and the
+    // parent holds the full set); it bites a future orchestrator whose grandchild asks for more.
+    const childAuthority = authorityForToolset(input.toolset);
+    if (!isAuthoritySubset(childAuthority, input.parentAuthority)) {
+      log.warn('delegation refused: authority not a subset of parent', {
+        child: childAuthority,
+        parent: input.parentAuthority,
+      });
+      return { error: 'authority' };
     }
 
     const childThreadId = newChildThreadId();

@@ -269,7 +269,7 @@ describe('runConversation (workflow integration — real Local World)', () => {
     expect(sunny).not.toContain('reprogrammed conduct');
   });
 
-  it('message_person: relays to another roster member on their thread, confirms on the current one', async () => {
+  it('message (person): relays to another roster member on their thread, confirms on the current one', async () => {
     const KATE = '+17193146820';
     ctx = await setupTestRuntime({
       owner: { name: 'Devon', identities: ['+15551230000'] },
@@ -292,8 +292,8 @@ describe('runConversation (workflow integration — real Local World)', () => {
     setTurnModel([
       {
         type: 'tool-call',
-        toolName: 'message_person',
-        input: JSON.stringify({ person: 'Kate', text: 'Devon says hi!' }),
+        toolName: 'message',
+        input: JSON.stringify({ recipient: 'Kate', text: 'Devon says hi!' }),
       },
       { type: 'tool-call', toolName: 'send_message', input: JSON.stringify({ text: 'Sent to Kate 👍' }) },
       { type: 'text', text: '' },
@@ -312,7 +312,7 @@ describe('runConversation (workflow integration — real Local World)', () => {
     expect(toDevon?.text).toBe('Sent to Kate 👍');
   });
 
-  it('message_person: relays an image attachment to the recipient thread', async () => {
+  it('message (person): relays an image attachment to the recipient thread', async () => {
     const KATE = '+17193146820';
     ctx = await setupTestRuntime({
       owner: { name: 'Devon', identities: ['+15551230000'] },
@@ -333,9 +333,9 @@ describe('runConversation (workflow integration — real Local World)', () => {
     setTurnModel([
       {
         type: 'tool-call',
-        toolName: 'message_person',
+        toolName: 'message',
         input: JSON.stringify({
-          person: 'Kate',
+          recipient: 'Kate',
           text: 'Devon wanted you to see this 🦁',
           image: '/home/tivona/work/leo_lion.jpg',
         }),
@@ -355,7 +355,7 @@ describe('runConversation (workflow integration — real Local World)', () => {
     expect(toKate?.persist).toBe(true);
   });
 
-  it('message_person: refuses a non-roster recipient (roster-only)', async () => {
+  it('message (person): refuses a non-roster recipient (roster-only)', async () => {
     ctx = await setupTestRuntime({
       owner: { name: 'Devon', identities: ['+15551230000'] },
       family: [{ name: 'Kate', identities: ['+17193146820'] }],
@@ -370,8 +370,8 @@ describe('runConversation (workflow integration — real Local World)', () => {
     setTurnModel([
       {
         type: 'tool-call',
-        toolName: 'message_person',
-        input: JSON.stringify({ person: '+15559998888', text: 'hi stranger' }),
+        toolName: 'message',
+        input: JSON.stringify({ recipient: '+15559998888', text: 'hi stranger' }),
       },
       { type: 'tool-call', toolName: 'send_message', input: JSON.stringify({ text: 'I can only text family.' }) },
       { type: 'text', text: '' },

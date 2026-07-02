@@ -191,6 +191,18 @@ Checklist (mirrored in `.github/pull_request_template.md`):
   `app/` is excluded from Nitro's watcher; Vite handles its HMR.
 - **Never edit an already-applied Drizzle migration** — the migrator silently skips it
   (keys by journal order, not file hash). Add a *new* migration instead.
+- **Author migrations with `drizzle-kit generate`, never hand-write the SQL.** Edit
+  `src/db/schema.ts`, then `node --env-file=.env node_modules/.bin/drizzle-kit generate --name
+  <desc>` — it writes the SQL **and** the `drizzle/meta/*_snapshot.json` that is drizzle's diff
+  baseline. Hand-writing a `drizzle/NNNN_*.sql` by hand (as `0007`/`0008` were) leaves no
+  snapshot, so the baseline goes stale: the *next* `generate` diffs against the last real
+  snapshot and re-emits every change since — recreating existing tables/columns/indexes → a
+  migration that **fails on the live DB** (and thus at startup). If you inherit that state, don't
+  hand-forge the missing snapshots — run `generate` (its fresh snapshot re-syncs the baseline
+  going forward), **trim the generated SQL down to only the delta you intended**, then verify:
+  `drizzle-kit check` must print "Everything's fine" and a dry `generate` must print "No schema
+  changes". A snapshot chain that skips a couple of hand-written migrations is fine as long as
+  `check` is green — the *latest* snapshot is all `generate` consults.
 - **WDK needs the Nitro build.** `"use workflow"` / `"use step"` are no-ops without it.
   Workflows live in `workflows/`; launch with `start()` from `workflow/api`; never call
   `start()` inside workflow context (wrap in a `"use step"`).

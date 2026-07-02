@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { completeLink, createLink, getLinkByChildThread } from '../../src/agent/delegation.js';
+import { TRUSTED_DM_AUTHORITY } from '../../src/agent/audience.js';
 import {
   setTurnModel,
   setupTestRuntime,
@@ -32,6 +33,7 @@ describe('delegation (workflow integration — real Local World)', () => {
       task: 'find the answer to the question',
       depth: 1,
       label: 'researcher',
+      parentAuthority: TRUSTED_DM_AUTHORITY,
     });
     expect('childThreadId' in res).toBe(true);
     if (!('childThreadId' in res)) return;

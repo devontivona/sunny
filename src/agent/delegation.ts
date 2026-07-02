@@ -4,7 +4,6 @@ import type { Db } from '../db/client.js';
 import { subagentLinks, type SubagentLinkRow } from '../db/schema.js';
 import type { Runtime } from '../runtime.js';
 import type { ChannelEvent } from '../gateway/types.js';
-import type { EmitTarget } from './outputTarget.js';
 import { logger } from '../logger.js';
 
 const log = logger('delegation');
@@ -78,16 +77,19 @@ export async function setChildRunId(db: Db, childThreadId: string, runId: string
     .where(eq(subagentLinks.childThreadId, childThreadId));
 }
 
-/** Mark a link terminal (done | failed | timeout) and stamp completion (D-DS6/D-DS7). */
+/** Mark a link terminal (done | failed | timeout | cancelled) and stamp completion (D-DS6/D-DS7).
+ *  Only transitions a **running** link — so a child that finishes AFTER `cancel_run` set it
+ *  `cancelled` can't overwrite that back to `done` (the cancellation stays recorded), and a
+ *  watchdog late-fire can't resurrect an already-terminal link. */
 export async function completeLink(
   db: Db,
   childThreadId: string,
-  status: 'done' | 'failed' | 'timeout',
+  status: 'done' | 'failed' | 'timeout' | 'cancelled',
 ): Promise<void> {
   await db
     .update(subagentLinks)
     .set({ status, completedAt: new Date() })
-    .where(eq(subagentLinks.childThreadId, childThreadId));
+    .where(and(eq(subagentLinks.childThreadId, childThreadId), eq(subagentLinks.status, 'running')));
 }
 
 /** How many of a parent's children are still running — the concurrency gate (D-DS8). */
@@ -160,7 +162,7 @@ export async function appendInterRunMessage(
  */
 export async function reportToParent(
   runtime: Runtime,
-  out: EmitTarget,
+  out: { threadId: string; fromId?: string; fromName?: string },
   text: string,
 ): Promise<void> {
   const name = sanitizeLabel(out.fromName);
@@ -172,7 +174,7 @@ export async function reportToParent(
   const attributed = `${name} (subagent): ${text}`;
   const inserted = await appendInterRunMessage(
     runtime.store,
-    out.destThreadId,
+    out.threadId,
     { id: out.fromId ?? 'subagent', name },
     attributed,
   );
@@ -181,8 +183,8 @@ export async function reportToParent(
   // (an orchestrator child — future) is a single run, not router-driven, so waking it would wrongly
   // start a conversation turn on an internal thread; an in-flight orchestrator folds the report via
   // `loadSteers`, a finished one is run-to-completion (no re-drive).
-  if (!isChildThread(out.destThreadId)) runtime.wakeThread?.(out.destThreadId);
-  log.info('child reported to parent', { parentThread: out.destThreadId, from: name });
+  if (!isChildThread(out.threadId)) runtime.wakeThread?.(out.threadId);
+  log.info('child reported to parent', { parentThread: out.threadId, from: name });
 }
 
 /**

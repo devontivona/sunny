@@ -6,9 +6,11 @@ import {
 } from '../src/agent/delegationSupervisor.js';
 import {
   MAX_CONCURRENT_CHILDREN,
+  completeLink,
   createLink,
   getLinkByChildThread,
 } from '../src/agent/delegation.js';
+import { TRUSTED_DM_AUTHORITY } from '../src/agent/audience.js';
 import { createTestDb, type TestDb } from './db.js';
 
 /**
@@ -41,7 +43,7 @@ describe('DelegationSupervisor', () => {
 
   it('spawns under the caps: creates a link, starts the child, returns its id', async () => {
     const { sup, startSubagent } = makeSupervisor(Promise.resolve());
-    const res = await sup.spawn({ parentThreadId: PARENT, task: 'research X', depth: 1, label: 'r' });
+    const res = await sup.spawn({ parentThreadId: PARENT, task: 'research X', depth: 1, label: 'r', parentAuthority: TRUSTED_DM_AUTHORITY });
 
     expect('childThreadId' in res).toBe(true);
     if (!('childThreadId' in res)) return;
@@ -64,22 +66,53 @@ describe('DelegationSupervisor', () => {
       });
     }
     const { sup, startSubagent } = makeSupervisor(Promise.resolve());
-    const res = await sup.spawn({ parentThreadId: PARENT, task: 'one too many', depth: 1 });
+    const res = await sup.spawn({ parentThreadId: PARENT, task: 'one too many', depth: 1, parentAuthority: TRUSTED_DM_AUTHORITY });
     expect(res).toEqual({ error: 'concurrency_cap' });
     expect(startSubagent).not.toHaveBeenCalled();
   });
 
   it('refuses past the depth cap', async () => {
     const { sup, startSubagent } = makeSupervisor(Promise.resolve());
-    const res = await sup.spawn({ parentThreadId: PARENT, task: 'too deep', depth: 99 });
+    const res = await sup.spawn({ parentThreadId: PARENT, task: 'too deep', depth: 99, parentAuthority: TRUSTED_DM_AUTHORITY });
     expect(res).toEqual({ error: 'depth_cap' });
+    expect(startSubagent).not.toHaveBeenCalled();
+  });
+
+  it('completeLink only transitions a running link — a cancelled link is never overwritten', async () => {
+    // cancel_run marks a running child 'cancelled'; when the still-running child later finishes,
+    // its closeLink('done') must NOT resurrect it (nor a late watchdog 'failed'), so the
+    // cancellation stays recorded and Sunny's "it will stop reporting" is honest.
+    await createLink(tdb.db, {
+      parentThreadId: PARENT,
+      childThreadId: 'subagent:cancelme',
+      task: 't',
+      depth: 1,
+      orchestrator: false,
+    });
+    await completeLink(tdb.db, 'subagent:cancelme', 'cancelled'); // cancel_run
+    await completeLink(tdb.db, 'subagent:cancelme', 'done'); // child finishes afterward
+    await completeLink(tdb.db, 'subagent:cancelme', 'failed'); // late watchdog fire
+    expect((await getLinkByChildThread(tdb.db, 'subagent:cancelme'))?.status).toBe('cancelled');
+  });
+
+  it('refuses a child whose authority exceeds the parent (monotone attenuation, D-RA5)', async () => {
+    // A restricted (readonly) parent cannot mint a `host` child — that would BROADEN authority.
+    const { sup, startSubagent } = makeSupervisor(Promise.resolve());
+    const res = await sup.spawn({
+      parentThreadId: PARENT,
+      task: 'escalate',
+      depth: 1,
+      toolset: 'host',
+      parentAuthority: ['file_read'], // a readonly orchestrator's authority
+    });
+    expect(res).toEqual({ error: 'authority' });
     expect(startSubagent).not.toHaveBeenCalled();
   });
 
   it('watchdog: a child that dies has its link failed + a failure event sent to the parent', async () => {
     const wake = vi.fn();
     const { sup } = makeSupervisor(Promise.reject(new Error('child exploded')), wake);
-    const res = await sup.spawn({ parentThreadId: PARENT, task: 'risky', depth: 1, label: 'risky' });
+    const res = await sup.spawn({ parentThreadId: PARENT, task: 'risky', depth: 1, label: 'risky', parentAuthority: TRUSTED_DM_AUTHORITY });
     expect('childThreadId' in res).toBe(true);
     if (!('childThreadId' in res)) return;
 

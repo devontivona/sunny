@@ -9,7 +9,7 @@ import { SEND_MESSAGE_SPEC } from '../src/agent/tools/sendMessageSpec.js';
 import { assistantUIMessageFromResponse, extractSends } from '../src/agent/delivery.js';
 import {
   bashStep,
-  emitStep,
+  deliver,
   fileReadStep,
   finalAssistantText,
   markAnsweredStep,
@@ -72,19 +72,35 @@ export async function runSubagent(input: SubagentInput): Promise<void> {
 
   // Report to the parent (D-DS14 recoverOnMiss: rawtext): if the child reported intentionally via
   // `send_message`, those already reached the parent — don't double-emit; otherwise its final text
-  // IS the deliverable, emitted terminally. Then close the link (D-DS7 run-to-completion).
+  // IS the deliverable, emitted terminally. But if the parent `cancel_run`'d this child mid-flight
+  // (link no longer `running`), SUPPRESS the terminal report — "it will stop reporting" must be
+  // true, not a lie. Then close the link (D-DS7 run-to-completion; `completeLink` no-ops on a
+  // cancelled link, so the cancellation stays recorded).
+  const stillRunning = await linkRunningStep(input.childThreadId);
   const assistant = assistantUIMessageFromResponse(result.messages);
   const sends = assistant ? extractSends(assistant.parts) : [];
-  if (sends.length === 0) {
+  if (stillRunning && sends.length === 0) {
     const text = finalAssistantText(result.messages) || '(the subagent produced no result)';
-    await emitStep(
-      { target: 'parent', destThreadId: input.parentThreadId, fromName: input.label ?? 'subagent' },
+    await deliver(
+      { kind: 'parent', threadId: input.parentThreadId, fromName: input.label ?? 'subagent' },
       text,
     );
   }
   // Mark any folded steers answered + close the link.
   await markAnsweredStep(input.childThreadId, foldedIds);
   await closeLinkStep(input.childThreadId);
+}
+
+/** Whether this child's link is still `running` — false once the parent `cancel_run`'d it, so the
+ *  child suppresses its terminal report (Phase 3.2 cancel is honest). `'use step'`. */
+async function linkRunningStep(childThreadId: string): Promise<boolean> {
+  'use step';
+
+  const { getRuntime } = await import('../src/runtime.js');
+  const { getLinkByChildThread } = await import('../src/agent/delegation.js');
+  const { db } = await getRuntime();
+  const link = await getLinkByChildThread(db, childThreadId);
+  return link?.status === 'running';
 }
 
 /** Least-privilege child tools (D-DS5). Every child gets `send_message` (routed to the parent,
@@ -99,8 +115,8 @@ function buildChildTools(input: SubagentInput) {
         'progress update or your final result. Return a compact, structured summary — not raw ' +
         'tool output. This is the ONLY way to communicate back; your other text is private.',
       execute: ({ text }: { text: string }) =>
-        emitStep(
-          { target: 'parent', destThreadId: input.parentThreadId, fromName: input.label ?? 'subagent' },
+        deliver(
+          { kind: 'parent', threadId: input.parentThreadId, fromName: input.label ?? 'subagent' },
           text,
         ).then(() => 'reported to orchestrator'),
     }),

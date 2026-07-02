@@ -7,6 +7,7 @@ import { createSendMessageTool } from './sendMessage.js';
 import { createStaySilentTool } from './staySilent.js';
 import { createStartJobTool } from './startJob.js';
 import { createScheduleTools } from './schedule.js';
+import { RUNS_TOOL_SPECS } from './scheduleSpecs.js';
 import { createCredentialTools } from './credentialManage.js';
 import { createMcpTools } from './mcpManage.js';
 import { createBashTools } from './bash.js';
@@ -18,13 +19,13 @@ import { createMemoryTools } from './memory.js';
  * derivable from the registered tools"). It is observe-only metadata, NOT an
  * enforcement seam: gating lives at the command/action/credential layers.
  *
- * The catalog is built from the SAME tool factories the turn loop registers
- * (`src/agent/loop.ts`), so a tool added to a factory — or a description edit —
- * surfaces here automatically. The factories are constructed with inert deps
- * (gateway/db/store are only captured in `execute` closures, never touched at
+ * The catalog is built from the SAME tool factories the durable conversational turn
+ * registers (`workflows/conversation.ts` `buildTools`), so a tool added there — or a
+ * description edit — surfaces here automatically. The factories are constructed with inert
+ * deps (gateway/db/store are only captured in `execute` closures, never touched at
  * construction); nothing is executed — we only read each tool's `description`.
- * The owner-only grouping mirrors the loop's `event.isOwner && !event.isGroup`
- * gate (host/registry/scheduling tools); it is inherent policy, not derived.
+ * The "elevated" grouping mirrors the turn's trusted-DM gate (`trustedDm` — owner OR family,
+ * never a group; host/registry/scheduling/delegation tools); it is inherent policy, not derived.
  */
 
 export interface ToolParam {
@@ -93,8 +94,9 @@ export function toolCatalog(config: SunnyConfig): ToolCatalogEntry[] {
   const inertDb = undefined as unknown as Db;
   const inertStore = undefined as unknown as ConversationStore;
 
-  // Mirror loop.ts assembly. `send_message`/`stay_silent`/`start_job`/memory are
-  // registered on every turn; scheduling/credentials/mcp/host tools are owner-DM-only.
+  // Mirror `conversation.ts` `buildTools`. `send_message`/`stay_silent`/`start_job`/memory are
+  // registered on every turn; scheduling/credentials/mcp/host tools are trusted-DM-only (owner
+  // OR family).
   const broad: Record<string, ToolLike> = {
     send_message: createSendMessageTool(inertGateway, '', counter),
     stay_silent: createStaySilentTool(silence),
@@ -103,6 +105,7 @@ export function toolCatalog(config: SunnyConfig): ToolCatalogEntry[] {
   };
   const ownerOnly: Record<string, ToolLike> = {
     ...createScheduleTools(inertDb, '', config.timezone),
+    ...RUNS_TOOL_SPECS,
     ...createCredentialTools(config, undefined),
     ...createMcpTools(config, undefined),
     ...createBashTools(config, undefined),

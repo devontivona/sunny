@@ -15,7 +15,10 @@ import type { ChannelEvent, Gateway } from './gateway/types.js';
 import { initMemory } from './memory/index.js';
 import { initSkills, startSkillSync } from './skills/index.js';
 import { pushState } from './state/index.js';
-import { startScheduler } from './scheduler/index.js';
+import { ensureConsolidationSchedule, startScheduler } from './scheduler/index.js';
+import { sendblueDmThreadId } from './gateway/threadId.js';
+import { normalize } from './gateway/auth.js';
+import { scheduleAudience } from './agent/audience.js';
 import { logger } from './logger.js';
 
 const log = logger('runtime');
@@ -195,15 +198,36 @@ async function start(): Promise<Runtime> {
           {
             scheduleId: schedule.id,
             runId,
-            threadId: schedule.threadId,
             prompt: schedule.prompt,
             ownerName: config.owner.name,
-            // Route the fired run's reply by the schedule's target (D-DS1); 'silent' = record-only.
-            outputTarget: schedule.outputTarget === 'silent' ? 'silent' : 'user',
+            // Address the fired run by the schedule's audience (run-audiences D-RA11/#4): an
+            // explicit `person:` (scheduled FOR someone), else its creating thread, else
+            // `household` (record-only) for a silent maintenance schedule.
+            audience: scheduleAudience(schedule),
           },
         ]);
       },
     });
+  }
+
+  // Seed the nightly memory-consolidation schedule (run-audiences Phase 1a: restore the caller
+  // the durable-main-loop migration dropped, so fresh installs get consolidation again).
+  // Idempotent (keyed on its label) and delivered `silent`. Addressed to the owner's DM thread,
+  // constructed deterministically from config + SENDBLUE_FROM_NUMBER so it needs no prior inbound.
+  try {
+    const ownerId = config.owner.identities[0];
+    const from = process.env.SENDBLUE_FROM_NUMBER;
+    if (ownerId && from) {
+      await ensureConsolidationSchedule(
+        db,
+        sendblueDmThreadId(from, normalize(ownerId)),
+        config.timezone,
+      );
+    } else {
+      log.info('nightly-consolidation seed skipped — owner identity or SENDBLUE_FROM_NUMBER unset');
+    }
+  } catch (err) {
+    log.warn('nightly-consolidation seed failed (non-fatal)', { err: String(err) });
   }
 
   // Periodic skill-repo sync (D-SK8): keep the local clone fresh from the canonical

@@ -69,6 +69,11 @@ export const schedules = pgTable(
     /** Output target for the fired run (durable-subagents D-DS1): 'user' | 'silent'. A `silent`
      *  schedule records its result but sends no proactive message (e.g. nightly consolidation). */
     outputTarget: text('output_target').notNull().default('user'),
+    /** Optional explicit audience (run-audiences #4: cross-person scheduling). When set (e.g.
+     *  `person:Kate`), the fired run is for/delivered to that party regardless of the creating
+     *  thread — so the owner can schedule a reminder FOR a family member. When null, the audience
+     *  is derived from `threadId` + `outputTarget` (the common per-person case). */
+    audience: text('audience'),
     timezone: text('timezone').notNull(),
     label: text('label'),
     nextRunAt: timestamp('next_run_at', { withTimezone: true }),
