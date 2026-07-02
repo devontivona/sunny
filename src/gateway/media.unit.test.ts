@@ -4,9 +4,11 @@ import {
   cleanupOutbox,
   contentTypeForName,
   extForMediaType,
+  isGenericBinaryType,
   isValidOutboxName,
   kindForMediaType,
   modelIngestKind,
+  sniffMediaType,
   planOutbound,
   renderableMedia,
   type AttachmentRef,
@@ -198,6 +200,42 @@ describe('attachmentRefsOf / renderableMedia (payload extraction, D-MM1/9)', () 
   it('tolerates legacy/empty payloads', () => {
     expect(attachmentRefsOf(null)).toEqual([]);
     expect(renderableMedia({ role: 'user', parts: [{ type: 'text', text: 'hi' }] })).toEqual([]);
+  });
+});
+
+describe('sniffMediaType / isGenericBinaryType (unlabeled-attachment recovery)', () => {
+  const buf = (...bytes: number[]) => Buffer.from(bytes);
+
+  it('recovers application/pdf from the %PDF signature', () => {
+    expect(sniffMediaType(Buffer.from('%PDF-1.6\n…binary…'))).toBe('application/pdf');
+  });
+
+  it('recovers common image types from their magic bytes', () => {
+    expect(sniffMediaType(buf(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a))).toBe('image/png');
+    expect(sniffMediaType(buf(0xff, 0xd8, 0xff, 0xe0))).toBe('image/jpeg');
+    expect(sniffMediaType(buf(0x47, 0x49, 0x46, 0x38, 0x39, 0x61))).toBe('image/gif');
+    // RIFF....WEBP
+    expect(sniffMediaType(buf(0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50))).toBe(
+      'image/webp',
+    );
+    // ISO-BMFF ftyp with a HEIC brand: [size][ftyp][heic]
+    expect(sniffMediaType(buf(0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63))).toBe(
+      'image/heic',
+    );
+  });
+
+  it('falls back for an unrecognized signature (plain text / unknown)', () => {
+    expect(sniffMediaType(Buffer.from('just some text'))).toBe('application/octet-stream');
+    expect(sniffMediaType(Buffer.from('x'), 'text/plain')).toBe('text/plain');
+  });
+
+  it('flags only absent / generic-binary declared types as worth sniffing', () => {
+    expect(isGenericBinaryType(undefined)).toBe(true);
+    expect(isGenericBinaryType(null)).toBe(true);
+    expect(isGenericBinaryType('')).toBe(true);
+    expect(isGenericBinaryType('application/octet-stream')).toBe(true);
+    expect(isGenericBinaryType('application/pdf')).toBe(false);
+    expect(isGenericBinaryType('image/jpeg')).toBe(false);
   });
 });
 

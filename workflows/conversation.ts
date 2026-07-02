@@ -1,8 +1,4 @@
-import type {
-  LanguageModelUsage,
-  ModelMessage,
-  SystemModelMessage,
-} from '../src/agent/aiTypes.js';
+import type { LanguageModelUsage, ModelMessage, SystemModelMessage } from '../src/agent/aiTypes.js';
 import { tool } from '@ai-sdk/provider-utils';
 import type { SharedV4ProviderOptions } from '@ai-sdk/provider';
 import type { MockResponseDescriptor } from '../src/agent/mockModel.js';
@@ -292,7 +288,8 @@ function buildTools(ctx: {
           }),
           cancel_run: tool({
             ...RUNS_TOOL_SPECS.cancel_run,
-            execute: ({ id }) => cancelRunStep(id, threadId, ownerPresent, subjectName ?? ownerName),
+            execute: ({ id }) =>
+              cancelRunStep(id, threadId, ownerPresent, subjectName ?? ownerName),
           }),
         }
       : {}),
@@ -441,7 +438,15 @@ async function recoverDelivery(
   }
 }
 
-/** Persist one enriched UIMessage row for the turn (D-MG9). */
+/**
+ * Persist one enriched UIMessage row for the turn (D-MG9). BEST-EFFORT: a persist
+ * failure must NOT abort the run, because the turn has already DELIVERED (send_message
+ * fires mid-stream) — if this threw, the run would fail before `markAnswered`, the
+ * inbound would stay unanswered, and the router would re-run the turn and re-deliver
+ * (the duplicate-reply bug). Losing a transcript row is a far smaller harm than
+ * re-texting the user, so we log + swallow. The store also sanitizes NUL/surrogates,
+ * so the historical trigger (a binary file_read in the payload) no longer fails here.
+ */
 async function appendTurnStep(
   threadId: string,
   payload: unknown,
@@ -450,8 +455,16 @@ async function appendTurnStep(
   'use step';
 
   const { getRuntime } = await import('../src/runtime.js');
+  const { logger } = await import('../src/logger.js');
   const { store } = await getRuntime();
-  await store.appendTurn(threadId, payload, projection);
+  try {
+    await store.appendTurn(threadId, payload, projection);
+  } catch (err) {
+    logger('conversation').error('turn persist failed (delivered; dropping transcript row)', {
+      threadId,
+      err: String(err),
+    });
+  }
 }
 
 /** Mark exactly the user messages this turn answered as processed (the watermark). */
@@ -720,9 +733,7 @@ async function listRunsStep(
   const scheds = await listSchedules(db);
   const visible = ownerPresent
     ? scheds
-    : scheds.filter(
-        (s) => subjectName(scheduleAudience(s), config) === callerSubject,
-      );
+    : scheds.filter((s) => subjectName(scheduleAudience(s), config) === callerSubject);
   const children = (await listRunningLinks(db)).filter((l) => l.parentThreadId === threadId);
 
   const lines: string[] = [];
