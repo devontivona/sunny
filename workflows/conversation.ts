@@ -654,13 +654,33 @@ async function readTopicStep(name: string): Promise<string> {
  */
 async function scheduleCreateStep(
   threadId: string,
-  args: { kind: 'once' | 'interval' | 'cron'; spec: string; prompt: string; label?: string },
+  args: {
+    kind: 'once' | 'interval' | 'cron';
+    spec: string;
+    prompt: string;
+    label?: string;
+    for?: string;
+  },
 ): Promise<string> {
   'use step';
 
   const { getRuntime } = await import('../src/runtime.js');
   const { createSchedule } = await import('../src/scheduler/index.js');
+  const { rosterMatch } = await import('../src/agent/audience.js');
   const { db, config } = await getRuntime();
+
+  // "for" schedules this on behalf of ANOTHER family member (run-audiences #4): store an explicit
+  // `person:<name>` audience so the fired run acts for + delivers to them, not the creating thread.
+  let audience: string | undefined;
+  if (args.for) {
+    const name = rosterMatch(args.for, config);
+    if (!name) {
+      const known = [config.owner.name, ...config.family.map((f) => f.name)].join(', ');
+      return `I can only schedule for family roster members (${known}); "${args.for}" isn't one.`;
+    }
+    audience = `person:${name}`;
+  }
+
   try {
     const row = await createSchedule(db, {
       kind: args.kind,
@@ -669,8 +689,10 @@ async function scheduleCreateStep(
       threadId,
       timezone: config.timezone,
       label: args.label,
+      audience,
     });
-    return `Scheduled ${row.id} (${row.kind}); next run ${row.nextRunAt?.toISOString() ?? 'n/a'}.`;
+    const forWhom = audience ? ` for ${audience.slice('person:'.length)}` : '';
+    return `Scheduled ${row.id} (${row.kind})${forWhom}; next run ${row.nextRunAt?.toISOString() ?? 'n/a'}.`;
   } catch (err) {
     return `ERROR: ${err instanceof Error ? err.message : String(err)}`;
   }
@@ -691,14 +713,14 @@ async function listRunsStep(
   const { getRuntime } = await import('../src/runtime.js');
   const { listSchedules } = await import('../src/scheduler/index.js');
   const { listRunningLinks } = await import('../src/agent/delegation.js');
-  const { subjectName, audienceForSchedule } = await import('../src/agent/audience.js');
+  const { subjectName, scheduleAudience } = await import('../src/agent/audience.js');
   const { db, config } = await getRuntime();
 
   const scheds = await listSchedules(db);
   const visible = ownerPresent
     ? scheds
     : scheds.filter(
-        (s) => subjectName(audienceForSchedule(s.threadId, s.outputTarget), config) === callerSubject,
+        (s) => subjectName(scheduleAudience(s), config) === callerSubject,
       );
   const children = (await listRunningLinks(db)).filter((l) => l.parentThreadId === threadId);
 
@@ -734,12 +756,12 @@ async function cancelRunStep(
   const { getRuntime } = await import('../src/runtime.js');
   const { listSchedules, deleteSchedule } = await import('../src/scheduler/index.js');
   const { getLinkByChildThread, completeLink } = await import('../src/agent/delegation.js');
-  const { subjectName, audienceForSchedule } = await import('../src/agent/audience.js');
+  const { subjectName, scheduleAudience } = await import('../src/agent/audience.js');
   const { db, config } = await getRuntime();
 
   const sched = (await listSchedules(db)).find((s) => s.id === id);
   if (sched) {
-    const owner = subjectName(audienceForSchedule(sched.threadId, sched.outputTarget), config);
+    const owner = subjectName(scheduleAudience(sched), config);
     if (!ownerPresent && owner !== callerSubject) {
       return `That schedule belongs to ${owner}, so I didn't cancel it.`;
     }

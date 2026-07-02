@@ -20,7 +20,8 @@ export function scheduleToolSpecs(timezone: string) {
         'timestamp (compute the absolute time, e.g. "in 30 min" or "tomorrow 9am"); kind ' +
         "'interval' with a duration like '2h'/'30m'/'1d'; or kind 'cron' with a 5-field cron " +
         `expression (evaluated in the user's timezone, ${timezone}). prompt = what you should ` +
-        'do when it fires. The result is delivered to the user automatically.',
+        'do when it fires. The result is delivered automatically to whoever the schedule is for ' +
+        '(the current person by default, or the "for" person).',
       inputSchema: z.object({
         kind: z
           .enum(['once', 'interval', 'cron'])
@@ -33,6 +34,14 @@ export function scheduleToolSpecs(timezone: string) {
           .describe("once: ISO timestamp · interval: duration (e.g. '2h') · cron: '0 9 * * *'"),
         prompt: z.string().describe('What to do when it fires.'),
         label: z.string().optional().describe('Optional short label.'),
+        for: z
+          .string()
+          .optional()
+          .describe(
+            'Optional: schedule this FOR another family member (a roster name, e.g. "Kate") — the ' +
+              'fired run acts for and is delivered to THEM, not you. Omit to schedule for the ' +
+              'current person. Roster members only.',
+          ),
       }),
     },
   };

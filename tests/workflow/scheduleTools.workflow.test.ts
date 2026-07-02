@@ -135,6 +135,58 @@ describe('self-scheduling on a trusted-DM turn (run-audiences Phase 1a)', () => 
     expect(await listSchedules(ctx.db.db)).toHaveLength(0);
   });
 
+  it('cross-person (#4): the owner can schedule FOR a family member via `for`', async () => {
+    ctx = await setupTestRuntime({
+      owner: { name: 'Devon', identities: ['+15551230000'] },
+      family: [{ name: 'Kate', identities: ['+17193146820'] }],
+    });
+    const devon = makeChannelEvent({ text: 'remind Kate at 3pm to call the pediatrician' });
+    await ctx.store.appendInbound(devon);
+    setTurnModel([
+      {
+        type: 'tool-call',
+        toolName: 'schedule_create',
+        input: JSON.stringify({
+          kind: 'once',
+          spec: '2027-01-01T15:00:00.000Z',
+          prompt: 'Remind about the pediatrician',
+          for: 'Kate',
+        }),
+      },
+      { type: 'tool-call', toolName: 'send_message', input: JSON.stringify({ text: "Set for Kate." }) },
+      { type: 'text', text: '' },
+    ]);
+
+    const run = await start(runConversation, [{ threadId: devon.threadId }]);
+    await run.returnValue;
+    expect(await run.status).toBe('completed');
+
+    const rows = await listSchedules(ctx.db.db);
+    expect(rows).toHaveLength(1);
+    // The schedule is stored as a person: audience for Kate — the fired run will act for + deliver
+    // to Kate, NOT Devon's thread.
+    expect(rows[0]?.audience).toBe('person:Kate');
+  });
+
+  it('cross-person: scheduling for a NON-roster name is refused', async () => {
+    ctx = await setupTestRuntime({ owner: { name: 'Devon', identities: ['+15551230000'] } });
+    const devon = makeChannelEvent({ text: 'remind Stranger tomorrow' });
+    await ctx.store.appendInbound(devon);
+    setTurnModel([
+      {
+        type: 'tool-call',
+        toolName: 'schedule_create',
+        input: JSON.stringify({ kind: 'once', spec: '2027-01-01T09:00:00.000Z', prompt: 'x', for: 'Stranger' }),
+      },
+      { type: 'tool-call', toolName: 'send_message', input: JSON.stringify({ text: 'ok' }) },
+      { type: 'text', text: '' },
+    ]);
+
+    const run = await start(runConversation, [{ threadId: devon.threadId }]);
+    await run.returnValue;
+    expect(await listSchedules(ctx.db.db)).toHaveLength(0); // refused → nothing created
+  });
+
   it('list_runs shows the owner all schedules', async () => {
     ctx = await setupTestRuntime();
     const { createSchedule } = await import('../../src/scheduler/index.js');

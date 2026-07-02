@@ -67,6 +67,30 @@ export function audienceForSchedule(threadId: string, outputTarget: string): Aud
 }
 
 /**
+ * The delivery audience for a schedule row (run-audiences #4). An explicit `audience` column wins
+ * (e.g. `person:Kate` — the owner scheduled a reminder FOR a family member, so it delivers to them
+ * regardless of the creating thread); otherwise it is derived from `threadId` + `outputTarget`
+ * (the common per-person case, where each person's schedules live in their own thread).
+ * Encoding: `person:<name-or-identity>` | `household` | `thread:<id>`.
+ */
+export function scheduleAudience(row: {
+  threadId: string;
+  outputTarget: string;
+  audience: string | null;
+}): Audience {
+  const a = row.audience?.trim();
+  if (a) {
+    const sep = a.indexOf(':');
+    const kind = sep === -1 ? a : a.slice(0, sep);
+    const rest = sep === -1 ? '' : a.slice(sep + 1);
+    if (kind === 'person' && rest) return { kind: 'person', person: rest };
+    if (kind === 'household') return { kind: 'household' };
+    if (kind === 'thread' && rest) return { kind: 'thread', threadId: rest };
+  }
+  return audienceForSchedule(row.threadId, row.outputTarget);
+}
+
+/**
  * The name of the person a run acts for / reports to, for prompt framing + ownership (D-RA4),
  * derived from the audience. `thread` resolves the thread's roster subject; `household`/unresolved
  * → the owner. Sunny's *identity* is always the owner's assistant; only the beneficiary changes.

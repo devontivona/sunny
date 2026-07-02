@@ -23,6 +23,9 @@ export interface CreateScheduleInput {
   label?: string;
   /** Output target for the fired run (durable-subagents D-DS1); defaults to 'user'. */
   outputTarget?: 'user' | 'silent';
+  /** Explicit audience (run-audiences #4), e.g. `person:Kate` — the run is for that party
+   *  regardless of the creating thread. Null/omitted → derived from threadId + outputTarget. */
+  audience?: string;
 }
 
 /** Parse a duration like '45s', '30m', '2h', '1d' into milliseconds. */
@@ -66,6 +69,7 @@ export async function createSchedule(db: Db, input: CreateScheduleInput): Promis
       timezone: input.timezone,
       label: input.label ?? null,
       outputTarget: input.outputTarget ?? 'user',
+      audience: input.audience ?? null,
       nextRunAt,
       active: true,
     })
