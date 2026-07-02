@@ -1,6 +1,7 @@
 import { tool } from '@ai-sdk/provider-utils';
 import { buildTurnModel, type MockResponseDescriptor } from '../src/agent/turnModel.js';
 import { MEMORY_TOOL_SPECS } from '../src/agent/tools/memorySpecs.js';
+import { MESSAGE_SPEC } from '../src/agent/tools/messageSpec.js';
 import { type Audience, subjectName } from '../src/agent/audience.js';
 import { deliver, finalAssistantText, streamAgent } from './runShell.js';
 
@@ -53,6 +54,17 @@ export async function runScheduledJob(input: ScheduledJobInput): Promise<void> {
         ...MEMORY_TOOL_SPECS.recall_history,
         execute: ({ query, limit }) => recallStep(query, limit),
       }),
+      // Proactive fan-out (run-audiences D-RA10, Phase 3.1): a delivering scheduled run may reach
+      // roster members via the bus. Withheld from the silent `household` maintenance run
+      // (consolidation) — no messaging grant → structurally silent (D-RA14).
+      ...(input.audience.kind !== 'household'
+        ? {
+            message: tool({
+              ...MESSAGE_SPEC,
+              execute: ({ recipient, text }) => scheduledMessageStep(recipient, text),
+            }),
+          }
+        : {}),
     },
     providerOptions: {
       anthropic: { thinking: { type: 'adaptive', display: 'omitted' }, effort: 'high' },
@@ -135,6 +147,43 @@ async function recallStep(query: string, limit?: number): Promise<string> {
   const { execRecall } = await import('../src/agent/tools/memory.js');
   const { store, config } = await getRuntime();
   return execRecall(store, config, query, limit);
+}
+
+/**
+ * Proactively message a roster member from a scheduled run (run-audiences D-RA10, Phase 3.1).
+ * Self-contained `'use step'` (resolves the roster member + sends via the gateway inline, mirroring
+ * the conversation relay) so it composes as a tool execute without nesting the `deliver` step.
+ * Roster-only — arbitrary numbers are refused.
+ */
+async function scheduledMessageStep(recipient: string, text: string): Promise<string> {
+  'use step';
+
+  const { getRuntime } = await import('../src/runtime.js');
+  const { normalize } = await import('../src/gateway/auth.js');
+  const { sendblueDmThreadId } = await import('../src/gateway/threadId.js');
+  const { config, store, gateway } = await getRuntime();
+
+  const roster = [
+    { name: config.owner.name, identities: config.owner.identities },
+    ...config.family,
+  ];
+  const wanted = recipient.trim();
+  const match =
+    roster.find((p) => p.name.toLowerCase() === wanted.toLowerCase()) ??
+    roster.find((p) => p.identities.map(normalize).includes(normalize(wanted)));
+  if (!match || match.identities.length === 0) {
+    const known = roster.map((r) => r.name).join(', ');
+    return `I can only message the family roster (${known}); "${recipient}" isn't one, so I sent nothing.`;
+  }
+  const identity = normalize(match.identities[0]!);
+  let threadId = await store.findDmThreadForSender(identity);
+  if (!threadId) {
+    const from = process.env.SENDBLUE_FROM_NUMBER;
+    if (!from) return `I don't have a conversation with ${match.name} yet and can't start one.`;
+    threadId = sendblueDmThreadId(from, identity);
+  }
+  await gateway.send(threadId, { text }, { persist: true });
+  return `Sent to ${match.name}.`;
 }
 
 async function recordRun(runId: string, output: string): Promise<void> {

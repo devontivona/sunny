@@ -9,6 +9,7 @@ import {
   teardownTestRuntime,
   type TestRuntimeCtx,
 } from './harness.js';
+import { makeChannelEvent } from '../factories.js';
 
 /**
  * `runScheduledJob` against a real in-process WDK Local World (durable-subagents task 10.2;
@@ -107,5 +108,39 @@ describe('runScheduledJob (workflow integration — real Local World)', () => {
 
     const sent = ctx.gateway.sent.find((s) => s.text === 'Leo is due for a feed 🍼');
     expect(sent?.threadId).toBe(kateThread); // delivered to Kate's thread, not imessage:owner
+  });
+
+  it('proactive fan-out (D-RA10): a delivering scheduled run can message a roster member via the bus', async () => {
+    ctx = await setupTestRuntime({ family: [{ name: 'Kate', identities: ['+17193146820'] }] });
+    const { runId } = await seedScheduleRun('user');
+    const kateThread = 'sendblue:owner:kate';
+    // Give Kate an existing DM so the roster resolution finds her bound thread.
+    await ctx.store.appendInbound(
+      makeChannelEvent({ threadId: kateThread, senderId: '+17193146820', senderName: 'Kate', isOwner: false }),
+    );
+    setTurnModel([
+      {
+        type: 'tool-call',
+        toolName: 'message',
+        input: JSON.stringify({ recipient: 'Kate', text: 'Reminder: Leo feed 🍼' }),
+      },
+      { type: 'text', text: '' },
+    ]);
+
+    const run = await start(runScheduledJob, [
+      {
+        scheduleId: 's',
+        runId,
+        prompt: 'remind Kate about the feed',
+        ownerName: 'Devon',
+        audience: { kind: 'thread', threadId: 'imessage:owner' },
+      },
+    ]);
+    await run.returnValue;
+    expect(await run.status).toBe('completed');
+
+    const toKate = ctx.gateway.sent.find((s) => s.threadId === kateThread);
+    expect(toKate?.text).toBe('Reminder: Leo feed 🍼'); // proactively reached Kate via the message tool
+    expect(toKate?.persist).toBe(true);
   });
 });

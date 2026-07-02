@@ -35,18 +35,32 @@ export function scheduleToolSpecs(timezone: string) {
         label: z.string().optional().describe('Optional short label.'),
       }),
     },
-    schedule_list: {
-      description: 'List your active schedules.',
-      inputSchema: z.object({}),
-    },
-    schedule_delete: {
-      description: 'Delete (cancel) a schedule by its id.',
-      inputSchema: z.object({
-        id: z.string().describe('The schedule id to cancel (from schedule_list).'),
-      }),
-    },
   };
 }
+
+/**
+ * Run-lifecycle tool specs (run-audiences D-RA8, Phase 3.2). `list_runs` / `cancel_run` are the
+ * unified inspection surface spanning **schedules + running subagents** — they replace the
+ * schedule-specific list/delete. Node-free (zod only). Ownership is enforced in the step (the
+ * caller sees/cancels their own runs; the owner sees/cancels all).
+ */
+export const RUNS_TOOL_SPECS = {
+  list_runs: {
+    description:
+      'List the durable runs you can see: your active schedules and any subagents currently ' +
+      'working for this conversation. The owner sees everyone\'s; a family member sees their own. ' +
+      'Each row shows an id you can pass to cancel_run.',
+    inputSchema: z.object({}),
+  },
+  cancel_run: {
+    description:
+      'Cancel a durable run by its id (from list_runs): deletes a schedule, or stops a running ' +
+      "subagent of this conversation. You can only cancel runs you own (the owner can cancel any).",
+    inputSchema: z.object({
+      id: z.string().describe('The run id to cancel (a schedule id or a subagent id from list_runs).'),
+    }),
+  },
+} as const;
 
 /** One active-schedule row's display shape (subset of `ScheduleRow`), kept local so this
  *  module stays node-free (no db/schema value import). */

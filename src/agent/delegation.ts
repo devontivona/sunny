@@ -81,7 +81,7 @@ export async function setChildRunId(db: Db, childThreadId: string, runId: string
 export async function completeLink(
   db: Db,
   childThreadId: string,
-  status: 'done' | 'failed' | 'timeout',
+  status: 'done' | 'failed' | 'timeout' | 'cancelled',
 ): Promise<void> {
   await db
     .update(subagentLinks)

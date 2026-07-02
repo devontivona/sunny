@@ -106,9 +106,9 @@ describe('self-scheduling on a trusted-DM turn (run-audiences Phase 1a)', () => 
     expect(ctx.gateway.texts()).toContain('Got it — reminder set.');
   });
 
-  it('a schedule_delete on a trusted-DM turn cancels an existing schedule', async () => {
+  it('cancel_run on a trusted-DM turn cancels an existing schedule', async () => {
     ctx = await setupTestRuntime();
-    // Seed a schedule directly, then drive a turn that deletes it by id.
+    // Seed a schedule directly, then drive a turn that cancels it by id.
     const { createSchedule } = await import('../../src/scheduler/index.js');
     const seeded = await createSchedule(ctx.db.db, {
       kind: 'interval',
@@ -122,7 +122,7 @@ describe('self-scheduling on a trusted-DM turn (run-audiences Phase 1a)', () => 
     setTurnModel([
       {
         type: 'tool-call',
-        toolName: 'schedule_delete',
+        toolName: 'cancel_run',
         input: JSON.stringify({ id: seeded.id }),
       },
       { type: 'tool-call', toolName: 'send_message', input: JSON.stringify({ text: 'Cancelled.' }) },
@@ -133,5 +133,31 @@ describe('self-scheduling on a trusted-DM turn (run-audiences Phase 1a)', () => 
     await run.returnValue;
 
     expect(await listSchedules(ctx.db.db)).toHaveLength(0);
+  });
+
+  it('list_runs shows the owner all schedules', async () => {
+    ctx = await setupTestRuntime();
+    const { createSchedule } = await import('../../src/scheduler/index.js');
+    await createSchedule(ctx.db.db, {
+      kind: 'cron',
+      spec: '0 9 * * *',
+      prompt: 'morning briefing',
+      threadId: makeChannelEvent().threadId,
+      timezone: 'America/New_York',
+      label: 'briefing',
+    });
+    const event = makeChannelEvent({ text: 'what have you got scheduled?' });
+    await ctx.store.appendInbound(event);
+    setTurnModel([
+      { type: 'tool-call', toolName: 'list_runs', input: JSON.stringify({}) },
+      { type: 'tool-call', toolName: 'send_message', input: JSON.stringify({ text: 'Here they are.' }) },
+      { type: 'text', text: '' },
+    ]);
+
+    const run = await start(runConversation, [{ threadId: event.threadId }]);
+    await run.returnValue;
+    expect(await run.status).toBe('completed');
+    // The turn completed with the list_runs tool available + invoked (no error → schedule still there).
+    expect(await listSchedules(ctx.db.db)).toHaveLength(1);
   });
 });

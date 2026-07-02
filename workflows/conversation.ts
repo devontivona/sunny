@@ -12,7 +12,7 @@ import { BASH_TOOL_SPECS } from '../src/agent/tools/bashSpecs.js';
 import { MEMORY_TOOL_SPECS } from '../src/agent/tools/memorySpecs.js';
 import { SEND_MESSAGE_SPEC, STAY_SILENT_SPEC } from '../src/agent/tools/sendMessageSpec.js';
 import { MESSAGE_SPEC } from '../src/agent/tools/messageSpec.js';
-import { formatScheduleList, scheduleToolSpecs } from '../src/agent/tools/scheduleSpecs.js';
+import { RUNS_TOOL_SPECS, scheduleToolSpecs } from '../src/agent/tools/scheduleSpecs.js';
 import { DELEGATE_TASK_SPEC, type ChildModelName } from '../src/agent/tools/delegationSpecs.js';
 import { TRUSTED_DM_AUTHORITY } from '../src/agent/audience.js';
 import type { ChildToolset } from './subagent.js';
@@ -283,13 +283,16 @@ function buildTools(ctx: {
             ...scheduleSpecs.schedule_create,
             execute: (args) => scheduleCreateStep(threadId, args),
           }),
-          schedule_list: tool({
-            ...scheduleSpecs.schedule_list,
-            execute: () => scheduleListStep(),
+          // Unified run lifecycle (run-audiences Phase 3.2): inspect + cancel schedules AND
+          // this conversation's running subagents, ownership-scoped (owner sees all; a family
+          // member only their own). Replaces schedule_list / schedule_delete.
+          list_runs: tool({
+            ...RUNS_TOOL_SPECS.list_runs,
+            execute: () => listRunsStep(threadId, ownerPresent, subjectName ?? ownerName),
           }),
-          schedule_delete: tool({
-            ...scheduleSpecs.schedule_delete,
-            execute: ({ id }) => scheduleDeleteStep(id),
+          cancel_run: tool({
+            ...RUNS_TOOL_SPECS.cancel_run,
+            execute: ({ id }) => cancelRunStep(id, threadId, ownerPresent, subjectName ?? ownerName),
           }),
         }
       : {}),
@@ -673,23 +676,83 @@ async function scheduleCreateStep(
   }
 }
 
-async function scheduleListStep(): Promise<string> {
+/**
+ * List the durable runs the caller can see (run-audiences Phase 3.2): active schedules they own
+ * plus this conversation's running subagents. The owner (present in the thread) sees ALL schedules;
+ * a family member sees only schedules whose audience subject is them. `'use step'` — pure read.
+ */
+async function listRunsStep(
+  threadId: string,
+  ownerPresent: boolean,
+  callerSubject: string,
+): Promise<string> {
   'use step';
 
   const { getRuntime } = await import('../src/runtime.js');
   const { listSchedules } = await import('../src/scheduler/index.js');
-  const { db } = await getRuntime();
-  return formatScheduleList(await listSchedules(db));
+  const { listRunningLinks } = await import('../src/agent/delegation.js');
+  const { subjectName, audienceForSchedule } = await import('../src/agent/audience.js');
+  const { db, config } = await getRuntime();
+
+  const scheds = await listSchedules(db);
+  const visible = ownerPresent
+    ? scheds
+    : scheds.filter(
+        (s) => subjectName(audienceForSchedule(s.threadId, s.outputTarget), config) === callerSubject,
+      );
+  const children = (await listRunningLinks(db)).filter((l) => l.parentThreadId === threadId);
+
+  const lines: string[] = [];
+  if (visible.length > 0) {
+    lines.push('Schedules:');
+    for (const s of visible) {
+      lines.push(
+        `  ${s.id} [${s.kind} ${s.spec}]${s.label ? ` "${s.label}"` : ''} next ${s.nextRunAt?.toISOString() ?? 'n/a'}: ${s.prompt.slice(0, 50)}`,
+      );
+    }
+  }
+  if (children.length > 0) {
+    lines.push('Subagents (working):');
+    for (const l of children) lines.push(`  ${l.childThreadId} — ${l.task.slice(0, 50)}`);
+  }
+  return lines.length > 0 ? lines.join('\n') : '(no active runs)';
 }
 
-async function scheduleDeleteStep(id: string): Promise<string> {
+/**
+ * Cancel a schedule or a running subagent of this conversation by id (run-audiences Phase 3.2),
+ * ownership-scoped: the owner may cancel any run; a family member only a schedule whose subject is
+ * them, or a subagent of this thread. `'use step'` so a replay never double-cancels.
+ */
+async function cancelRunStep(
+  id: string,
+  threadId: string,
+  ownerPresent: boolean,
+  callerSubject: string,
+): Promise<string> {
   'use step';
 
   const { getRuntime } = await import('../src/runtime.js');
-  const { deleteSchedule } = await import('../src/scheduler/index.js');
-  const { db } = await getRuntime();
-  const ok = await deleteSchedule(db, id);
-  return ok ? `Deleted schedule ${id}.` : `No schedule with id ${id}.`;
+  const { listSchedules, deleteSchedule } = await import('../src/scheduler/index.js');
+  const { getLinkByChildThread, completeLink } = await import('../src/agent/delegation.js');
+  const { subjectName, audienceForSchedule } = await import('../src/agent/audience.js');
+  const { db, config } = await getRuntime();
+
+  const sched = (await listSchedules(db)).find((s) => s.id === id);
+  if (sched) {
+    const owner = subjectName(audienceForSchedule(sched.threadId, sched.outputTarget), config);
+    if (!ownerPresent && owner !== callerSubject) {
+      return `That schedule belongs to ${owner}, so I didn't cancel it.`;
+    }
+    const ok = await deleteSchedule(db, id);
+    return ok ? `Cancelled schedule ${id}.` : `No schedule with id ${id}.`;
+  }
+
+  const link = await getLinkByChildThread(db, id);
+  if (link && link.parentThreadId === threadId && link.status === 'running') {
+    await completeLink(db, id, 'cancelled');
+    return `Cancelled subagent ${id}; it will stop reporting to this conversation.`;
+  }
+  return `No run with id ${id} that you can cancel.`;
 }
 
 async function recallStep(query: string, limit?: number): Promise<string> {
