@@ -31,6 +31,7 @@ const list = (name, fallback) => {
 const models = list('EVAL_GRID_MODELS', 'claude-sonnet-5');
 const thinkings = list('EVAL_GRID_THINKING', '');
 const variants = list('EVAL_GRID_VARIANTS', '');
+const envelopes = list('EVAL_GRID_ENVELOPE', '');
 const fewshots = list('EVAL_GRID_FEWSHOT', '');
 const composers = list('EVAL_GRID_COMPOSER', '');
 const dimension = process.env.EVAL_DIMENSION ?? 'elicitation';
@@ -43,15 +44,17 @@ const cells = [];
 for (const model of models)
   for (const thinking of thinkings)
     for (const variant of variants)
-      for (const fewshot of fewshots)
-        for (const composer of composers)
-          cells.push({ model, thinking, variant, fewshot, composer });
+      for (const envelope of envelopes)
+        for (const fewshot of fewshots)
+          for (const composer of composers)
+            cells.push({ model, thinking, variant, envelope, fewshot, composer });
 
 const cellName = (c) =>
   [
     c.model,
     c.thinking && `t-${c.thinking}`,
     c.variant && `v-${c.variant}`,
+    c.envelope && `env${c.envelope}`,
     c.fewshot && `fs${c.fewshot}`,
     c.composer === '1' && 'composer',
   ]
@@ -83,6 +86,7 @@ for (const c of cells) {
     EVAL_MODEL: c.model,
     EVAL_THINKING: c.thinking,
     EVAL_PROMPT_VARIANT: c.variant === 'baseline' ? '' : c.variant,
+    EVAL_ENVELOPE: c.envelope,
     EVAL_FEWSHOT: c.fewshot,
     EVAL_COMPOSER: c.composer,
     EVAL_DIMENSION: dimension,

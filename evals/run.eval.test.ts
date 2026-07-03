@@ -57,6 +57,7 @@ function parseOptions(): Options {
   if (runConfig.thinking) cell.thinking = runConfig.thinking;
   if (runConfig.effort) cell.effort = runConfig.effort;
   if (runConfig.promptVariant) cell.promptVariant = runConfig.promptVariant;
+  if (runConfig.inboundEnvelope !== undefined) cell.inboundEnvelope = runConfig.inboundEnvelope;
   if (runConfig.fewshot !== undefined) cell.fewshot = runConfig.fewshot;
   if (runConfig.composerAlways !== undefined) cell.composerAlways = runConfig.composerAlways;
 

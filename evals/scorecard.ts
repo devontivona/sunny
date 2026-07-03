@@ -32,6 +32,7 @@ export interface ScorecardConfig {
   thinking?: string;
   effort?: string;
   promptVariant?: string;
+  inboundEnvelope?: boolean;
   fewshot?: boolean;
   composerAlways?: boolean;
 }
@@ -62,6 +63,7 @@ export function cellSlug(model: string, config?: ScorecardConfig): string {
   if (config?.thinking) parts.push(`t-${config.thinking}`);
   if (config?.effort) parts.push(`e-${config.effort}`);
   if (config?.promptVariant) parts.push(`v-${config.promptVariant}`);
+  if (config?.inboundEnvelope !== undefined) parts.push(`env${config.inboundEnvelope ? 1 : 0}`);
   if (config?.fewshot !== undefined) parts.push(`fs${config.fewshot ? 1 : 0}`);
   if (config?.composerAlways) parts.push('composer');
   return parts.join('__');

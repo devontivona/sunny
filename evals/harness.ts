@@ -34,6 +34,7 @@ export function envRunConfig(env: NodeJS.ProcessEnv = process.env): Partial<Sunn
   if (env.EVAL_EFFORT) rc.effort = env.EVAL_EFFORT as SunnyConfig['effort'];
   if (env.EVAL_PROMPT_VARIANT)
     rc.promptVariant = env.EVAL_PROMPT_VARIANT as SunnyConfig['promptVariant'];
+  if (env.EVAL_ENVELOPE) rc.inboundEnvelope = env.EVAL_ENVELOPE === '1';
   if (env.EVAL_FEWSHOT) rc.fewshot = env.EVAL_FEWSHOT === '1';
   if (env.EVAL_COMPOSER) rc.composerAlways = env.EVAL_COMPOSER === '1';
   // The composer cell defaults to Haiku (production recovery); override to measure the
