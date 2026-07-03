@@ -55,6 +55,9 @@ interface TurnSetup {
   modelId: string;
   providerOptions: SharedV4ProviderOptions;
   deliveryMode: 'tool' | 'text';
+  /** Wrap inbound user messages (incl. mid-turn steers) in the relay envelope
+   *  (config.inboundEnvelope). Journaled here so the body never reads config. */
+  inboundEnvelope: boolean;
   ownerName: string;
   /** The owner's configured timezone — used for `schedule_create` cron/timestamp evaluation
    *  and interpolated into the tool description (run-audiences Phase 1a). */
@@ -110,7 +113,12 @@ export async function runConversation(input: ConversationInput): Promise<void> {
     }),
     providerOptions: setup.providerOptions,
     messages: pending.messages,
-    steering: { inboxThreadId: threadId, isGroup, baseExcludeIds: pending.windowUserIds },
+    steering: {
+      inboxThreadId: threadId,
+      isGroup,
+      baseExcludeIds: pending.windowUserIds,
+      envelope: setup.inboundEnvelope,
+    },
   });
 
   await finalizeTurn({
@@ -323,7 +331,10 @@ async function setupTurn(threadId: string, isGroup: boolean): Promise<TurnSetup>
   const { personId, ensureAndLoadPeople } = await import('../src/memory/index.js');
   const { rosterMatch } = await import('../src/agent/audience.js');
   const { config, store } = await getRuntime();
-  const deliveryMode = config.deliveryMode;
+  // Composer-always (architectural reference arm): the text-mode prompt makes the model
+  // reply in plain text; finalizeTurn's recovery pass then composes + delivers it every
+  // substantive turn — the two-pass design measured end to end with existing machinery.
+  const deliveryMode = config.composerAlways ? 'text' : config.deliveryMode;
 
   // Resolve the thread's trusted participants from persisted history (multiplayer-family D3).
   // Owner presence comes from the persisted `isOwner` tag (also correct for the loopback test
@@ -351,6 +362,7 @@ async function setupTurn(threadId: string, isGroup: boolean): Promise<TurnSetup>
     modelId: config.modelId,
     providerOptions: anthropicProviderOptions(config),
     deliveryMode,
+    inboundEnvelope: config.inboundEnvelope,
     ownerName: config.owner.name,
     timezone: config.timezone,
     ownerPresent,
@@ -382,13 +394,37 @@ async function loadPending(threadId: string, isGroup: boolean): Promise<PendingT
 
   const { getRuntime } = await import('../src/runtime.js');
   const { toModelMessages, trimTrailingNonUser } = await import('../src/agent/turn.js');
-  const { store } = await getRuntime();
+  const { store, config } = await getRuntime();
   const window = await store.recentWindow(threadId);
-  const messages = trimTrailingNonUser(await toModelMessages(window, isGroup));
+  const real = trimTrailingNonUser(
+    await toModelMessages(window, isGroup, { envelope: config.inboundEnvelope }),
+  );
   const [windowUserIds, hasUnanswered] = await Promise.all([
     store.windowUserIds(threadId),
     store.hasUnansweredInbound(threadId),
   ]);
+
+  // Canned few-shot block (config.fewshot): prepended INSIDE this step so the
+  // workflow body stays config-free and the block rides the journaled return.
+  // Static per config → it extends the cached prefix; the breakpoint on its last
+  // message makes system+fewshot one stable cache unit (2 of 4 breakpoints used).
+  let messages = real;
+  if (config.fewshot && real.length > 0) {
+    const { convertToModelMessages } = await import('ai');
+    const { fewshotUIMessages } = await import('../src/agent/fewshot.js');
+    const block = await convertToModelMessages(
+      fewshotUIMessages(config.owner.name, config.promptVariant, config.inboundEnvelope),
+      { ignoreIncompleteToolCalls: true },
+    );
+    const last = block[block.length - 1];
+    if (last) {
+      last.providerOptions = {
+        ...last.providerOptions,
+        anthropic: { cacheControl: { type: 'ephemeral' } },
+      };
+    }
+    messages = [...block, ...real];
+  }
   return { messages, windowUserIds, hasUnanswered };
 }
 

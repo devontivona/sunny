@@ -6,7 +6,14 @@ import { classifyDelivery } from '../src/agent/turn.js';
 import { initMemory, memoryPaths } from '../src/memory/index.js';
 import { createTestDb } from '../tests/db.js';
 import { FakeGateway } from '../tests/fakes/gateway.js';
-import { makeChannelEvent, makeConfig, seedMemory, OWNER_THREAD } from '../tests/factories.js';
+import {
+  makeAssistantTurnPayload,
+  makeChannelEvent,
+  makeConfig,
+  seedMemory,
+  OWNER_THREAD,
+} from '../tests/factories.js';
+import type { SunnyConfig } from '../src/config/index.js';
 import type { EvalCase, ToolCallRecord, Trajectory } from './types.js';
 
 const RUNTIME_KEY = Symbol.for('sunny.runtime');
@@ -14,6 +21,26 @@ const g = globalThis as Record<symbol, unknown>;
 
 /** The production model under test by default (design D14 — "practice like we play"). */
 export const DEFAULT_MODEL_ID = 'claude-sonnet-5';
+
+/**
+ * Run-level config knobs from env (grid cells): EVAL_THINKING / EVAL_EFFORT /
+ * EVAL_PROMPT_VARIANT / EVAL_FEWSHOT / EVAL_COMPOSER. An unset (empty) var means
+ * "config default" — omitted entirely, so the default cell stays byte-identical
+ * to production behavior.
+ */
+export function envRunConfig(env: NodeJS.ProcessEnv = process.env): Partial<SunnyConfig> {
+  const rc: Partial<SunnyConfig> = {};
+  if (env.EVAL_THINKING) rc.thinking = env.EVAL_THINKING as SunnyConfig['thinking'];
+  if (env.EVAL_EFFORT) rc.effort = env.EVAL_EFFORT as SunnyConfig['effort'];
+  if (env.EVAL_PROMPT_VARIANT)
+    rc.promptVariant = env.EVAL_PROMPT_VARIANT as SunnyConfig['promptVariant'];
+  if (env.EVAL_FEWSHOT) rc.fewshot = env.EVAL_FEWSHOT === '1';
+  if (env.EVAL_COMPOSER) rc.composerAlways = env.EVAL_COMPOSER === '1';
+  // The composer cell defaults to Haiku (production recovery); override to measure the
+  // ceiling with a stronger composer (e.g. EVAL_RECOVERY_MODEL=claude-sonnet-5).
+  if (env.EVAL_RECOVERY_MODEL) rc.recoveryModelId = env.EVAL_RECOVERY_MODEL;
+  return rc;
+}
 
 /**
  * Behavioral eval harness (task 7.1 / agent-evals spec) — DURABLE path.
@@ -29,9 +56,16 @@ export const DEFAULT_MODEL_ID = 'claude-sonnet-5';
  * MUST run under the workflow Vitest config (`vitest.eval.config.ts`) so the `'use workflow'`
  * transform is active — `tsx` cannot run a durable workflow.
  */
-export async function runEvalCase(c: EvalCase, modelId = DEFAULT_MODEL_ID): Promise<Trajectory> {
+export async function runEvalCase(
+  c: EvalCase,
+  modelId = DEFAULT_MODEL_ID,
+  // Run-level knobs (thinking/effort/promptVariant/fewshot/…) win over case config:
+  // case `setup.config` encodes case semantics (e.g. a tiny recentWindowSize); the
+  // comparison grid must be able to force one configuration uniformly.
+  runConfig: Partial<SunnyConfig> = {},
+): Promise<Trajectory> {
   const tdb = await createTestDb();
-  const config = makeConfig({ modelId, ...c.setup?.config });
+  const config = makeConfig({ ...c.setup?.config, modelId, ...runConfig });
   await initMemory(config); // create the memory tree so instruction assembly reads clean files
   await seedMemory(config, c.setup?.memory ?? []);
 
@@ -67,6 +101,16 @@ export async function runEvalCase(c: EvalCase, modelId = DEFAULT_MODEL_ID): Prom
             isOwner: c.setup?.isOwner ?? true,
             isGroup: c.setup?.isGroup ?? false,
           }),
+        );
+      } else if (seed.scratch != null || seed.sends) {
+        // Rich assistant turn (scratch and/or multiple bubbles): persist a real
+        // D-MG9 turn payload so history replays the exact production shape —
+        // incl. the deliberately poisoned scratch-only turns of miss-chain cases.
+        const sends = seed.sends ?? (seed.text ? [seed.text] : []);
+        await store.appendTurn(
+          OWNER_THREAD,
+          makeAssistantTurnPayload({ scratch: seed.scratch, sends, id: `seed-${n}` }),
+          sends.join('\n') || seed.text,
         );
       } else {
         await store.appendOutbound(OWNER_THREAD, `seed-${n}`, seed.text);

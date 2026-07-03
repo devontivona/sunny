@@ -1,17 +1,21 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_MODEL_ID, runEvalCase } from './harness.js';
+import { DEFAULT_MODEL_ID, envRunConfig, runEvalCase } from './harness.js';
 import { loadCases } from './cases/index.js';
 import { BudgetExceededError, CostMeter, estimateCostUsd } from './cost.js';
 import {
   DEFAULT_THRESHOLD,
+  casePassed,
+  cellSlug,
   diffScorecards,
   summarizeDimensions,
   type CaseScore,
   type Scorecard,
+  type ScorecardConfig,
 } from './scorecard.js';
-import type { Dimension, GradeResult } from './types.js';
+import { historyTier, type Dimension, type GradeResult } from './types.js';
+import type { SunnyConfig } from '../src/config/index.js';
 
 /**
  * `npm run eval` entrypoint (task 7.8) — runs as ONE Vitest test under the workflow plugin
@@ -28,25 +32,41 @@ interface Options {
   model: string;
   n: number;
   costCapUsd: number;
+  /** Non-default knobs forced for this run (a grid cell). Empty env = config default. */
+  cell?: ScorecardConfig;
+  /** The `SunnyConfig` overrides `cell` translates to, passed into every case run. */
+  runConfig: Partial<SunnyConfig>;
 }
 
 function parseOptions(): Options {
+  const runConfig = envRunConfig();
+  const cell: ScorecardConfig = {};
+  if (runConfig.thinking) cell.thinking = runConfig.thinking;
+  if (runConfig.effort) cell.effort = runConfig.effort;
+  if (runConfig.promptVariant) cell.promptVariant = runConfig.promptVariant;
+  if (runConfig.fewshot !== undefined) cell.fewshot = runConfig.fewshot;
+  if (runConfig.composerAlways !== undefined) cell.composerAlways = runConfig.composerAlways;
+
   return {
     dimension: (process.env.EVAL_DIMENSION ?? 'all') as Dimension | 'all',
     model: process.env.EVAL_MODEL || DEFAULT_MODEL_ID,
     n: Number(process.env.EVAL_N ?? 5),
     costCapUsd: Number(process.env.EVAL_COST_CAP_USD ?? 5),
+    cell: Object.keys(cell).length ? cell : undefined,
+    runConfig,
   };
 }
 
 const SCORECARD_DIR = join(process.cwd(), 'evals', 'scorecards');
 const BASELINE_PATH = join(process.cwd(), 'evals', 'baseline.json');
 
-function writeScorecard(scorecard: Scorecard): void {
+function writeScorecard(scorecard: Scorecard): string {
   mkdirSync(SCORECARD_DIR, { recursive: true });
-  const file = join(SCORECARD_DIR, `${scorecard.timestamp.replace(/[:.]/g, '-')}.json`);
+  const stamp = scorecard.timestamp.replace(/[:.]/g, '-');
+  const file = join(SCORECARD_DIR, `${stamp}__${cellSlug(scorecard.model, scorecard.config)}.json`);
   writeFileSync(file, JSON.stringify(scorecard, null, 2));
   console.log(`\nScorecard → ${file}`);
+  return file;
 }
 
 function readBaseline(): Scorecard | null {
@@ -103,7 +123,7 @@ describe('eval scorecard', () => {
           throw err;
         }
 
-        const trajectory = await runEvalCase(c, opts.model);
+        const trajectory = await runEvalCase(c, opts.model, opts.runConfig);
         meter.add(estimateCostUsd(opts.model, trajectory.usage));
         runs += 1;
 
@@ -111,7 +131,7 @@ describe('eval scorecard', () => {
         for (const grader of c.graders) grades.push(await grader(trajectory, c));
         for (const grd of grades)
           if (grd.pass) graderPasses[grd.name] = (graderPasses[grd.name] ?? 0) + 1;
-        if (grades.every((grd) => grd.pass)) passes += 1;
+        if (casePassed(grades)) passes += 1;
       }
 
       const threshold = c.threshold ?? DEFAULT_THRESHOLD;
@@ -120,6 +140,7 @@ describe('eval scorecard', () => {
       caseScores.push({
         name: c.name,
         dimension: c.dimension,
+        history: historyTier(c),
         runs,
         passes,
         passRate,
@@ -134,6 +155,7 @@ describe('eval scorecard', () => {
 
     const scorecard: Scorecard = {
       model: opts.model,
+      ...(opts.cell ? { config: opts.cell } : {}),
       timestamp: new Date().toISOString(),
       n: opts.n,
       costUsd: Number(meter.spentUsd.toFixed(4)),
@@ -146,7 +168,18 @@ describe('eval scorecard', () => {
     reportDiff(scorecard);
     console.log(`\nCost: $${scorecard.costUsd.toFixed(4)}`);
 
+    // Only the DEFAULT cell (production model, no forced knobs) gates on the committed
+    // baseline — a grid cell measured under different config would red-fail apples-to-oranges.
+    const isDefaultCell = !opts.cell && opts.model === DEFAULT_MODEL_ID;
     const regressions = diffScorecards(readBaseline(), scorecard);
+    if (!isDefaultCell) {
+      if (regressions.length) {
+        console.log(
+          `\n(non-default cell — baseline diff informational only: ${regressions.map((r) => r.scope).join(', ')})`,
+        );
+      }
+      return;
+    }
     expect(regressions, regressions.map((r) => r.scope).join(', ')).toHaveLength(0);
   });
 });

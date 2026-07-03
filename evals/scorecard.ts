@@ -1,4 +1,4 @@
-import type { Dimension } from './types.js';
+import type { Dimension, GradeResult, HistoryTier } from './types.js';
 
 /**
  * Pass-rate scoring (task 7.5) + file-based scorecards with regression diff
@@ -14,6 +14,10 @@ export const DEFAULT_THRESHOLD = 0.6;
 export interface CaseScore {
   name: string;
   dimension: Dimension;
+  /** History tier the graded turn ran against (live / seeded-clean / seeded-poisoned).
+   *  Poisoned-history cases measure robustness under bad in-context precedent — a
+   *  different metric from clean-history elicitation; report them separately. */
+  history?: HistoryTier;
   runs: number;
   passes: number;
   passRate: number;
@@ -23,8 +27,20 @@ export interface CaseScore {
   graderPasses: Record<string, number>;
 }
 
+/** The non-default run configuration a scorecard was measured under (grid cell id). */
+export interface ScorecardConfig {
+  thinking?: string;
+  effort?: string;
+  promptVariant?: string;
+  fewshot?: boolean;
+  composerAlways?: boolean;
+}
+
 export interface Scorecard {
   model: string;
+  /** Present only when the run forced non-default knobs (a grid cell). A scorecard
+   *  without `config` is the default cell — the only one baseline.json diffs against. */
+  config?: ScorecardConfig;
   timestamp: string;
   n: number;
   costUsd: number;
@@ -32,6 +48,23 @@ export interface Scorecard {
   stoppedOnBudget?: boolean;
   dimensions: Record<string, { passRate: number; pass: boolean }>;
   cases: CaseScore[];
+}
+
+/** A case run passes when every NON-advisory grader passes — advisory verdicts
+ *  (quality metrics like scratch-is-working-notes) are tracked but never gate. */
+export function casePassed(grades: GradeResult[]): boolean {
+  return grades.filter((g) => !g.advisory).every((g) => g.pass);
+}
+
+/** Filename slug for a grid cell, e.g. `claude-sonnet-5__t-off__v-gateway__fs1`. */
+export function cellSlug(model: string, config?: ScorecardConfig): string {
+  const parts = [model];
+  if (config?.thinking) parts.push(`t-${config.thinking}`);
+  if (config?.effort) parts.push(`e-${config.effort}`);
+  if (config?.promptVariant) parts.push(`v-${config.promptVariant}`);
+  if (config?.fewshot !== undefined) parts.push(`fs${config.fewshot ? 1 : 0}`);
+  if (config?.composerAlways) parts.push('composer');
+  return parts.join('__');
 }
 
 export function summarizeDimensions(cases: CaseScore[]): Scorecard['dimensions'] {

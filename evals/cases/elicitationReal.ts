@@ -1,5 +1,11 @@
 import { readFileSync } from 'node:fs';
-import { deliveredViaSendMessage, elicitedWithoutRecovery, noFallback } from '../graders.js';
+import {
+  deliveredViaSendMessage,
+  elicitedWithoutRecovery,
+  noFallback,
+  scratchNotSecondPerson,
+} from '../graders.js';
+import { scratchIsWorkingNotes } from '../judge.js';
 import type { EvalCase, FixtureTurn } from '../types.js';
 
 /**
@@ -31,9 +37,17 @@ function realCase(name: string, file: string): EvalCase {
   return {
     name: `elicitation/${name}`,
     dimension: 'elicitation',
+    // Production fixtures replay whatever precedent the real thread had (incl.
+    // scratch-heavy turns) — poisoned-history tier by default (historyTier()).
     setup: { fixtureTurns: fx.turns, memoryCore: fx.memoryCore },
     input: fx.input,
-    graders: [deliveredViaSendMessage, noFallback, elicitedWithoutRecovery],
+    graders: [
+      deliveredViaSendMessage,
+      noFallback,
+      elicitedWithoutRecovery,
+      scratchIsWorkingNotes,
+      scratchNotSecondPerson,
+    ],
   };
 }
 

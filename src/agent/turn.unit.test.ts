@@ -94,6 +94,45 @@ describe('steerMessageText', () => {
   it('does not prefix when there is no sender name, even in a group', () => {
     expect(steerMessageText('hey', undefined, true)).toBe('hey');
   });
+
+  it('wraps steers in the relay envelope when enabled', () => {
+    expect(steerMessageText('hey', 'Alex', false, true)).toBe('[iMessage from Alex] hey');
+    expect(steerMessageText('hey', undefined, false, true)).toBe('[iMessage] hey');
+  });
+});
+
+describe('inbound envelope (config.inboundEnvelope, read-time)', () => {
+  it('wraps a DM user row — payload and legacy alike', () => {
+    const legacy = makeStoredMessage({ role: 'user', text: 'hello', payload: null });
+    expect((rowToUIMessage(legacy, false, true) as UIMessage).parts).toEqual([
+      { type: 'text', text: '[iMessage from Devon] hello' },
+    ]);
+
+    const payloadRow = makeStoredMessage({
+      role: 'user',
+      text: 'hello',
+      payload: { id: 'u1', role: 'user', parts: [{ type: 'text', text: 'hello' }] },
+    });
+    expect((rowToUIMessage(payloadRow, false, true) as UIMessage).parts).toEqual([
+      { type: 'text', text: '[iMessage from Devon] hello' },
+    ]);
+  });
+
+  it('keeps the (owner) tag in groups and replaces the speaker prefix', () => {
+    const row = makeStoredMessage({ role: 'user', text: 'hi', payload: null, isOwner: true });
+    expect((rowToUIMessage(row, true, true) as UIMessage).parts).toEqual([
+      { type: 'text', text: '[iMessage from Devon (owner)] hi' },
+    ]);
+  });
+
+  it('never touches assistant rows and is byte-identical when off', () => {
+    const payload = makeAssistantTurnPayload({ sends: ['hi'] });
+    const row = makeStoredMessage({ role: 'assistant', text: 'hi', payload });
+    expect(rowToUIMessage(row, false, true)).toBe(payload);
+
+    const user = makeStoredMessage({ role: 'user', text: 'hello', payload: null });
+    expect(rowToUIMessage(user, false, false)).toEqual(rowToUIMessage(user, false));
+  });
 });
 
 describe('usageOf', () => {

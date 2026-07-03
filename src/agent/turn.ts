@@ -10,7 +10,7 @@ import {
   type AttachmentRef,
   type PreparedImage,
 } from '../gateway/media.js';
-import { groupSpeakerPrefix } from './delivery.js';
+import { userMessagePrefix } from './delivery.js';
 
 /**
  * Stored-row → model-message conversion + inbound media resolution (D-MG9 / D-MM3).
@@ -51,6 +51,9 @@ export interface MediaResolveOptions {
   prepareImage?: (bytes: Buffer, mediaType: string) => PreparedImage | null;
   maxInlineCount?: number;
   maxInlineBytes?: number;
+  /** Prefix every user message with the relay envelope (config.inboundEnvelope).
+   *  Applied at READ time — old rows replay uniformly, no persisted-row change. */
+  envelope?: boolean;
 }
 
 export function toModelMessages(
@@ -59,7 +62,7 @@ export function toModelMessages(
   opts: MediaResolveOptions = {},
 ): Promise<ModelMessage[]> {
   const ui = window.map((row) =>
-    stripReasoning(resolveMedia(rowToUIMessage(row, isGroup), opts)),
+    stripReasoning(resolveMedia(rowToUIMessage(row, isGroup, opts.envelope ?? false), opts)),
   );
   return convertToModelMessages(ui, { ignoreIncompleteToolCalls: true });
 }
@@ -176,23 +179,27 @@ function attachmentToPart(
   return filePart(prepared.mediaType, ref.name, prepared.bytes);
 }
 
-export function rowToUIMessage(row: StoredMessage, isGroup: boolean): Omit<UIMessage, 'id'> {
+export function rowToUIMessage(
+  row: StoredMessage,
+  isGroup: boolean,
+  envelope = false,
+): Omit<UIMessage, 'id'> {
+  const prefix =
+    row.role === 'user' ? userMessagePrefix(row.senderName, row.isOwner, isGroup, envelope) : '';
   if (row.payload && typeof row.payload === 'object') {
     const msg = row.payload as UIMessage;
-    if (isGroup && msg.role === 'user' && row.senderName) return prefixUserMessage(msg, row);
+    if (prefix && msg.role === 'user') return prefixUserMessage(msg, prefix);
     return msg;
   }
   // Legacy row (pre-D-MG9): minimal reconstruction.
   if (row.role === 'user') {
-    const text = isGroup ? groupSpeakerPrefix(row.senderName, row.isOwner) + row.text : row.text;
-    return { role: 'user', parts: [{ type: 'text', text }] };
+    return { role: 'user', parts: [{ type: 'text', text: prefix + row.text }] };
   }
   return { role: 'assistant', parts: [{ type: 'text', text: row.text }] };
 }
 
-/** Prefix the speaker onto a group user message's text part(s) (R1). */
-export function prefixUserMessage(msg: UIMessage, row: StoredMessage): UIMessage {
-  const prefix = groupSpeakerPrefix(row.senderName, row.isOwner);
+/** Prefix the speaker/envelope onto a user message's text part(s) (R1). */
+export function prefixUserMessage(msg: UIMessage, prefix: string): UIMessage {
   return {
     ...msg,
     parts: msg.parts.map((p) => (p.type === 'text' ? { ...p, text: prefix + p.text } : p)),

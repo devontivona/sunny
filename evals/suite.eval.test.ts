@@ -1,5 +1,5 @@
 import { describeEval } from 'vitest-evals/legacy';
-import { DEFAULT_MODEL_ID, runEvalCase } from './harness.js';
+import { DEFAULT_MODEL_ID, envRunConfig, runEvalCase } from './harness.js';
 import { loadCases } from './cases/index.js';
 import type { Dimension, Trajectory } from './types.js';
 
@@ -15,6 +15,7 @@ import type { Dimension, Trajectory } from './types.js';
  */
 const MODEL = process.env.EVAL_MODEL || DEFAULT_MODEL_ID;
 const DIMENSION = (process.env.EVAL_DIMENSION as Dimension | 'all') || 'all';
+const RUN_CONFIG = envRunConfig();
 
 // The task captures the trajectory; scorers (which only receive output/toolCalls)
 // read it back by case name so our richer Grader functions can be reused as-is.
@@ -27,7 +28,7 @@ for (const c of loadCases(DIMENSION)) {
       { name: c.name, input: Array.isArray(c.input) ? c.input.join(' / ') : c.input },
     ],
     task: async () => {
-      const t = await runEvalCase(c, MODEL);
+      const t = await runEvalCase(c, MODEL, RUN_CONFIG);
       captured.set(c.name, t);
       return {
         result: t.finalText,

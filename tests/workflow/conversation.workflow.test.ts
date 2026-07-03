@@ -116,6 +116,31 @@ describe('runConversation (workflow integration — real Local World)', () => {
     expect(new Set(allToolIds).size).toBe(allToolIds.length); // no duplicate tool_use ids anywhere
   });
 
+  it('prepends the canned few-shot block to the prompt when config.fewshot is on', async () => {
+    ctx = await setupTestRuntime({ fewshot: true });
+    const event = makeChannelEvent({ text: 'hello there' });
+    await ctx.store.appendInbound(event);
+    // The mock model picks responses[count of assistant messages in its prompt]. The canned
+    // block contributes exactly 3 assistant turns (asserted in fewshot.unit.test.ts), so the
+    // first live step must land at index 3 — proof the block actually reached the prompt.
+    setTurnModel([
+      { type: 'text', text: 'wrong: block missing (index 0)' },
+      { type: 'text', text: 'wrong: block thinned (index 1)' },
+      { type: 'text', text: 'wrong: block thinned (index 2)' },
+      {
+        type: 'tool-call',
+        toolName: 'send_message',
+        input: JSON.stringify({ text: 'few-shot block is in the prompt' }),
+      },
+      { type: 'text', text: '' },
+    ]);
+
+    const run = await start(runConversation, [{ threadId: event.threadId }]);
+    await run.returnValue;
+    expect(await run.status).toBe('completed');
+    expect(ctx.gateway.texts()).toEqual(['few-shot block is in the prompt']);
+  });
+
   it('is a no-op when there is no unanswered inbound', async () => {
     ctx = await setupTestRuntime();
     const event = makeChannelEvent({ text: 'already answered' });
