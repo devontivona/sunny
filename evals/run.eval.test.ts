@@ -156,7 +156,7 @@ describe('eval scorecard', () => {
         try {
           trajectory = await withWatchdog(
             runEvalCase(c, opts.model, opts.runConfig),
-            opts.runTimeoutMs,
+            c.timeoutMs ?? opts.runTimeoutMs,
           );
         } catch (err) {
           if (!(err instanceof RunTimeoutError)) throw err;

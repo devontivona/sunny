@@ -118,6 +118,9 @@ export interface EvalCase {
   graders: Grader[];
   /** Per-case pass-rate threshold (overrides the dimension/run default). */
   threshold?: number;
+  /** Per-case run watchdog override (ms) for legitimately slow cases (e.g. the
+   *  token-heavy real-batches fixture); default is EVAL_RUN_TIMEOUT_MS. */
+  timeoutMs?: number;
   /**
    * What history the graded turn runs against (seed-audit policy). `live` — the
    * model generates its own history turn-by-turn (default when nothing is seeded;

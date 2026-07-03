@@ -37,6 +37,9 @@ function realCase(name: string, file: string): EvalCase {
   return {
     name: `elicitation/${name}`,
     dimension: 'elicitation',
+    // Token-heavy production fixtures drive long multi-step turns; a 5-min
+    // watchdog systematically kills real-batches (2026-07-03 baseline attempt).
+    timeoutMs: 900_000,
     // Production fixtures replay whatever precedent the real thread had (incl.
     // scratch-heavy turns) — poisoned-history tier by default (historyTier()).
     setup: { fixtureTurns: fx.turns, memoryCore: fx.memoryCore },

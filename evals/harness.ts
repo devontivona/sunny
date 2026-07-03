@@ -83,8 +83,9 @@ export async function runEvalCase(
   const store = new ConversationStore(tdb.db, config.recentWindowSize);
   const gateway = new FakeGateway();
   // Inject the runtime the workflow's `'use step'` units read via `getRuntime()` (same seam the
-  // production memo + the workflow test harness use).
-  g[RUNTIME_KEY] = Promise.resolve({ config, gateway, store, db: tdb.db });
+  // production memo + the workflow test harness use). `stubJobs`: a start_job choice is graded,
+  // but the job itself must not run (real model + a zombie run that blocks teardown).
+  g[RUNTIME_KEY] = Promise.resolve({ config, gateway, store, db: tdb.db, stubJobs: true });
 
   try {
     // Seed prior conversation through the real store (so format drift is caught).
@@ -156,7 +157,12 @@ export async function runEvalCase(
     return await buildTrajectory(store, gateway);
   } finally {
     delete g[RUNTIME_KEY];
-    await tdb.teardown();
+    // Best-effort: a leaked background run holding the PGlite connection can make
+    // close() hang; an abandoned world is cheaper than a stuck scorecard.
+    await Promise.race([
+      tdb.teardown().catch(() => {}),
+      new Promise((resolve) => setTimeout(resolve, 15_000).unref?.()),
+    ]);
   }
 }
 

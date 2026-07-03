@@ -522,6 +522,15 @@ async function startJobStep(
 ): Promise<string> {
   'use step';
 
+  const { getRuntime } = await import('../src/runtime.js');
+  const rt = (await getRuntime()) as { stubJobs?: boolean };
+  // Eval/test runtimes set `stubJobs`: the graded fact is that the model CHOSE
+  // start_job — actually running the job would do real research with the real
+  // model in the eval world (and its zombie run blocks PGlite teardown). Same
+  // pattern as delegation, which is inert when the runtime omits `spawnChild`.
+  if (rt.stubJobs) {
+    return 'Started durable background job (stubbed); it will message the user on completion.';
+  }
   const { start } = await import('workflow/api');
   const { runJob } = await import('./job.js');
   const run = await start(runJob, [{ threadId, task, ownerName, subjectName }]);
