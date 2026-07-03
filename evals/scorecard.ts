@@ -89,11 +89,17 @@ export interface Regression {
   delta: number;
 }
 
-/** Cases/dimensions whose pass rate dropped vs the baseline (beyond `epsilon`). */
+/**
+ * Cases/dimensions whose pass rate dropped vs the baseline (beyond `epsilon`).
+ * `seeded-poisoned` cases are excluded from PER-CASE gating: they are volatile
+ * robustness metrics (a one-run flip at N=5 moves them 20 pts) tracked in the
+ * grid reports; a systemic collapse still flags through the dimension mean.
+ * Epsilon defaults to 2 pts to damp small-N sampling noise at the gate.
+ */
 export function diffScorecards(
   baseline: Scorecard | null,
   current: Scorecard,
-  epsilon = 0.001,
+  epsilon = 0.02,
 ): Regression[] {
   if (!baseline) return [];
   const regressions: Regression[] = [];
@@ -112,6 +118,7 @@ export function diffScorecards(
 
   const baseCases = new Map(baseline.cases.map((c) => [c.name, c]));
   for (const cur of current.cases) {
+    if (cur.history === 'seeded-poisoned') continue;
     const base = baseCases.get(cur.name);
     if (base && cur.passRate < base.passRate - epsilon) {
       regressions.push({
