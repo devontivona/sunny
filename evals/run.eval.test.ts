@@ -42,6 +42,9 @@ interface Options {
   costCapUsd: number;
   /** Per-run watchdog. A 2026-07-03 N=5 run sat 73 min behind ONE hung turn. */
   runTimeoutMs: number;
+  /** Optional case-name regex (EVAL_CASES) — e.g. exclude the 8-min-per-run
+   *  real-batches fixture from a quick screening cell. */
+  caseFilter?: RegExp;
   /** Non-default knobs forced for this run (a grid cell). Empty env = config default. */
   cell?: ScorecardConfig;
   /** The `SunnyConfig` overrides `cell` translates to, passed into every case run. */
@@ -63,8 +66,28 @@ function parseOptions(): Options {
     n: Number(process.env.EVAL_N ?? 5),
     costCapUsd: Number(process.env.EVAL_COST_CAP_USD ?? 5),
     runTimeoutMs: Number(process.env.EVAL_RUN_TIMEOUT_MS ?? 300_000),
+    caseFilter: process.env.EVAL_CASES ? new RegExp(process.env.EVAL_CASES) : undefined,
     cell: Object.keys(cell).length ? cell : undefined,
     runConfig,
+  };
+}
+
+function buildScorecard(
+  opts: Options,
+  meter: CostMeter,
+  stoppedOnBudget: boolean,
+  cases: CaseScore[],
+  timestamp: string,
+): Scorecard {
+  return {
+    model: opts.model,
+    ...(opts.cell ? { config: opts.cell } : {}),
+    timestamp,
+    n: opts.n,
+    costUsd: Number(meter.spentUsd.toFixed(4)),
+    stoppedOnBudget,
+    dimensions: summarizeDimensions(cases),
+    cases,
   };
 }
 
@@ -88,12 +111,12 @@ function withWatchdog<T>(p: Promise<T>, ms: number): Promise<T> {
 const SCORECARD_DIR = join(process.cwd(), 'evals', 'scorecards');
 const BASELINE_PATH = join(process.cwd(), 'evals', 'baseline.json');
 
-function writeScorecard(scorecard: Scorecard): string {
+function writeScorecard(scorecard: Scorecard, quiet = false): string {
   mkdirSync(SCORECARD_DIR, { recursive: true });
   const stamp = scorecard.timestamp.replace(/[:.]/g, '-');
   const file = join(SCORECARD_DIR, `${stamp}__${cellSlug(scorecard.model, scorecard.config)}.json`);
   writeFileSync(file, JSON.stringify(scorecard, null, 2));
-  console.log(`\nScorecard → ${file}`);
+  if (!quiet) console.log(`\nScorecard → ${file}`);
   return file;
 }
 
@@ -125,7 +148,9 @@ describe('eval scorecard', () => {
   // Skip (don't fail) when there's no API key — keeps it inert + free in CI.
   it.skipIf(!process.env.ANTHROPIC_API_KEY)('runs the dataset and has no regressions', async () => {
     const opts = parseOptions();
-    const cases = loadCases(opts.dimension);
+    const cases = loadCases(opts.dimension).filter(
+      (c) => !opts.caseFilter || opts.caseFilter.test(c.name),
+    );
     console.log(
       `Running ${cases.length} case(s) × N=${opts.n} on ${opts.model} (cap $${opts.costCapUsd})`,
     );
@@ -133,6 +158,8 @@ describe('eval scorecard', () => {
     const meter = new CostMeter(opts.costCapUsd);
     const caseScores: CaseScore[] = [];
     let stoppedOnBudget = false;
+    // Fixed at start so every incremental checkpoint rewrites the SAME file.
+    const startedAt = new Date().toISOString();
 
     outer: for (const c of cases) {
       let passes = 0;
@@ -195,20 +222,13 @@ describe('eval scorecard', () => {
       console.log(
         `  ${pass ? '✓' : '✗'} ${c.name}: ${passes}/${runs} (${(passRate * 100).toFixed(0)}% ≥ ${(threshold * 100).toFixed(0)}%) [${((Date.now() - caseStart) / 1000).toFixed(0)}s]`,
       );
+      // Incremental checkpoint after EVERY case: a vitest-level timeout mid-run
+      // (real-batches alone can take 45+ min at N=5) must not lose the completed
+      // cases' data. Same filename each time — the final write is the full card.
+      writeScorecard(buildScorecard(opts, meter, stoppedOnBudget, caseScores, startedAt), true);
     }
 
-    const scorecard: Scorecard = {
-      model: opts.model,
-      ...(opts.cell ? { config: opts.cell } : {}),
-      timestamp: new Date().toISOString(),
-      n: opts.n,
-      costUsd: Number(meter.spentUsd.toFixed(4)),
-      stoppedOnBudget,
-      dimensions: summarizeDimensions(caseScores),
-      cases: caseScores,
-    };
-
-    writeScorecard(scorecard);
+    const scorecard = buildScorecard(opts, meter, stoppedOnBudget, caseScores, startedAt);
     reportDiff(scorecard);
     console.log(`\nCost: $${scorecard.costUsd.toFixed(4)}`);
 
