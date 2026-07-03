@@ -27,11 +27,21 @@ import type { SunnyConfig } from '../src/config/index.js';
  * Off the merge gate by construction (its own config; needs a real API key). Options come from env
  * (vitest owns argv): EVAL_DIMENSION / EVAL_MODEL / EVAL_N / EVAL_COST_CAP_USD.
  */
+/** A single case-run exceeded the watchdog (a hung model stream / parked run must
+ *  cost one failed run, never the whole scorecard). */
+class RunTimeoutError extends Error {
+  constructor(ms: number) {
+    super(`case run exceeded EVAL_RUN_TIMEOUT_MS (${ms}ms)`);
+  }
+}
+
 interface Options {
   dimension: Dimension | 'all';
   model: string;
   n: number;
   costCapUsd: number;
+  /** Per-run watchdog. A 2026-07-03 N=5 run sat 73 min behind ONE hung turn. */
+  runTimeoutMs: number;
   /** Non-default knobs forced for this run (a grid cell). Empty env = config default. */
   cell?: ScorecardConfig;
   /** The `SunnyConfig` overrides `cell` translates to, passed into every case run. */
@@ -52,9 +62,27 @@ function parseOptions(): Options {
     model: process.env.EVAL_MODEL || DEFAULT_MODEL_ID,
     n: Number(process.env.EVAL_N ?? 5),
     costCapUsd: Number(process.env.EVAL_COST_CAP_USD ?? 5),
+    runTimeoutMs: Number(process.env.EVAL_RUN_TIMEOUT_MS ?? 300_000),
     cell: Object.keys(cell).length ? cell : undefined,
     runConfig,
   };
+}
+
+function withWatchdog<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new RunTimeoutError(ms)), ms);
+    timer.unref?.();
+    p.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+    );
+  });
 }
 
 const SCORECARD_DIR = join(process.cwd(), 'evals', 'scorecards');
@@ -110,6 +138,7 @@ describe('eval scorecard', () => {
       let passes = 0;
       const graderPasses: Record<string, number> = {};
       let runs = 0;
+      const caseStart = Date.now();
 
       for (let i = 0; i < opts.n; i++) {
         try {
@@ -123,7 +152,22 @@ describe('eval scorecard', () => {
           throw err;
         }
 
-        const trajectory = await runEvalCase(c, opts.model, opts.runConfig);
+        let trajectory;
+        try {
+          trajectory = await withWatchdog(
+            runEvalCase(c, opts.model, opts.runConfig),
+            opts.runTimeoutMs,
+          );
+        } catch (err) {
+          if (!(err instanceof RunTimeoutError)) throw err;
+          // A hung run: count it as a FAILED run and continue. NOTE the abandoned
+          // run's runtime global gets overwritten by the next case — if the zombie
+          // ever wakes, its steps see the new case's runtime, so treat any weird
+          // subsequent result with suspicion (the warning below marks the spot).
+          runs += 1;
+          console.warn(`  ⏱ ${c.name} run ${i + 1}: ${String(err)} — counted as failed`);
+          continue;
+        }
         meter.add(estimateCostUsd(opts.model, trajectory.usage));
         runs += 1;
 
@@ -149,7 +193,7 @@ describe('eval scorecard', () => {
         graderPasses,
       });
       console.log(
-        `  ${pass ? '✓' : '✗'} ${c.name}: ${passes}/${runs} (${(passRate * 100).toFixed(0)}% ≥ ${(threshold * 100).toFixed(0)}%)`,
+        `  ${pass ? '✓' : '✗'} ${c.name}: ${passes}/${runs} (${(passRate * 100).toFixed(0)}% ≥ ${(threshold * 100).toFixed(0)}%) [${((Date.now() - caseStart) / 1000).toFixed(0)}s]`,
       );
     }
 
