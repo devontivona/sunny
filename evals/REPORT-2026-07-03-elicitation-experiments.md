@@ -59,7 +59,10 @@ Notes:
   envelope reinforces at the recent end, fewshot supplies the good exemplars and
   the stay_silent demonstration that patches the envelope's silence break.
   Real fixtures for this cell: **real-inbox-clarify 4/5** (baseline 6/10 —
-  improved on the production-history case too); real-batches solo run pending.
+  improved on the production-history case too); real-batches UNMEASURED for this
+  cell (two attempts lost to the vanishing-case bug, infra №7; fewshot's own
+  real-batches number was ~neutral at 3/5 vs baseline 4/5, so low information
+  loss).
 
 ## Hand-inspected transcripts (fewshot cell)
 
@@ -119,11 +122,15 @@ its source instead of counteracting it).
    messages went out only because the processes died before a scheduler tick.
    Fixed: the harness now leaves a sandboxed TOMBSTONE runtime (fresh FakeGateway
    + torn-down store) in place after every case.
-7. **OPEN eval bug: real-batches silently vanishes when it follows other cases**
-   in the same process (three occurrences; completes fine when run solo via
-   `EVAL_CASES=real-batches`). No error, no watchdog, test reports PASS; the case
-   simply never lands in the scorecard. Suspected Local-World accumulation that
-   the token-heaviest fixture trips on. Workaround: run it as its own cell.
+7. **OPEN eval bug: real-batches intermittently vanishes from scorecards** — the
+   vitest test reports PASS, no error, no watchdog, but the case (sometimes the
+   whole card) never lands. 3× when following other cases, 1× solo (with
+   envelope+fewshot); completed successfully solo twice. Consistent tell:
+   "Tests closed successfully but something prevents Vite server from exiting"
+   prints on EVERY eval run — suspect a WDK Local-World ↔ vitest interaction
+   that can resolve/abandon the test promise mid-flight on the token-heaviest
+   fixture. Needs a dedicated debugging session; until then treat any scorecard
+   missing an expected case as suspect and re-run that case solo.
 8. **Seed audit** (`npm run eval:audit`): the suspected seeding taint was NOT
    real (assistant seeds already persist as `send_message` tool calls — pinned by
    tests/seedHistory.integration.test.ts); synthetic elicitation cases now drive
