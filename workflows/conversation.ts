@@ -329,8 +329,16 @@ function buildTools(ctx: {
         }),
     stay_silent: tool({
       ...STAY_SILENT_SPEC,
-      // No side effect — the choice of silence is read back from the turn's parts.
-      execute: async () => 'ok: staying silent',
+      // No side effect — the choice of silence is read back from the turn's parts. In text
+      // mode the RESULT tells the model to stop: the trained "end the turn with text" prior
+      // otherwise appends a "(silent)"-style placeholder, which final-text-wins classification
+      // would deliver (observed 6/6 in the 2026-07-04 text-cell smoke). Recency-positioned
+      // reinforcement — the one intervention class PR #30 found effective.
+      execute: async () =>
+        deliveryMode === 'text'
+          ? 'ok: staying silent — end your turn NOW with no further text. Anything you write ' +
+            'after this would be delivered to the user as a message.'
+          : 'ok: staying silent',
     }),
     start_job: tool({
       description:

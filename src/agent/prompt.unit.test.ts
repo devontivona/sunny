@@ -99,6 +99,9 @@ describe('buildSystemPrompt', () => {
     expect(p).toContain("Don't acknowledge every acknowledgment — that's noise.");
     expect(p).toContain('call the');
     expect(p).toContain('stay_silent tool to send nothing');
+    // The placeholder-final guard (2026-07-04 smoke: "(silent)"-style finals delivered 6/6).
+    expect(p).toContain('END your turn without writing anything');
+    expect(p).toContain('no placeholder of any kind');
   });
 
   it('tool mode keeps the pre-migration copy anchors (byte-stability of the production prompt)', () => {
