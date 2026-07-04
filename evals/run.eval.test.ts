@@ -102,7 +102,14 @@ function withWatchdog<T>(p: Promise<T>, ms: number): Promise<T> {
     // live handle left — unref'd, the process drains and exits cleanly mid-loop
     // and vitest reports a PASS with a truncated scorecard (2026-07-04, twice).
     // The ref'd timer keeps the process alive until the watchdog can fire.
-    const timer = setTimeout(() => reject(new RunTimeoutError(ms)), ms);
+    const timer = setTimeout(() => {
+      // DEFUSE the abandoned promise: after its DB is torn down, the zombie run's
+      // steps fail and the promise REJECTS later — unhandled, vitest fails the
+      // whole scorecard test (2026-07-04 real-batches solo: one watchdogged run
+      // killed the card). The run is already counted as failed; swallow its tail.
+      p.catch(() => {});
+      reject(new RunTimeoutError(ms));
+    }, ms);
     p.then(
       (v) => {
         clearTimeout(timer);

@@ -515,7 +515,7 @@ describe('runConversation (workflow integration — real Local World)', () => {
     ctx = await setupTestRuntime({ deliveryMode: 'text', translatorEveryNSteps: 3 }, {
       translateOverride: (interim: string) => {
         composed.push(interim);
-        return `update: ${interim.slice(0, 24)}`;
+        return `update: ${interim.split('\n')[0]}`;
       },
     });
     const event = makeChannelEvent({ text: 'plan my trip' });
@@ -530,9 +530,11 @@ describe('runConversation (workflow integration — real Local World)', () => {
     await run.returnValue;
     expect(await run.status).toBe('completed');
 
-    // The translator fired exactly once (step 1), fed step 0's narration; the update was
-    // delivered BEFORE the final reply.
-    expect(composed).toEqual(['looking at flights first']);
+    // The translator fired exactly once (step 1), fed step 0's narration + tool-call log
+    // (tool lines matter: with thinking on, narration text is usually absent — measured
+    // zero across a full grid — so tool calls are the only progress signal); the update
+    // was delivered BEFORE the final reply.
+    expect(composed).toEqual(['looking at flights first\n[ran bash: echo x]']);
     expect(ctx.gateway.texts()).toEqual([
       'update: looking at flights first',
       'booked research done — options coming up',
@@ -581,7 +583,8 @@ describe('runConversation (workflow integration — real Local World)', () => {
     const event = makeChannelEvent({ text: 'long task' });
     await ctx.store.appendInbound(event);
     // Steps 0-3 are tool calls with narration; step 4 is the final reply. With N=2 the
-    // trigger fires at steps 1 and 3 (and would at 5): step1 sees n0, step3 sees n1+n2.
+    // trigger fires at steps 1 and 3 (and would at 5): step1 sees step 0's notes, step3
+    // sees steps 1-2's. Notes = narration text + the [ran tool] log line per step.
     setTurnModel([
       { type: 'tool-call', toolName: 'bash', input: '{"command":"echo a"}', text: 'n0' },
       { type: 'tool-call', toolName: 'bash', input: '{"command":"echo b"}', text: 'n1' },
@@ -594,7 +597,10 @@ describe('runConversation (workflow integration — real Local World)', () => {
     await run.returnValue;
     expect(await run.status).toBe('completed');
 
-    expect(firedAt).toEqual(['n0', 'n1\nn2']);
+    expect(firedAt).toEqual([
+      'n0\n[ran bash: echo a]',
+      'n1\n[ran bash: echo b]\nn2\n[ran bash: echo c]',
+    ]);
     expect(ctx.gateway.texts()).toEqual(['u1', 'u2', 'done — final answer']);
   });
 
@@ -623,7 +629,9 @@ describe('runConversation (workflow integration — real Local World)', () => {
   });
 
   it('text mode: send_image rides the send step; send_message is not offered', async () => {
-    ctx = await setupTestRuntime({ deliveryMode: 'text' });
+    // translateOverride: the step-1 cadence trigger now always has notes (the tool-call
+    // log), so without the stub it would reach a live model.
+    ctx = await setupTestRuntime({ deliveryMode: 'text' }, { translateOverride: () => '' });
     const event = makeChannelEvent({ text: 'send me the chart' });
     await ctx.store.appendInbound(event);
     setTurnModel([

@@ -22,7 +22,8 @@ export interface TranslatorOptions {
   /** Whom the update is relayed to (the thread's subject — the owner, or the family
    *  member in an owner-absent thread). */
   subject: string;
-  /** The primary model's working notes since the last update (never delivered raw). */
+  /** The primary model's working notes since the last update (never delivered raw):
+   *  narration text it wrote plus `[ran <tool>: …]` lines for its tool calls. */
   interim: string;
   /** The last few updates already relayed, oldest first (so news isn't repeated). */
   recentUpdates: string[];
@@ -69,11 +70,13 @@ export async function runTranslatorPass(opts: TranslatorOptions): Promise<string
 function translatorSystem(subject: string): string {
   return [
     `You relay progress updates for ${subject}'s iMessage assistant, Sunny. Sunny is mid-task`,
-    `and still working; you are shown its private working notes and decide whether ${subject}`,
-    `should get a quick progress text right now.`,
+    `and still working; you are shown its working notes — anything it jotted down plus a`,
+    `[ran <tool>: …] line for each tool it used — and decide whether ${subject} should get a`,
+    `quick progress text right now.`,
     `- You are NOT Sunny and you are NOT doing the task — you only relay what the notes`,
     `  already say, in Sunny's voice: warm, concise, plain text, no markdown. One short`,
-    `  message (a sentence or two) at most.`,
+    `  message (a sentence or two) at most. An update grounded only in tool lines says what`,
+    `  Sunny is DOING ("on it — digging through headphone reviews now"), never a result.`,
     `- SUMMARIZE ONLY. Never add facts, guesses, or results the notes don't contain.`,
     `- Never imply the task is finished — Sunny is still working, and its real reply arrives`,
     `  when it's done. No "all set", no final answers, no promises about timing.`,
@@ -81,6 +84,10 @@ function translatorSystem(subject: string): string {
     `  internal bookkeeping, a step still in progress with nothing to show, or nothing beyond`,
     `  what the already-sent updates said. Send an update only when ${subject} would genuinely`,
     `  want the heads-up.`,
+    `- Quick work needs no update: if the notes show only a couple of fast tool calls (saving a`,
+    `  note, setting a reminder, one lookup), Sunny will reply directly in a moment — output`,
+    `  ${SILENCE}. Updates are for genuinely long tasks (research, building something,`,
+    `  many steps).`,
     `- Output ONLY the update text (or ${SILENCE}) — no preamble, no quotes, nothing else.`,
   ].join('\n');
 }

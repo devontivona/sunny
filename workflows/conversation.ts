@@ -350,7 +350,10 @@ function buildTools(ctx: {
         'finish in one quick reply). The job runs to completion even across restarts and ' +
         'messages the user with the result when done. ' +
         (deliveryMode === 'text'
-          ? 'After calling this, your reply should tell the user you are on it.'
+          ? 'Use this INSTEAD of working through a long task inline — the chat is blocked ' +
+            'while you work, so promote anything beyond a few quick tool calls (do not grind ' +
+            'through research with dozens of calls in the conversation). After calling this, ' +
+            'your reply just tells the user you are on it; the job reports back separately.'
           : 'Tell the user you are on it (via send_message) first, then call this.'),
       inputSchema: z.object({
         task: z

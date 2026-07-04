@@ -187,20 +187,37 @@ function lastStepCalled(
   );
 }
 
-/** The narration text of a run of steps — the translator's interim source. Read from
- *  `steps[].content` (each step's freshly generated parts): on a tool-calls finish the
- *  agent's conversation prompt keeps only the tool calls, so the text exists NOWHERE
- *  else mid-run. Structural type: only `content` is touched. */
+/**
+ * The working notes of a run of steps — the translator's interim source: any narration
+ * TEXT the model wrote, plus a brief line per TOOL CALL (`[ran bash: curl …]`, the
+ * recovery-pass transcript trick). The tool-call log matters: with extended thinking on,
+ * the model narrates into private reasoning (dropped), not text — measured across a full
+ * grid, multi-step turns produced ZERO narration text, so tool calls are usually the only
+ * observable progress signal. Read from `steps[].content` (each step's freshly generated
+ * parts): on a tool-calls finish the agent's conversation prompt keeps only the tool
+ * calls, so this exists NOWHERE else mid-run. Structural type: only `content` is touched.
+ */
 function stepNarration(
-  steps: ReadonlyArray<{ content: ReadonlyArray<{ type: string; text?: string }> }>,
+  steps: ReadonlyArray<{
+    content: ReadonlyArray<{ type: string; text?: string; toolName?: string; input?: unknown }>;
+  }>,
 ): string {
-  const texts: string[] = [];
+  const brief = (v: unknown): string => {
+    const s = typeof v === 'string' ? v : JSON.stringify(v ?? '');
+    return s.length > 120 ? `${s.slice(0, 120)}…` : s;
+  };
+  const lines: string[] = [];
   for (const s of steps) {
     for (const p of s.content) {
-      if (p.type === 'text' && p.text?.trim()) texts.push(p.text.trim());
+      if (p.type === 'text' && p.text?.trim()) {
+        lines.push(p.text.trim());
+      } else if (p.type === 'tool-call' && p.toolName && p.toolName !== 'stay_silent') {
+        const input = p.input as Record<string, unknown> | undefined;
+        lines.push(`[ran ${p.toolName}: ${brief(input?.command ?? input)}]`);
+      }
     }
   }
-  return texts.join('\n').trim();
+  return lines.join('\n').trim();
 }
 
 /**
