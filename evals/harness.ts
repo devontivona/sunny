@@ -159,10 +159,12 @@ export async function runEvalCase(
   } finally {
     delete g[RUNTIME_KEY];
     // Best-effort: a leaked background run holding the PGlite connection can make
-    // close() hang; an abandoned world is cheaper than a stuck scorecard.
+    // close() hang; an abandoned world is cheaper than a stuck scorecard. The
+    // escape timer stays REF'D — unref'd it can be the last live handle and the
+    // process exits cleanly mid-scorecard (see withWatchdog in run.eval.test.ts).
     await Promise.race([
       tdb.teardown().catch(() => {}),
-      new Promise((resolve) => setTimeout(resolve, 15_000).unref?.()),
+      new Promise((resolve) => setTimeout(resolve, 15_000)),
     ]);
   }
 }

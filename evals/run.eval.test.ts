@@ -94,8 +94,11 @@ function buildScorecard(
 
 function withWatchdog<T>(p: Promise<T>, ms: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
+    // Deliberately REF'D: when a durable run parks, this timer may be the only
+    // live handle left — unref'd, the process drains and exits cleanly mid-loop
+    // and vitest reports a PASS with a truncated scorecard (2026-07-04, twice).
+    // The ref'd timer keeps the process alive until the watchdog can fire.
     const timer = setTimeout(() => reject(new RunTimeoutError(ms)), ms);
-    timer.unref?.();
     p.then(
       (v) => {
         clearTimeout(timer);
