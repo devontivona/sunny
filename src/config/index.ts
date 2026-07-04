@@ -25,6 +25,8 @@ export const ConfigSchema = z.object({
    */
   deliveryMode: z.enum(['tool', 'text']).default('tool'),
   /**
+   * @deprecated tool-mode-only (2026-07 elicitation experiments, PR #30). The text-delivery
+   * migration supersedes these; retire once `deliveryMode: 'text'` is the stable default.
    * System-prompt framing experiment (elicitation): how the prompt frames who the
    * model's raw text output is addressed to. `baseline` — today's prompt, byte-identical.
    * `gateway` — the conversation is with a relay that forwards messages both ways and
@@ -32,14 +34,22 @@ export const ConfigSchema = z.object({
    * worklog written after acting. Only affects `deliveryMode: 'tool'`.
    */
   promptVariant: z.enum(['baseline', 'gateway', 'diary']).default('baseline'),
-  /** Prefix EVERY inbound user message (DM and group) with a relay envelope naming the
-   *  sender/channel — recency-positioned reinforcement that the message arrived via a
-   *  channel, not as raw conversation. Applied at read time (no persisted-row change). */
+  /**
+   * @deprecated tool-mode-only (2026-07 elicitation experiments, PR #30). The text-delivery
+   * migration supersedes these; retire once `deliveryMode: 'text'` is the stable default.
+   * Prefix EVERY inbound user message (DM and group) with a relay envelope naming the
+   * sender/channel — recency-positioned reinforcement that the message arrived via a
+   * channel, not as raw conversation. Applied at read time (no persisted-row change). */
   inboundEnvelope: z.boolean().default(false),
-  /** Prepend a canned few-shot exchange block (correct send_message/stay_silent usage)
-   *  to every conversation window. */
+  /**
+   * @deprecated tool-mode-only (2026-07 elicitation experiments, PR #30). The text-delivery
+   * migration supersedes these; retire once `deliveryMode: 'text'` is the stable default.
+   * Prepend a canned few-shot exchange block (correct send_message/stay_silent usage)
+   * to every conversation window. */
   fewshot: z.boolean().default(false),
   /**
+   * @deprecated superseded by the text-delivery migration, which makes this design the real
+   * text mode (final text delivered directly; translator for interim). Retire with the others.
    * Architectural reference arm (eval-only in spirit): the two-model-pass design as the
    * PRIMARY path. The turn runs with the text-mode prompt (the model replies naturally in
    * plain text — no send_message pressure, zero fight with training), and the composer
