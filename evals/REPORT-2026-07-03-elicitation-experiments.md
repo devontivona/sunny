@@ -49,13 +49,36 @@ Notes:
 
 ## Confirmation (N=5)
 
-- `fewshot`: poisoned **12/20 (60%)** vs baseline 28% — effect confirmed at N=5
-  (smalltalk-poisoned 5/5, real-inbox-clarify 4/5; meta-poisoned still hard 1/5).
-  Clean+live 46/55 (84%): silence-when-nothing-to-say 2/5 and multiturn-trip 2/5
-  are the soft spots — the canned block slightly perturbs live long-multi-turn
-  and silence behavior. Copy iteration target, not a disqualifier.
-- `envelope+fewshot`: TBD (rerun in flight after the truncation bug below).
-- `fewshot × real-batches`: TBD (backfill in flight).
+- `fewshot`: poisoned **15/25 (60%)** vs baseline 28% — effect confirmed at N=5
+  (smalltalk-poisoned 5/5, real-inbox-clarify 4/5, real-batches 3/5 ≈ baseline;
+  meta-poisoned still hard 1/5). Clean+live 46/55 (84%):
+  silence-when-nothing-to-say 2/5 and multiturn-trip 2/5 are the soft spots.
+- `envelope+fewshot`: **poisoned 13/15 (87%)** on the miss-chains — incl.
+  **meta-poisoned 5/5**, the case at 0% in every other config — with silence
+  restored (ack-thanks 5/5) and clean+live 51/55 (93%). Clearly synergistic:
+  envelope reinforces at the recent end, fewshot supplies the good exemplars and
+  the stay_silent demonstration that patches the envelope's silence break.
+  Real fixtures for this cell: **real-inbox-clarify 4/5** (baseline 6/10 —
+  improved on the production-history case too); real-batches solo run pending.
+
+## Hand-inspected transcripts (fewshot cell)
+
+Sanity checks on real transcripts (EVAL_DUMP_DIR) confirmed the wins and caught
+two few-shot-induced pathologies — **pre-ship copy iteration items**:
+
+1. **stay_silent spam after sending** — up to 4 consecutive `stay_silent()` calls
+   following a send in one turn. The "every turn ends with send_message or
+   stay_silent" checklist gets literalized into "close the turn by calling
+   stay_silent". Fix candidates: a line in `STAY_SILENT_SPEC` ("never call this
+   after send_message in the same turn"), and don't END the few-shot block on the
+   stay_silent exchange.
+2. **Hallucinated dialogue turn** — after a real send, the model sent a second
+   bubble answering a user reply that never happened (played both sides). Rare
+   but user-visible; watch for it when iterating the block.
+3. Positive: on trivial turns scratch is now often EMPTY (ideal with thinking
+   on); poisoned-history turns show clean single sends; the silence case shows an
+   explicit `stay_silent()` call. Residual dual-channel: occasional user-addressed
+   post-send scratch ("Let me know if…") — the advisory graders count these.
 
 ## Decision gate (from the session plan)
 
@@ -76,7 +99,8 @@ its source instead of counteracting it).
    exposure remains OPEN**: a hung turn silently blocks its thread until restart.
 2. **Unref'd watchdog = silent truncation** — when a run parks, an unref'd timer
    may be the only live handle; Node drains, the process exits cleanly, vitest
-   reports PASS with a truncated scorecard. Timers are now ref'd.
+   reports PASS with a truncated scorecard. Timers are now ref'd. (Transcript
+   dumps for hand inspection: `EVAL_DUMP_DIR`.)
 3. **Eval world ran real background jobs** — `research-starts-job` spawned a live
    research job (real model spend; its zombie blocked PGlite teardown). The eval
    runtime now sets `stubJobs` (same pattern as delegation's absent `spawnChild`).
@@ -84,9 +108,23 @@ its source instead of counteracting it).
    completed data. `EVAL_CASES` regex filters cases; `EVAL_TIMEOUT_MS` bounds the
    vitest test; cost caps bound spend (judge calls still unmetered — flat ~$0.01–
    0.03/graded run extra).
-5. **Do not run two eval processes concurrently** (suspected Local-World
-   interference; unproven but cheap to respect).
-6. **Seed audit** (`npm run eval:audit`): the suspected seeding taint was NOT
+5. **Do not run two eval processes concurrently — confirmed mechanism**: the
+   Local World is a cross-process singleton (a second `npm run eval` QUEUES on
+   the world lock, and interleaved access corrupts run storage →
+   `WorkflowRunNotFoundError` aborts the scorecard mid-run).
+6. **Zombie steps could boot the PRODUCTION runtime inside the eval process** —
+   the scariest find: after a case's teardown deleted the injected test runtime,
+   a late-waking step's `getRuntime()` fell through to the real boot path (real
+   Sendblue gateway + scheduler + `DATABASE_URL`). Observed 4× on 2026-07-04; no
+   messages went out only because the processes died before a scheduler tick.
+   Fixed: the harness now leaves a sandboxed TOMBSTONE runtime (fresh FakeGateway
+   + torn-down store) in place after every case.
+7. **OPEN eval bug: real-batches silently vanishes when it follows other cases**
+   in the same process (three occurrences; completes fine when run solo via
+   `EVAL_CASES=real-batches`). No error, no watchdog, test reports PASS; the case
+   simply never lands in the scorecard. Suspected Local-World accumulation that
+   the token-heaviest fixture trips on. Workaround: run it as its own cell.
+8. **Seed audit** (`npm run eval:audit`): the suspected seeding taint was NOT
    real (assistant seeds already persist as `send_message` tool calls — pinned by
    tests/seedHistory.integration.test.ts); synthetic elicitation cases now drive
    all prior turns live, and seeding is reserved for deliberately-pinned
