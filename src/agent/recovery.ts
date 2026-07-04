@@ -33,6 +33,12 @@ export interface RecoveryOptions {
   scratch: string;
   /** The turn's thread id, so the recovery span groups with that turn's session. */
   threadId: string;
+  /**
+   * How the transcript labels the assistant's PLAIN TEXT lines. Tool mode: 'private note'
+   * (text was never delivered — it's scratch). Text mode: 'said' (prior turns' text WAS the
+   * delivered reply, so labeling it private would misread the history).
+   */
+  assistantTextLabel?: string;
 }
 
 /**
@@ -52,7 +58,11 @@ export interface RecoveryOptions {
  *
  * Reasoning (thinking) blocks and raw tool-result payloads are intentionally omitted.
  */
-export function renderTranscript(messages: ModelMessage[], ownerName: string): string {
+export function renderTranscript(
+  messages: ModelMessage[],
+  ownerName: string,
+  assistantTextLabel = 'private note',
+): string {
   const brief = (v: unknown): string => {
     const s = typeof v === 'string' ? v : JSON.stringify(v ?? '');
     return s.length > 80 ? `${s.slice(0, 80)}…` : s;
@@ -75,7 +85,7 @@ export function renderTranscript(messages: ModelMessage[], ownerName: string): s
     } else if (m.role === 'assistant') {
       for (const p of parts) {
         if (p.type === 'text' && (p.text as string)?.trim()) {
-          lines.push(`Sunny (private note): ${(p.text as string).trim()}`);
+          lines.push(`Sunny (${assistantTextLabel}): ${(p.text as string).trim()}`);
         } else if (p.type === 'tool-call') {
           const input = p.input as Record<string, unknown> | undefined;
           if (p.toolName === 'send_message') {
@@ -92,7 +102,7 @@ export function renderTranscript(messages: ModelMessage[], ownerName: string): s
 
 /** Compose the clean iMessage the missed turn should have sent. Empty = nothing to send. */
 export async function runRecoveryPass(opts: RecoveryOptions): Promise<string> {
-  const transcript = renderTranscript(opts.messages, opts.ownerName);
+  const transcript = renderTranscript(opts.messages, opts.ownerName, opts.assistantTextLabel);
   const userMessage =
     `Conversation transcript:\n${transcript}\n\n` +
     `Sunny's private draft notes for the latest turn (the reply it failed to send):\n${opts.scratch}\n\n` +

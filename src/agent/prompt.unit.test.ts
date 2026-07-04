@@ -83,6 +83,31 @@ describe('buildSystemPrompt', () => {
     }
   });
 
+  it('text mode: text-as-reply prompt (narration welcome, dangling-promise guard, send_image; no send_message)', () => {
+    const p = buildSystemPrompt(config, core({ user: '- Name: Devon' }), 'text');
+    expect(p).toContain('Your reply IS the message');
+    // Narration is WELCOME (the translator's source material) — never discouraged.
+    expect(p).toContain('brief working notes as you go are fine');
+    expect(p).toContain('progress updates relayed to Devon');
+    // Dangling-promise guard (the replyComplete gate's prompt-side half).
+    expect(p).toContain('must stand on its own');
+    expect(p).toContain('never end a turn on');
+    // Outbound images go through send_image; send_message does not exist in this mode.
+    expect(p).toContain('send_image');
+    expect(p).not.toContain('send_message');
+    // The stay_silent ack framing is kept verbatim (held 5/6 in the composer arm).
+    expect(p).toContain("Don't acknowledge every acknowledgment — that's noise.");
+    expect(p).toContain('call the');
+    expect(p).toContain('stay_silent tool to send nothing');
+  });
+
+  it('tool mode keeps the pre-migration copy anchors (byte-stability of the production prompt)', () => {
+    const p = buildSystemPrompt(config, core({ user: '- Name: Devon' }), 'tool');
+    expect(p).toContain('send_message is your ONLY voice');
+    expect(p).toContain(`send_message's "image" — one image per send.`);
+    expect(p).not.toContain('send_image');
+  });
+
   it('promptVariant does not alter text delivery mode', () => {
     const c = core({ user: '- Name: Devon' });
     const base = buildSystemPrompt(config, c, 'text');

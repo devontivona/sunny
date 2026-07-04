@@ -222,6 +222,51 @@ describe('toModelMessages — strips reasoning (extended-thinking) parts from hi
   });
 });
 
+describe('renderTranslatorParts — read-time rendering of relayed progress updates', () => {
+  const payload = {
+    id: 'a1',
+    role: 'assistant',
+    parts: [
+      { type: 'text', text: 'working notes' },
+      {
+        type: 'tool-bash',
+        toolCallId: 'b1',
+        state: 'output-available',
+        input: { command: 'ls' },
+        output: 'ok',
+      },
+      { type: 'data-translator', data: { text: 'on it — checking now', step: 1 } },
+      { type: 'text', text: 'here is the answer' },
+    ],
+  };
+
+  it('attributed (default): renders each update as a bracketed text line naming the subject', async () => {
+    const row = makeStoredMessage({ role: 'assistant', text: 'here is the answer', payload });
+    const json = JSON.stringify(
+      await toModelMessages([row], false, { translatorHistory: 'attributed', translatorSubject: 'Devon' }),
+    );
+    expect(json).toContain('progress update relayed to Devon');
+    expect(json).toContain('on it — checking now');
+    expect(json).not.toContain('data-translator');
+  });
+
+  it('excluded: strips the updates entirely (the A/B arm)', async () => {
+    const row = makeStoredMessage({ role: 'assistant', text: 'here is the answer', payload });
+    const json = JSON.stringify(
+      await toModelMessages([row], false, { translatorHistory: 'excluded', translatorSubject: 'Devon' }),
+    );
+    expect(json).not.toContain('on it — checking now');
+    expect(json).not.toContain('progress update relayed');
+    expect(json).toContain('here is the answer'); // the rest of the turn survives
+  });
+
+  it('defaults to attributed with a generic subject when no options are passed', async () => {
+    const row = makeStoredMessage({ role: 'assistant', text: 'here is the answer', payload });
+    const json = JSON.stringify(await toModelMessages([row], false));
+    expect(json).toContain('progress update relayed to the user');
+  });
+});
+
 describe('rowToUIMessage — legacy (pre-D-MG9, no payload) reconstruction', () => {
   it('reconstructs a legacy user row as a single text part', () => {
     const row = makeStoredMessage({ role: 'user', text: 'hello', payload: null });

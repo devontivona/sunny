@@ -32,6 +32,25 @@ export interface SteeringConfig {
   envelope?: boolean;
 }
 
+/**
+ * Interim-progress translator wiring (text-delivery migration, Phase 3). Only the
+ * conversational turn in text delivery mode passes this; jobs/children omit it (zero
+ * change). The closures are `'use step'` calls supplied by the entrypoint (compose =
+ * `translateStep`, send = the memoized delivery step), so on replay the journaled
+ * results are reused and an update is never re-composed or re-sent.
+ */
+export interface TranslatorConfig {
+  /** Cadence N (config.translatorEveryNSteps, via the journaled TurnSetup): fires at
+   *  `stepNumber >= 1 && (stepNumber - 1) % N === 0` — the FIRST non-terminal step
+   *  (the user gets an immediate "on it…" beat), then every N steps (1, 1+N, …). */
+  everyNSteps: number;
+  /** Compose one short update from the interim narration + the last few relayed
+   *  updates. Returns '' for silence (the translator's default). */
+  compose: (interim: string, recentUpdates: string[], stepNumber: number) => Promise<string>;
+  /** Deliver a composed update (the memoized send step). */
+  send: (text: string) => Promise<unknown>;
+}
+
 export interface StreamAgentOpts {
   model: WorkflowAgentOptions['model'];
   instructions: WorkflowAgentOptions['instructions'];
@@ -41,6 +60,8 @@ export interface StreamAgentOpts {
   messages: ModelMessage[];
   /** Present for steerable runs (conversation, child); omit for one-shot jobs. */
   steering?: SteeringConfig;
+  /** Present for the text-mode conversational turn; omit everywhere else. */
+  translator?: TranslatorConfig;
 }
 
 /**
@@ -56,6 +77,8 @@ export async function streamAgent(opts: StreamAgentOpts): Promise<{
   result: Awaited<ReturnType<InstanceType<typeof WorkflowAgent>['stream']>>;
   usage: LanguageModelUsage | undefined;
   foldedIds: string[];
+  /** The progress updates the translator relayed this turn (text mode; else empty). */
+  translatorUpdates: { text: string; step: number }[];
 }> {
   let usage: LanguageModelUsage | undefined;
   const agent = new WorkflowAgent({
@@ -73,40 +96,89 @@ export async function streamAgent(opts: StreamAgentOpts): Promise<{
   const foldedIds: string[] = [];
   const steering = opts.steering;
 
+  // Translator fold state (text mode). Both derive purely from journaled step results —
+  // `steps` reconstructs identically on replay and compose/send are memoized steps — so,
+  // like `foldedIds`, they are deterministic across replays. The cursor indexes into
+  // `steps` (NOT `messages`): on a tool-calls finish the agent's conversation prompt
+  // carries only the tool calls — the step's narration TEXT lives only in
+  // `steps[].content` (see @ai-sdk/workflow dist, conversationPrompt assembly).
+  const translatorUpdates: { text: string; step: number }[] = [];
+  let translatorCursor = 0;
+
   // `prepareStep` is always present so its params infer from `agent.stream` (contextual typing); a
-  // run with no `steering` (a one-shot job) just no-ops it. For a steerable run it folds mid-run
-  // arrivals on `inboxThreadId` via `loadSteers` — the double-text seam, deterministic on replay.
+  // run with no `steering`/`translator` (a one-shot job) just no-ops it. For a steerable run it
+  // folds mid-run arrivals on `inboxThreadId` via `loadSteers` — the double-text seam,
+  // deterministic on replay — and, in text mode, relays interim progress on the cadence steps.
   const result = await agent.stream({
     messages: opts.messages,
     writable: getWritable<ModelCallStreamPart>(),
     stopWhen: ({ steps }) => steps.length >= AGENT_STEP_LIMIT,
     telemetry: { isEnabled: false },
-    prepareStep: async ({ stepNumber, messages }) => {
-      if (!steering || stepNumber === 0) return {};
-      const steers = await loadSteersStep(steering.inboxThreadId, [
-        ...steering.baseExcludeIds,
-        ...foldedIds,
-      ]);
-      if (steers.length === 0) return {};
-      for (const s of steers) foldedIds.push(s.messageId);
-      return {
-        messages: [
-          ...messages,
-          ...steers.map((s) => ({
-            role: 'user' as const,
-            content: [
-              {
-                type: 'text' as const,
-                text: steerMessageText(s.text, s.senderName, steering.isGroup, steering.envelope),
-              },
-            ],
-          })),
-        ],
-      };
+    prepareStep: async ({ stepNumber, messages, steps }) => {
+      if (stepNumber === 0) return {};
+      let folded: typeof messages | undefined;
+      if (steering) {
+        const steers = await loadSteersStep(steering.inboxThreadId, [
+          ...steering.baseExcludeIds,
+          ...foldedIds,
+        ]);
+        if (steers.length > 0) {
+          for (const s of steers) foldedIds.push(s.messageId);
+          folded = [
+            ...messages,
+            ...steers.map((s) => ({
+              role: 'user' as const,
+              content: [
+                {
+                  type: 'text' as const,
+                  text: steerMessageText(s.text, s.senderName, steering.isGroup, steering.envelope),
+                },
+              ],
+            })),
+          ];
+        }
+      }
+
+      // Progress translator (text mode): on cadence steps, relay the narration written since
+      // the last update. Skipped when a steer folded THIS step — fresh user input beats stale
+      // progress, and the model is about to react to it anyway. The cursor advances whenever
+      // the trigger fires (even on empty narration or a declined update), so each pass sees
+      // only genuinely new notes.
+      const tr = opts.translator;
+      if (tr && !folded && (stepNumber - 1) % tr.everyNSteps === 0) {
+        const interim = stepNarration(steps.slice(translatorCursor));
+        translatorCursor = steps.length;
+        if (interim) {
+          const recent = translatorUpdates.slice(-3).map((u) => u.text);
+          const update = (await tr.compose(interim, recent, stepNumber)).trim();
+          if (update) {
+            await tr.send(update);
+            translatorUpdates.push({ text: update, step: stepNumber });
+          }
+        }
+      }
+
+      return folded ? { messages: folded } : {};
     },
   });
 
-  return { result, usage, foldedIds };
+  return { result, usage, foldedIds, translatorUpdates };
+}
+
+/** The narration text of a run of steps — the translator's interim source. Read from
+ *  `steps[].content` (each step's freshly generated parts): on a tool-calls finish the
+ *  agent's conversation prompt keeps only the tool calls, so the text exists NOWHERE
+ *  else mid-run. Structural type: only `content` is touched. */
+function stepNarration(
+  steps: ReadonlyArray<{ content: ReadonlyArray<{ type: string; text?: string }> }>,
+): string {
+  const texts: string[] = [];
+  for (const s of steps) {
+    for (const p of s.content) {
+      if (p.type === 'text' && p.text?.trim()) texts.push(p.text.trim());
+    }
+  }
+  return texts.join('\n').trim();
 }
 
 /**

@@ -12,8 +12,9 @@ import type { LanguageModelUsage, ModelMessage, UIMessage } from 'ai';
  * the media-resolution helpers that DO touch the filesystem stay in `turn.ts`.
  */
 
-/** How a turn's reply reached (or didn't reach) the user (D-MG8). */
-export type Delivery = 'send_message' | 'fallback_text' | 'silence';
+/** How a turn's reply reached (or didn't reach) the user (D-MG8). `text` is the
+ *  text-as-reply mode: the model's final text delivered directly as bubbles. */
+export type Delivery = 'send_message' | 'text' | 'fallback_text' | 'silence';
 
 /**
  * Classify how a turn was delivered from three observable signals: how many times
@@ -137,6 +138,73 @@ export function sendMessagePart(text: string, toolCallId: string): UIMessage['pa
     input: { text },
     output: 'delivered',
   } as UIMessage['parts'][number];
+}
+
+/**
+ * Text-as-reply extraction (text delivery mode): the FINAL text is everything the
+ * model wrote AFTER its last tool call — the reply that gets delivered as bubbles.
+ * A turn with no tool parts is all final. Text at/before the last tool part is
+ * INTERIM narration (the translator's source material; see extractInterimText).
+ */
+export function extractFinalText(parts: UIMessage['parts']): string {
+  return extractScratch(parts.slice(lastToolIndex(parts) + 1));
+}
+
+/** The interim narration of a text-mode turn: text parts at/before the last tool part. */
+export function extractInterimText(parts: UIMessage['parts']): string {
+  return extractScratch(parts.slice(0, lastToolIndex(parts) + 1));
+}
+
+/** Index of the last `tool-*` part, or -1 (data-* parts don't count — they're not turns
+ *  of work, so translator updates never shift the final/interim boundary). */
+function lastToolIndex(parts: UIMessage['parts']): number {
+  for (let i = parts.length - 1; i >= 0; i--) {
+    if (parts[i]!.type.startsWith('tool-')) return i;
+  }
+  return -1;
+}
+
+/**
+ * Classify a TEXT-mode turn from its extracted signals. Final text wins FIRST — by
+ * design: the stay_silent-spam pathology (PR #30 transcripts) showed the model can
+ * write a real reply and ALSO spray stray `stay_silent` calls; when final text
+ * exists it is the reply and must be delivered, never swallowed as silence.
+ *
+ * - final text present → `text` (delivered directly as bubbles)
+ * - no final, stay_silent called → `silence` (deliberate)
+ * - no final, interim narration only → `fallback_text` (the empty-final miss; the
+ *   recovery backstop composes the reply from the narration)
+ * - nothing at all → `silence`
+ */
+export function classifyTextDelivery(
+  finalText: string,
+  interimText: string,
+  staySilent: boolean,
+): Delivery {
+  if (finalText) return 'text';
+  if (staySilent) return 'silence';
+  if (interimText) return 'fallback_text';
+  return 'silence';
+}
+
+/**
+ * Build a `data-translator` UIMessage part recording one relayed progress update
+ * (text mode). Persisted in the turn row (same `data-*` convention as
+ * `data-attachment`); rendered attributed or stripped at READ time per
+ * `config.translatorHistory` — see `renderTranslatorParts` in turn.ts.
+ */
+export function translatorPart(text: string, step: number): UIMessage['parts'][number] {
+  return { type: 'data-translator', data: { text, step } } as UIMessage['parts'][number];
+}
+
+/** The relayed translator updates persisted on a turn, in order. */
+export function extractTranslatorUpdates(
+  parts: UIMessage['parts'],
+): { text: string; step: number }[] {
+  return parts
+    .filter((p) => p.type === 'data-translator')
+    .map((p) => (p as { data?: { text?: string; step?: number } }).data)
+    .filter((d): d is { text: string; step: number } => typeof d?.text === 'string');
 }
 
 /**

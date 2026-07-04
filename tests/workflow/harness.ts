@@ -40,9 +40,12 @@ export interface TestRuntimeCtx {
   wakeCalls: string[];
 }
 
-/** Stand up a PGlite-backed test runtime and inject it for the workflow's steps. */
+/** Stand up a PGlite-backed test runtime and inject it for the workflow's steps.
+ *  `runtimeExtras` merges extra seam fields onto the injected runtime — e.g.
+ *  `translateOverride` (the translator test seam) or `stubJobs`. */
 export async function setupTestRuntime(
   configOverrides: Partial<SunnyConfig> = {},
+  runtimeExtras: Record<string, unknown> = {},
 ): Promise<TestRuntimeCtx> {
   const db = await createTestDb();
   const config = makeConfig(configOverrides);
@@ -77,6 +80,7 @@ export async function setupTestRuntime(
     wakeThread: wake,
     spawnChild,
     steerChild,
+    ...runtimeExtras,
   });
   return { db, store, gateway, config, spawnChild, steerChild, wakeCalls };
 }

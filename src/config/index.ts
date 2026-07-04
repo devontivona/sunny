@@ -25,6 +25,22 @@ export const ConfigSchema = z.object({
    */
   deliveryMode: z.enum(['tool', 'text']).default('tool'),
   /**
+   * Interim-progress translator cadence (text delivery mode only). On a multi-step turn a
+   * cheap model relays short progress updates to the user: the first fires on the FIRST
+   * non-terminal step (an immediate "on it…" beat), then every N steps after (steps 1, 1+N,
+   * 1+2N, …). Silence is the translator's default — it declines when there's no
+   * user-relevant news. The translator model is `recoveryModelId`.
+   */
+  translatorEveryNSteps: z.number().int().positive().default(3),
+  /**
+   * How relayed translator updates render in the model's HISTORY at read time (text mode):
+   * `attributed` — as `[progress update relayed to <user>: "…"]` lines, so the model knows
+   * what the user already heard and the final reply doesn't repeat it; `excluded` — stripped
+   * entirely (the A/B arm). Rows always persist the updates as `data-translator` parts;
+   * this toggle is read-time only, so flipping it needs no migration.
+   */
+  translatorHistory: z.enum(['attributed', 'excluded']).default('attributed'),
+  /**
    * @deprecated tool-mode-only (2026-07 elicitation experiments, PR #30). The text-delivery
    * migration supersedes these; retire once `deliveryMode: 'text'` is the stable default.
    * System-prompt framing experiment (elicitation): how the prompt frames who the

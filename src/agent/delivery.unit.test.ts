@@ -1,7 +1,82 @@
 import { describe, expect, it } from 'vitest';
 import type { ModelMessage, UIMessage } from 'ai';
-import { assistantUIMessageFromResponse, calledStaySilent } from './delivery.js';
+import {
+  assistantUIMessageFromResponse,
+  calledStaySilent,
+  classifyTextDelivery,
+  extractFinalText,
+  extractInterimText,
+  extractTranslatorUpdates,
+  splitBubbles,
+  translatorPart,
+} from './delivery.js';
 import { makeAssistantTurnPayload } from '../../tests/factories.js';
+
+type Part = UIMessage['parts'][number];
+const text = (t: string): Part => ({ type: 'text', text: t }) as Part;
+const tool = (name: string, id: string): Part =>
+  ({ type: `tool-${name}`, toolCallId: id, state: 'output-available', input: {} }) as Part;
+
+describe('text-as-reply extraction (text delivery mode)', () => {
+  it('splits final (after the last tool part) from interim (at/before it)', () => {
+    const parts = [text('checking...'), tool('bash', 'a'), text('found it'), tool('bash', 'b'), text('here is the answer')];
+    expect(extractFinalText(parts)).toBe('here is the answer');
+    expect(extractInterimText(parts)).toBe('checking...\nfound it');
+  });
+
+  it('a turn with no tool parts is all final', () => {
+    const parts = [text('just a reply')];
+    expect(extractFinalText(parts)).toBe('just a reply');
+    expect(extractInterimText(parts)).toBe('');
+  });
+
+  it('data-translator parts never shift the final/interim boundary', () => {
+    const parts = [text('working'), tool('bash', 'a'), translatorPart('on it!', 1), text('the answer')];
+    expect(extractFinalText(parts)).toBe('the answer');
+    expect(extractInterimText(parts)).toBe('working');
+  });
+
+  it('classifies: final text → text; stay_silent → silence; interim only → fallback; nothing → silence', () => {
+    expect(classifyTextDelivery('answer', '', false)).toBe('text');
+    expect(classifyTextDelivery('', '', true)).toBe('silence');
+    expect(classifyTextDelivery('', 'notes only', false)).toBe('fallback_text');
+    expect(classifyTextDelivery('', '', false)).toBe('silence');
+  });
+
+  it('final text WINS over a stray stay_silent call (the stay_silent-spam pathology)', () => {
+    // PR #30 transcripts: the model can write a real reply and also spray stay_silent.
+    // The reply must be delivered — never swallowed as silence.
+    const parts = [tool('stay_silent', 's1'), text('actually, here is your answer')];
+    const final = extractFinalText(parts);
+    expect(final).toBe('actually, here is your answer');
+    expect(classifyTextDelivery(final, extractInterimText(parts), calledStaySilent(parts))).toBe(
+      'text',
+    );
+  });
+
+  it('text before a trailing stay_silent is interim → deliberate silence stands', () => {
+    const parts = [text('nothing to add here'), tool('stay_silent', 's1')];
+    expect(
+      classifyTextDelivery(extractFinalText(parts), extractInterimText(parts), true),
+    ).toBe('silence');
+  });
+
+  it('round-trips translator updates through data-translator parts', () => {
+    const parts = [translatorPart('on it — checking flights', 1), translatorPart('narrowing options', 4)];
+    expect(extractTranslatorUpdates(parts)).toEqual([
+      { text: 'on it — checking flights', step: 1 },
+      { text: 'narrowing options', step: 4 },
+    ]);
+  });
+
+  it('splitBubbles: blank-line paragraphs become separate bubbles', () => {
+    expect(splitBubbles('first bubble\n\nsecond bubble\nsame bubble')).toEqual([
+      'first bubble',
+      'second bubble\nsame bubble',
+    ]);
+    expect(splitBubbles('  \n \n')).toEqual([]);
+  });
+});
 
 describe('calledStaySilent', () => {
   it('detects a stay_silent tool call in the assembled parts', () => {
