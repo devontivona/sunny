@@ -97,6 +97,25 @@ export function toolNotCalled(name: string): Grader {
 export const startedJob: Grader = (t) =>
   pass('started-job', t.startJobs.length > 0, `startJobs=${t.startJobs.length}`);
 
+/**
+ * A long task was BACKGROUNDED — promoted to a durable job OR delegated to a subagent
+ * (both durable, both report back to the thread) — and NOT ground through inline. The
+ * policy this grades is thread responsiveness: a turn that grinds through research with
+ * dozens of tool calls blocks the chat for minutes (observed: 23 curl steps, 5+ min, in
+ * the 2026-07-04 text cell) even if it eventually answers well. The bash allowance
+ * covers a quick probe before deciding; the grind threshold is deliberately loose.
+ */
+export const backgroundedLongTask: Grader = (t) => {
+  const delegated = t.toolCalls.some((c) => c.name === 'delegate_task');
+  const started = t.startJobs.length > 0;
+  const bashCalls = t.toolCalls.filter((c) => c.name === 'bash').length;
+  return pass(
+    'backgrounded-long-task',
+    (started || delegated) && bashCalls < 5,
+    `start_job=${t.startJobs.length} delegate_task=${delegated} bash=${bashCalls}`,
+  );
+};
+
 /** A `memory_write` targeted the given core file with content matching a pattern. */
 export function memoryWritten(file: 'USER' | 'SUNNY' | 'INDEX', contentMatches: RegExp): Grader {
   return (t) => {
