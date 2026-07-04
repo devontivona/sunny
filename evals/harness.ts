@@ -155,9 +155,30 @@ export async function runEvalCase(
       await run.returnValue;
     }
 
-    return await buildTrajectory(store, gateway);
+    const trajectory = await buildTrajectory(store, gateway);
+    // EVAL_DUMP_DIR: write a human-readable transcript per case run (hand
+    // sanity-checks). The few-shot block is prompt-input only (injected in
+    // loadPending, never persisted), so it does not appear here — see
+    // src/agent/fewshot.ts for its verbatim content.
+    if (process.env.EVAL_DUMP_DIR) {
+      await dumpTranscript(process.env.EVAL_DUMP_DIR, c.name, store, trajectory);
+    }
+    return trajectory;
   } finally {
-    delete g[RUNTIME_KEY];
+    // TOMBSTONE, never delete: an abandoned (parked/hung) run's step can wake
+    // minutes later and call getRuntime() — with the key ABSENT the production
+    // memo boots the REAL runtime (Sendblue gateway + scheduler + the real
+    // DATABASE_URL) inside the eval process (observed 2026-07-04; no sends went
+    // out, but only because the process died before a scheduler tick). The
+    // tombstone keeps zombies sandboxed: a fresh FakeGateway swallows any late
+    // send; the torn-down store just fails their steps.
+    g[RUNTIME_KEY] = Promise.resolve({
+      config,
+      gateway: new FakeGateway(),
+      store,
+      db: tdb.db,
+      stubJobs: true,
+    });
     // Best-effort: a leaked background run holding the PGlite connection can make
     // close() hang; an abandoned world is cheaper than a stuck scorecard. The
     // escape timer stays REF'D — unref'd it can be the last live handle and the
@@ -167,6 +188,45 @@ export async function runEvalCase(
       new Promise((resolve) => setTimeout(resolve, 15_000)),
     ]);
   }
+}
+
+/** Render the full stored window + graded-turn verdict to EVAL_DUMP_DIR (one md per run). */
+async function dumpTranscript(
+  dir: string,
+  caseName: string,
+  store: ConversationStore,
+  t: Trajectory,
+): Promise<void> {
+  const window = await store.recentWindow(OWNER_THREAD);
+  const lines: string[] = [`# ${caseName}`, ``, `delivered=${t.delivered} recovered=${t.recovered}`, ``];
+  for (const row of window) {
+    if (row.role === 'user') {
+      lines.push(`USER (${row.senderName ?? row.senderId}): ${row.text}`);
+      continue;
+    }
+    const payload = row.payload as { parts?: Array<Record<string, unknown>> } | null;
+    if (!payload?.parts) {
+      lines.push(`ASSISTANT (legacy text): ${row.text}`);
+      continue;
+    }
+    lines.push(`ASSISTANT turn:`);
+    for (const p of payload.parts) {
+      const type = String(p.type ?? '');
+      if (type === 'text') lines.push(`  [scratch] ${String(p.text ?? '').replace(/\n/g, '\n            ')}`);
+      else if (type === 'tool-send_message')
+        lines.push(`  → send_message(${JSON.stringify((p.input as { text?: string })?.text ?? '')})`);
+      else if (type === 'tool-stay_silent') lines.push(`  → stay_silent()`);
+      else if (type.startsWith('tool-'))
+        lines.push(`  → ${type.slice(5)}(${JSON.stringify(p.input ?? {}).slice(0, 200)})`);
+    }
+  }
+  mkdirSync(dir, { recursive: true });
+  const slug = caseName.replace(/[^a-z0-9-]+/gi, '_');
+  // One file per run: suffix with an increment to keep N>1 runs apart.
+  let n = 1;
+  const { existsSync } = await import('node:fs');
+  while (existsSync(`${dir}/${slug}.${n}.md`)) n += 1;
+  writeFileSync(`${dir}/${slug}.${n}.md`, lines.join('\n'));
 }
 
 /** Reconstruct the trajectory from the last persisted turn (D-MG9) + the fake gateway. */
