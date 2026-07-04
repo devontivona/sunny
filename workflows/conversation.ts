@@ -745,8 +745,8 @@ async function delegateStep(
   }
   return (
     `Delegated to subagent "${args.label ?? 'subagent'}" (id ${res.childThreadId}). It is working ` +
-    `in its own context and will report back here when done; you can keep going or steer it with ` +
-    `the message tool (pass its id).`
+    `in its own context and will report back here when done — the task is HANDLED, so do not ` +
+    `also work on it yourself. Move on (or steer it with the message tool, passing its id).`
   );
 }
 
