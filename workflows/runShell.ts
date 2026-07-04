@@ -62,6 +62,14 @@ export interface StreamAgentOpts {
   steering?: SteeringConfig;
   /** Present for the text-mode conversational turn; omit everywhere else. */
   translator?: TranslatorConfig;
+  /**
+   * Tools whose call ENDS the run (text mode: stay_silent). The tool's contract is "this
+   * turn produces nothing further" — enforcing it structurally is the only reliable stop:
+   * the trained end-with-text prior otherwise appends a delivered "(silent)"-style
+   * placeholder final (prompt guard + recency-positioned tool result measured 0/9 on the
+   * 2026-07-04 silence tier — the model even replied to the stop instruction in text).
+   */
+  stopOnTools?: string[];
 }
 
 /**
@@ -112,7 +120,9 @@ export async function streamAgent(opts: StreamAgentOpts): Promise<{
   const result = await agent.stream({
     messages: opts.messages,
     writable: getWritable<ModelCallStreamPart>(),
-    stopWhen: ({ steps }) => steps.length >= AGENT_STEP_LIMIT,
+    stopWhen: ({ steps }) =>
+      steps.length >= AGENT_STEP_LIMIT ||
+      (opts.stopOnTools !== undefined && lastStepCalled(steps, opts.stopOnTools)),
     telemetry: { isEnabled: false },
     prepareStep: async ({ stepNumber, messages, steps }) => {
       if (stepNumber === 0) return {};
@@ -163,6 +173,18 @@ export async function streamAgent(opts: StreamAgentOpts): Promise<{
   });
 
   return { result, usage, foldedIds, translatorUpdates };
+}
+
+/** Whether the LAST completed step called one of the run-terminating tools (stopOnTools). */
+function lastStepCalled(
+  steps: ReadonlyArray<{ content: ReadonlyArray<{ type: string; toolName?: string }> }>,
+  toolNames: string[],
+): boolean {
+  const last = steps[steps.length - 1];
+  if (!last) return false;
+  return last.content.some(
+    (p) => p.type === 'tool-call' && p.toolName !== undefined && toolNames.includes(p.toolName),
+  );
 }
 
 /** The narration text of a run of steps — the translator's interim source. Read from

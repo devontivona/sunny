@@ -144,6 +144,9 @@ export async function runConversation(input: ConversationInput): Promise<void> {
             send: (text) => sendStep(threadId, text),
           }
         : undefined,
+    // stay_silent is structurally TERMINAL in text mode: the turn ends at the call, so the
+    // trained end-with-text prior can never append a delivered "(silent)" placeholder step.
+    stopOnTools: setup.deliveryMode === 'text' ? ['stay_silent'] : undefined,
   });
 
   await finalizeTurn({
