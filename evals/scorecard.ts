@@ -35,6 +35,10 @@ export interface ScorecardConfig {
   inboundEnvelope?: boolean;
   fewshot?: boolean;
   composerAlways?: boolean;
+  /** Text-delivery migration grid axes (Phase 5/6). */
+  deliveryMode?: string;
+  translatorHistory?: string;
+  translatorEveryNSteps?: number;
 }
 
 export interface Scorecard {
@@ -66,7 +70,58 @@ export function cellSlug(model: string, config?: ScorecardConfig): string {
   if (config?.inboundEnvelope !== undefined) parts.push(`env${config.inboundEnvelope ? 1 : 0}`);
   if (config?.fewshot !== undefined) parts.push(`fs${config.fewshot ? 1 : 0}`);
   if (config?.composerAlways) parts.push('composer');
+  if (config?.deliveryMode) parts.push(`d-${config.deliveryMode}`);
+  if (config?.translatorHistory) parts.push(`th-${config.translatorHistory}`);
+  if (config?.translatorEveryNSteps) parts.push(`tn-${config.translatorEveryNSteps}`);
   return parts.join('__');
+}
+
+/**
+ * The silence-discipline tier (text-delivery migration hard gate): the cases whose PASS
+ * is "said nothing". The shelved d487a98 text-mode A/B over-talked 54% on acks, so a
+ * text cell must hold this tier AT OR ABOVE the tool baseline before the default flips.
+ */
+export const SILENCE_TIER = [
+  'elicitation/silence-when-nothing-to-say',
+  'elicitation/ack-thanks-after-task',
+  'elicitation/multiturn-debug-then-ack',
+];
+
+export interface SilenceGate {
+  rows: { name: string; baseline: number | null; current: number | null }[];
+  baselineMean: number | null;
+  currentMean: number | null;
+  /** Current mean ≥ baseline mean − epsilon (null means = not comparable → false). */
+  pass: boolean;
+}
+
+/** Compare the silence tier of a (text-cell) scorecard against the committed baseline. */
+export function silenceTierGate(
+  baseline: Scorecard | null,
+  current: Scorecard,
+  epsilon = 0.02,
+): SilenceGate {
+  const rate = (card: Scorecard | null, name: string): number | null => {
+    const c = card?.cases.find((x) => x.name === name);
+    return c && c.runs > 0 ? c.passRate : null;
+  };
+  const rows = SILENCE_TIER.map((name) => ({
+    name,
+    baseline: rate(baseline, name),
+    current: rate(current, name),
+  }));
+  const mean = (vals: (number | null)[]): number | null => {
+    const xs = vals.filter((v): v is number => v !== null);
+    return xs.length > 0 ? xs.reduce((s, v) => s + v, 0) / xs.length : null;
+  };
+  const baselineMean = mean(rows.map((r) => r.baseline));
+  const currentMean = mean(rows.map((r) => r.current));
+  return {
+    rows,
+    baselineMean,
+    currentMean,
+    pass: baselineMean !== null && currentMean !== null && currentMean >= baselineMean - epsilon,
+  };
 }
 
 export function summarizeDimensions(cases: CaseScore[]): Scorecard['dimensions'] {

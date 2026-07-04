@@ -2,7 +2,14 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { start } from 'workflow/api';
 import { runConversation } from '../workflows/conversation.js';
 import { ConversationStore } from '../src/gateway/store.js';
-import { classifyDelivery } from '../src/agent/turn.js';
+import {
+  classifyDelivery,
+  classifyTextDelivery,
+  extractFinalText,
+  extractInterimText,
+  extractTranslatorUpdates,
+} from '../src/agent/turn.js';
+import type { UIMessage } from 'ai';
 import { initMemory, memoryPaths } from '../src/memory/index.js';
 import { createTestDb } from '../tests/db.js';
 import { FakeGateway } from '../tests/fakes/gateway.js';
@@ -40,6 +47,12 @@ export function envRunConfig(env: NodeJS.ProcessEnv = process.env): Partial<Sunn
   // The composer cell defaults to Haiku (production recovery); override to measure the
   // ceiling with a stronger composer (e.g. EVAL_RECOVERY_MODEL=claude-sonnet-5).
   if (env.EVAL_RECOVERY_MODEL) rc.recoveryModelId = env.EVAL_RECOVERY_MODEL;
+  // Text-delivery migration (Phase 5/6 grid): the delivery-mode axis, the
+  // translator-history mini-axis, and the translator cadence.
+  if (env.EVAL_DELIVERY) rc.deliveryMode = env.EVAL_DELIVERY as SunnyConfig['deliveryMode'];
+  if (env.EVAL_TRANSLATOR_HISTORY)
+    rc.translatorHistory = env.EVAL_TRANSLATOR_HISTORY as SunnyConfig['translatorHistory'];
+  if (env.EVAL_TRANSLATOR_N) rc.translatorEveryNSteps = Number(env.EVAL_TRANSLATOR_N);
   return rc;
 }
 
@@ -155,7 +168,9 @@ export async function runEvalCase(
       await run.returnValue;
     }
 
-    const trajectory = await buildTrajectory(store, gateway);
+    // Mode-aware trajectory (text-delivery Phase 5): the same resolution setupTurn uses.
+    const deliveryMode = config.composerAlways ? 'text' : config.deliveryMode;
+    const trajectory = await buildTrajectory(store, gateway, deliveryMode);
     // EVAL_DUMP_DIR: write a human-readable transcript per case run (hand
     // sanity-checks). The few-shot block is prompt-input only (injected in
     // loadPending, never persisted), so it does not appear here — see
@@ -204,21 +219,40 @@ async function dumpTranscript(
       lines.push(`USER (${row.senderName ?? row.senderId}): ${row.text}`);
       continue;
     }
-    const payload = row.payload as { parts?: Array<Record<string, unknown>> } | null;
+    const payload = row.payload as {
+      parts?: Array<Record<string, unknown>>;
+      metadata?: { delivered?: string };
+    } | null;
     if (!payload?.parts) {
       lines.push(`ASSISTANT (legacy text): ${row.text}`);
       continue;
     }
     lines.push(`ASSISTANT turn:`);
-    for (const p of payload.parts) {
+    // Text-mode rows label text by position: [interim] narration at/before the last tool
+    // part, [reply] (the delivered final text) after it; relayed updates are [translator].
+    const textRow =
+      payload.metadata?.delivered === 'text' ||
+      payload.parts.some((p) => p.type === 'data-translator');
+    let lastTool = -1;
+    payload.parts.forEach((p, i) => {
+      if (String(p.type ?? '').startsWith('tool-')) lastTool = i;
+    });
+    payload.parts.forEach((p, i) => {
       const type = String(p.type ?? '');
-      if (type === 'text') lines.push(`  [scratch] ${String(p.text ?? '').replace(/\n/g, '\n            ')}`);
-      else if (type === 'tool-send_message')
+      const indent = (label: string, text: string) =>
+        lines.push(`  [${label}] ${text.replace(/\n/g, `\n   ${' '.repeat(label.length)}`)}`);
+      if (type === 'text') {
+        indent(textRow ? (i > lastTool ? 'reply' : 'interim') : 'scratch', String(p.text ?? ''));
+      } else if (type === 'data-translator') {
+        indent('translator', String((p.data as { text?: string })?.text ?? ''));
+      } else if (type === 'tool-send_message') {
         lines.push(`  → send_message(${JSON.stringify((p.input as { text?: string })?.text ?? '')})`);
-      else if (type === 'tool-stay_silent') lines.push(`  → stay_silent()`);
-      else if (type.startsWith('tool-'))
+      } else if (type === 'tool-stay_silent') {
+        lines.push(`  → stay_silent()`);
+      } else if (type.startsWith('tool-')) {
         lines.push(`  → ${type.slice(5)}(${JSON.stringify(p.input ?? {}).slice(0, 200)})`);
-    }
+      }
+    });
   }
   mkdirSync(dir, { recursive: true });
   const slug = caseName.replace(/[^a-z0-9-]+/gi, '_');
@@ -229,10 +263,13 @@ async function dumpTranscript(
   writeFileSync(`${dir}/${slug}.${n}.md`, lines.join('\n'));
 }
 
-/** Reconstruct the trajectory from the last persisted turn (D-MG9) + the fake gateway. */
+/** Reconstruct the trajectory from the last persisted turn (D-MG9) + the fake gateway.
+ *  Mode-aware (text-delivery Phase 5): in text mode the reply is the turn's FINAL text,
+ *  the "scratch" is the interim narration, and relayed translator updates are surfaced. */
 async function buildTrajectory(
   store: ConversationStore,
   gateway: FakeGateway,
+  deliveryMode: 'tool' | 'text' = 'tool',
 ): Promise<Trajectory> {
   const window = await store.recentWindow(OWNER_THREAD);
   const lastTurn = [...window].reverse().find((m) => m.role === 'assistant');
@@ -244,18 +281,31 @@ async function buildTrajectory(
       usage?: { in?: number | null; out?: number | null; cached?: number | null };
     };
   };
+  const uiParts = payload.parts as unknown as UIMessage['parts'];
 
   const toolCalls: ToolCallRecord[] = payload.parts
     .filter((p) => p.type.startsWith('tool-'))
     .map((p) => ({ name: p.type.slice('tool-'.length), input: p.input }));
-  const scratch = payload.parts
-    .filter((p) => p.type === 'text')
-    .map((p) => p.text ?? '')
-    .join('\n')
-    .trim();
+
+  const textMode = deliveryMode === 'text';
+  const interimText = textMode ? extractInterimText(uiParts) : '';
+  const scratch = textMode
+    ? interimText
+    : payload.parts
+        .filter((p) => p.type === 'text')
+        .map((p) => p.text ?? '')
+        .join('\n')
+        .trim();
+  const finalText = textMode ? extractFinalText(uiParts) : gateway.texts().join('\n');
+  const translatorUpdates = extractTranslatorUpdates(uiParts).map((u) => u.text);
 
   const sends = gateway.texts();
-  const delivered = payload.metadata?.delivered ?? classifyDelivery(gateway.sendCount, scratch);
+  const staySilent = toolCalls.some((tc) => tc.name === 'stay_silent');
+  const delivered =
+    payload.metadata?.delivered ??
+    (textMode
+      ? classifyTextDelivery(finalText, interimText, staySilent)
+      : classifyDelivery(gateway.sendCount, scratch));
   const u = payload.metadata?.usage;
 
   return {
@@ -266,8 +316,10 @@ async function buildTrajectory(
     // The model's `start_job` choices, from the persisted turn parts (the durable `startJobStep`
     // launches the real job; graders only need that the model *chose* it).
     startJobs: toolCalls.filter((tc) => tc.name === 'start_job'),
-    finalText: sends.join('\n'),
+    finalText,
     scratch,
+    translatorUpdates,
+    interimText,
     usage: {
       inputTokens: u?.in ?? 0,
       outputTokens: u?.out ?? 0,

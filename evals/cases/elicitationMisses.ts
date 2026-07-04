@@ -1,10 +1,10 @@
 import {
-  deliveredViaSendMessage,
+  deliveredReply,
   elicitedWithoutRecovery,
   noFallback,
   scratchNotSecondPerson,
 } from '../graders.js';
-import { scratchIsWorkingNotes } from '../judge.js';
+import { replyComplete, scratchIsWorkingNotes, translatorFidelity } from '../judge.js';
 import { REAL_MISSES, type RealMiss } from './fixtures/realMisses.js';
 import type { ConversationSeed, EvalCase } from '../types.js';
 
@@ -57,11 +57,13 @@ function chainCase(opts: {
     setup: { conversation: priorExchanges(opts.prior.map(miss), opts.poisoned) },
     input: opts.input,
     graders: [
-      deliveredViaSendMessage,
+      deliveredReply,
       noFallback,
       elicitedWithoutRecovery,
       scratchIsWorkingNotes,
       scratchNotSecondPerson,
+      replyComplete,
+      translatorFidelity,
     ],
   };
 }

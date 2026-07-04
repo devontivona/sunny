@@ -1,4 +1,4 @@
-import { deliveredViaSendMessage, memoryWritten, replyMentions, toolCalled } from '../graders.js';
+import { deliveredReply, memoryWritten, replyMentions, toolCalled } from '../graders.js';
 import { rubricJudge } from '../judge.js';
 import type { EvalCase } from '../types.js';
 
@@ -16,7 +16,7 @@ export const memoryCases: EvalCase[] = [
       memory: [{ file: 'USER', action: 'add', content: '- Allergic to peanuts' }],
     },
     input: 'is it safe for me to eat a Snickers bar?',
-    graders: [deliveredViaSendMessage, replyMentions('peanut')],
+    graders: [deliveredReply, replyMentions('peanut')],
   },
   {
     name: 'memory/records-durable-fact',

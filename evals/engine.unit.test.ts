@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { BudgetExceededError, CostMeter, estimateCostUsd } from './cost.js';
 import {
   casePassed,
+  SILENCE_TIER,
   cellSlug,
   diffScorecards,
+  silenceTierGate,
   summarizeDimensions,
   type CaseScore,
   type Scorecard,
@@ -26,6 +28,8 @@ function trajectory(overrides: Partial<Trajectory> = {}): Trajectory {
     startJobs: [],
     finalText: '',
     scratch: '',
+    translatorUpdates: [],
+    interimText: '',
     usage: { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 },
     ...overrides,
   };
@@ -154,6 +158,51 @@ describe('cellSlug', () => {
         fewshot: true,
       }),
     ).toBe('claude-opus-4-8__t-off__v-gateway__fs1');
+  });
+
+  it('encodes the text-delivery grid axes', () => {
+    expect(
+      cellSlug('claude-sonnet-5', { deliveryMode: 'text', translatorHistory: 'excluded' }),
+    ).toBe('claude-sonnet-5__d-text__th-excluded');
+  });
+});
+
+describe('silenceTierGate (the d487a98 over-talk gate)', () => {
+  const card = (rates: Record<string, number>): Scorecard => ({
+    model: 'claude-sonnet-5',
+    timestamp: 't',
+    n: 5,
+    costUsd: 0,
+    dimensions: {},
+    cases: SILENCE_TIER.map((name) => ({
+      name,
+      dimension: 'elicitation' as const,
+      runs: 5,
+      passes: Math.round((rates[name] ?? 0) * 5),
+      passRate: rates[name] ?? 0,
+      threshold: 0.6,
+      pass: true,
+      graderPasses: {},
+    })),
+  });
+
+  it('passes when the text cell holds the tier at/above baseline', () => {
+    const baseline = card(Object.fromEntries(SILENCE_TIER.map((n) => [n, 0.8])));
+    const current = card(Object.fromEntries(SILENCE_TIER.map((n) => [n, 0.8])));
+    const gate = silenceTierGate(baseline, current);
+    expect(gate.pass).toBe(true);
+    expect(gate.baselineMean).toBeCloseTo(0.8);
+  });
+
+  it('fails on an over-talk regression beyond epsilon', () => {
+    const baseline = card(Object.fromEntries(SILENCE_TIER.map((n) => [n, 0.8])));
+    const current = card(Object.fromEntries(SILENCE_TIER.map((n) => [n, 0.4])));
+    expect(silenceTierGate(baseline, current).pass).toBe(false);
+  });
+
+  it('is not comparable (fails closed) without a baseline', () => {
+    const current = card(Object.fromEntries(SILENCE_TIER.map((n) => [n, 1])));
+    expect(silenceTierGate(null, current).pass).toBe(false);
   });
 });
 

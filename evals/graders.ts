@@ -21,6 +21,19 @@ export const deliveredViaSendMessage: Grader = (t) =>
   pass('delivered-via-send_message', t.delivered === 'send_message', `delivered=${t.delivered}`);
 
 /**
+ * The reply reached the user by the active mode's intended path — `send_message`
+ * (tool mode) OR direct final text (text mode). The mode-agnostic delivery grader
+ * every substantive case wires (text-delivery migration, Phase 5), so the same
+ * dataset gates both cells of the EVAL_DELIVERY grid.
+ */
+export const deliveredReply: Grader = (t) =>
+  pass(
+    'delivered-reply',
+    t.delivered === 'send_message' || t.delivered === 'text',
+    `delivered=${t.delivered}`,
+  );
+
+/**
  * No message reached the user — the silence outcome. Asserts on the user-facing
  * fact (zero outbound) rather than the internal `delivered` label: with the
  * fallback removed, raw model text is never delivered, so "deliberate silence"
@@ -57,7 +70,7 @@ export const noRecovery: Grader = (t) =>
 export const elicitedWithoutRecovery: Grader = (t) =>
   pass(
     'elicited-without-recovery',
-    t.delivered === 'send_message' && !t.recovered,
+    (t.delivered === 'send_message' || t.delivered === 'text') && !t.recovered,
     `delivered=${t.delivered} recovered=${t.recovered}`,
   );
 

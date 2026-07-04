@@ -1,5 +1,5 @@
 import {
-  deliveredViaSendMessage,
+  deliveredReply,
   sentSomething,
   startedJob,
   toolCalled,
@@ -32,7 +32,7 @@ export const toolSelectionCases: EvalCase[] = [
     dimension: 'tool-selection',
     input: 'hey sunny!',
     graders: [
-      deliveredViaSendMessage,
+      deliveredReply,
       toolNotCalled('start_job'),
       toolNotCalled('schedule_create'),
     ],

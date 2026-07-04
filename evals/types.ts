@@ -27,10 +27,16 @@ export interface Trajectory {
   recovered: boolean;
   /** The `start_job` tool calls the model elected to make (from the persisted turn parts). */
   startJobs: ToolCallRecord[];
-  /** The user-facing reply text (sends joined) — the judge's `output`. */
+  /** The user-facing reply text — the judge's `output`. Tool mode: the sends joined.
+   *  Text mode: the turn's FINAL text (the delivered bubbles' source). */
   finalText: string;
-  /** The private scratchpad text (never delivered). */
+  /** The never-delivered-raw text: all scratch (tool mode) or the interim narration
+   *  (text mode — the translator's source material). */
   scratch: string;
+  /** Progress updates the translator relayed (text mode; empty in tool mode). */
+  translatorUpdates: string[];
+  /** The interim narration of a text-mode turn ('' in tool mode; = scratch there). */
+  interimText: string;
   /** Token usage of the turn under test (from the persisted D-MG9 metadata), for cost. */
   usage: TurnUsage;
 }

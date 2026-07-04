@@ -1,11 +1,11 @@
 import { readFileSync } from 'node:fs';
 import {
-  deliveredViaSendMessage,
+  deliveredReply,
   elicitedWithoutRecovery,
   noFallback,
   scratchNotSecondPerson,
 } from '../graders.js';
-import { scratchIsWorkingNotes } from '../judge.js';
+import { replyComplete, scratchIsWorkingNotes, translatorFidelity } from '../judge.js';
 import type { EvalCase, FixtureTurn } from '../types.js';
 
 /**
@@ -45,11 +45,13 @@ function realCase(name: string, file: string): EvalCase {
     setup: { fixtureTurns: fx.turns, memoryCore: fx.memoryCore },
     input: fx.input,
     graders: [
-      deliveredViaSendMessage,
+      deliveredReply,
       noFallback,
       elicitedWithoutRecovery,
       scratchIsWorkingNotes,
       scratchNotSecondPerson,
+      replyComplete,
+      translatorFidelity,
     ],
   };
 }
