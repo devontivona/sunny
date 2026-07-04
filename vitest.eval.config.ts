@@ -16,7 +16,9 @@ export default defineConfig({
   test: {
     include: ['evals/**/*.eval.test.ts'],
     setupFiles: ['./tests/setup/env.ts'], // ANTHROPIC_API_KEY etc.
-    testTimeout: 600_000, // a full N-run scorecard against a real model is long; the cost cap bounds it
+    // A full N-run scorecard against a real model is long (the enlarged case set at N=5
+    // exceeds 10 min); the cost cap bounds spend, EVAL_TIMEOUT_MS bounds wall time.
+    testTimeout: Number(process.env.EVAL_TIMEOUT_MS ?? 1_800_000),
     hookTimeout: 120_000,
     fileParallelism: false, // one Local World + one PGlite store at a time
   },

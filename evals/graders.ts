@@ -100,6 +100,26 @@ export function memoryWritten(file: 'USER' | 'SUNNY' | 'INDEX', contentMatches: 
   };
 }
 
+/**
+ * Deterministic cross-check for the scratch-quality judge (advisory): flags
+ * scratch that directly addresses the user. A crude heuristic on purpose — it
+ * counts second-person pronouns — so it's free, unmeterable-cost-proof, and
+ * catches gross leaks; the judge grader covers the fuzzy middle. Vacuous pass
+ * on empty scratch (no scratch is the ideal, not a gap).
+ */
+export const scratchNotSecondPerson: Grader = (t) => {
+  if (!t.scratch) return { ...pass('scratch-not-second-person', true), advisory: true };
+  const hits = t.scratch.match(/\byou(?:r|'re|'ve|'ll|'d)?\b/gi)?.length ?? 0;
+  const words = t.scratch.split(/\s+/).length;
+  // ≥2 second-person hits AND >2 per 100 words — a lone "what the user ('you') asked"
+  // style mention shouldn't trip it, a composed reply will.
+  const leaked = hits >= 2 && hits / words > 0.02;
+  return {
+    ...pass('scratch-not-second-person', !leaked, `hits=${hits} words=${words}`),
+    advisory: true,
+  };
+};
+
 /** The user-facing reply mentions all of the given facts (case-insensitive). */
 export function replyMentions(...needles: string[]): Grader {
   return (t) => {

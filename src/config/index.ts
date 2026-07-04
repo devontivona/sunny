@@ -24,6 +24,30 @@ export const ConfigSchema = z.object({
    * that makes the model over-choose silence.
    */
   deliveryMode: z.enum(['tool', 'text']).default('tool'),
+  /**
+   * System-prompt framing experiment (elicitation): how the prompt frames who the
+   * model's raw text output is addressed to. `baseline` — today's prompt, byte-identical.
+   * `gateway` — the conversation is with a relay that forwards messages both ways and
+   * reads (but never forwards) the model's raw output. `diary` — raw text is a private
+   * worklog written after acting. Only affects `deliveryMode: 'tool'`.
+   */
+  promptVariant: z.enum(['baseline', 'gateway', 'diary']).default('baseline'),
+  /** Prefix EVERY inbound user message (DM and group) with a relay envelope naming the
+   *  sender/channel — recency-positioned reinforcement that the message arrived via a
+   *  channel, not as raw conversation. Applied at read time (no persisted-row change). */
+  inboundEnvelope: z.boolean().default(false),
+  /** Prepend a canned few-shot exchange block (correct send_message/stay_silent usage)
+   *  to every conversation window. */
+  fewshot: z.boolean().default(false),
+  /**
+   * Architectural reference arm (eval-only in spirit): the two-model-pass design as the
+   * PRIMARY path. The turn runs with the text-mode prompt (the model replies naturally in
+   * plain text — no send_message pressure, zero fight with training), and the composer
+   * (the recovery pass) rewrites that text into the delivered iMessage on every
+   * substantive turn. Delivery is ~100% by construction; the eval cell measures what
+   * that buys and what it costs in voice/latency. Not intended for production.
+   */
+  composerAlways: z.boolean().default(false),
   /** Devon's timezone (used by scheduling later). */
   timezone: z.string().default('America/New_York'),
   /** Owner identity allowlist — phone numbers / emails (messaging-gateway D-MG6, task 2.4). */

@@ -27,6 +27,9 @@ export interface SteeringConfig {
   inboxThreadId: string;
   isGroup: boolean;
   baseExcludeIds: string[];
+  /** Wrap folded steers in the relay envelope (config.inboundEnvelope), matching
+   *  how the window's user messages were rendered. */
+  envelope?: boolean;
 }
 
 export interface StreamAgentOpts {
@@ -94,7 +97,7 @@ export async function streamAgent(opts: StreamAgentOpts): Promise<{
             content: [
               {
                 type: 'text' as const,
-                text: steerMessageText(s.text, s.senderName, steering.isGroup),
+                text: steerMessageText(s.text, s.senderName, steering.isGroup, steering.envelope),
               },
             ],
           })),

@@ -43,6 +43,57 @@ describe('buildSystemPrompt', () => {
     expect(before).not.toBe(after);
   });
 
+  it('baseline promptVariant is byte-identical to an unset variant (experiment control)', () => {
+    const c = core({ user: '- Name: Devon' });
+    const unset = buildSystemPrompt(config, c);
+    const explicit = buildSystemPrompt(
+      makeConfig({ owner: { name: 'Devon', identities: [] }, promptVariant: 'baseline' }),
+      c,
+    );
+    expect(explicit).toBe(unset);
+    // Baseline copy anchors (the exact lines the variants replace).
+    expect(unset).toContain('send_message is your ONLY voice');
+    expect(unset).toContain('private scratchpad');
+  });
+
+  it('gateway variant reframes identity + delivery; diary reframes delivery only', () => {
+    const c = core({ user: '- Name: Devon' });
+    const gateway = buildSystemPrompt(
+      makeConfig({ owner: { name: 'Devon', identities: [] }, promptVariant: 'gateway' }),
+      c,
+    );
+    expect(gateway).toContain('the Gateway');
+    expect(gateway).toContain('[relayed from Devon]');
+    expect(gateway).not.toContain('send_message is your ONLY voice');
+
+    const diary = buildSystemPrompt(
+      makeConfig({ owner: { name: 'Devon', identities: [] }, promptVariant: 'diary' }),
+      c,
+    );
+    expect(diary).toContain('work diary');
+    // Diary keeps the baseline identity line verbatim.
+    expect(diary).toContain('You communicate over iMessage');
+    expect(diary).not.toContain('the Gateway');
+
+    // Both variants keep the invariant mechanics: sends, silence, turn-end check.
+    for (const p of [gateway, diary]) {
+      expect(p).toContain('send_message');
+      expect(p).toContain('stay_silent');
+      expect(p).toContain('does NOT end the turn');
+    }
+  });
+
+  it('promptVariant does not alter text delivery mode', () => {
+    const c = core({ user: '- Name: Devon' });
+    const base = buildSystemPrompt(config, c, 'text');
+    const varied = buildSystemPrompt(
+      makeConfig({ owner: { name: 'Devon', identities: [] }, promptVariant: 'gateway' }),
+      c,
+      'text',
+    );
+    expect(varied).toBe(base);
+  });
+
   it('is byte-identical when the people context is empty (owner-only cache preserved)', () => {
     const c = core({ user: '- Name: Devon' });
     const plain = buildSystemPrompt(config, c);

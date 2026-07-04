@@ -1,13 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import { BudgetExceededError, CostMeter, estimateCostUsd } from './cost.js';
 import {
+  casePassed,
+  cellSlug,
   diffScorecards,
   summarizeDimensions,
   type CaseScore,
   type Scorecard,
 } from './scorecard.js';
-import { deliveredViaSendMessage, sendCount, toolCalled, toolNotCalled } from './graders.js';
-import type { Trajectory } from './types.js';
+import {
+  deliveredViaSendMessage,
+  scratchNotSecondPerson,
+  sendCount,
+  toolCalled,
+  toolNotCalled,
+} from './graders.js';
+import { historyTier, type EvalCase, type Trajectory } from './types.js';
 
 function trajectory(overrides: Partial<Trajectory> = {}): Trajectory {
   return {
@@ -74,6 +82,78 @@ describe('programmatic graders', () => {
     expect((await toolCalled('schedule_create')(t, {} as never)).pass).toBe(true);
     expect((await toolNotCalled('start_job')(t, {} as never)).pass).toBe(true);
     expect((await toolNotCalled('schedule_create')(t, {} as never)).pass).toBe(false);
+  });
+});
+
+describe('scratchNotSecondPerson (advisory heuristic)', () => {
+  it('vacuously passes on empty scratch (no scratch is the ideal)', async () => {
+    const r = await scratchNotSecondPerson(trajectory({ scratch: '' }), {} as never);
+    expect(r.pass).toBe(true);
+    expect(r.advisory).toBe(true);
+  });
+
+  it('flags a composed reply written into scratch', async () => {
+    const r = await scratchNotSecondPerson(
+      trajectory({ scratch: "Going well on my end. How are you doing? Did you get your rest?" }),
+      {} as never,
+    );
+    expect(r.pass).toBe(false);
+    expect(r.advisory).toBe(true);
+  });
+
+  it('tolerates working notes with a lone user mention', async () => {
+    const r = await scratchNotSecondPerson(
+      trajectory({
+        scratch:
+          'Weighed beach vs city — user said warm, so leaning beach. Trimmed the budget ' +
+          'airline options since they ("you") never book basic economy. Kept Miami and San Juan.',
+      }),
+      {} as never,
+    );
+    expect(r.pass).toBe(true);
+  });
+});
+
+describe('casePassed (advisory exclusion)', () => {
+  it('ignores failing advisory grades but honors failing gating grades', () => {
+    const gating = { name: 'g', pass: true, score: 1 };
+    const advisoryFail = { name: 'a', pass: false, score: 0, advisory: true };
+    expect(casePassed([gating, advisoryFail])).toBe(true);
+    expect(casePassed([{ ...gating, pass: false, score: 0 }, advisoryFail])).toBe(false);
+    expect(casePassed([advisoryFail])).toBe(true);
+  });
+});
+
+describe('historyTier', () => {
+  const base: EvalCase = { name: 'x', dimension: 'elicitation', input: 'hi', graders: [] };
+  it('derives live / seeded-clean / seeded-poisoned and honors the explicit tag', () => {
+    expect(historyTier(base)).toBe('live');
+    expect(
+      historyTier({ ...base, setup: { conversation: [{ role: 'user', text: 'a' }] } }),
+    ).toBe('seeded-clean');
+    expect(
+      historyTier({ ...base, setup: { fixtureTurns: [{ role: 'user', text: 'a' }] } }),
+    ).toBe('seeded-poisoned');
+    expect(
+      historyTier({
+        ...base,
+        history: 'seeded-poisoned',
+        setup: { conversation: [{ role: 'user', text: 'a' }] },
+      }),
+    ).toBe('seeded-poisoned');
+  });
+});
+
+describe('cellSlug', () => {
+  it('encodes only the forced knobs', () => {
+    expect(cellSlug('claude-sonnet-5')).toBe('claude-sonnet-5');
+    expect(
+      cellSlug('claude-opus-4-8', {
+        thinking: 'off',
+        promptVariant: 'gateway',
+        fewshot: true,
+      }),
+    ).toBe('claude-opus-4-8__t-off__v-gateway__fs1');
   });
 });
 

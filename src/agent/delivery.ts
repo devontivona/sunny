@@ -173,6 +173,36 @@ export function groupSpeakerPrefix(senderName: string | undefined, isOwner: bool
 }
 
 /**
+ * Relay envelope for an inbound user message (elicitation experiment,
+ * `config.inboundEnvelope`) — e.g. `[iMessage from Devon] `. Marks EVERY user
+ * message (DM and group) as having arrived via a channel relay, reinforcing at
+ * the RECENT end of the context — where instructions actually win in long
+ * threads — that replies travel back the same way (send_message), not as raw
+ * conversation text. Token-lean on purpose. The `(owner)` tag only matters where
+ * senders can differ (groups), matching `groupSpeakerPrefix`.
+ */
+export function envelopePrefix(
+  senderName: string | undefined,
+  isOwner: boolean,
+  isGroup: boolean,
+): string {
+  if (!senderName) return '[iMessage] ';
+  return `[iMessage from ${senderName}${isGroup && isOwner ? ' (owner)' : ''}] `;
+}
+
+/** The prefix for an inbound user message under the active config: envelope when
+ *  enabled (all threads), else the group speaker prefix (groups only). */
+export function userMessagePrefix(
+  senderName: string | undefined,
+  isOwner: boolean,
+  isGroup: boolean,
+  envelope: boolean,
+): string {
+  if (envelope) return envelopePrefix(senderName, isOwner, isGroup);
+  return isGroup ? groupSpeakerPrefix(senderName, isOwner) : '';
+}
+
+/**
  * Render a steered/folded-in message's text for a model `user` turn (D-DE steering;
  * task 1.3). In a group, prefix the sender name so the model can follow who said what
  * (R1); in a DM, the text passes through unchanged. The shared seam used by both the
@@ -184,7 +214,12 @@ export function steerMessageText(
   text: string,
   senderName: string | undefined,
   isGroup: boolean,
+  envelope = false,
 ): string {
+  // Envelope mode wraps steers too, so mid-turn arrivals read like every other
+  // relayed message. (Steer rows don't carry `isOwner`; the group owner tag is
+  // a group-disambiguation nicety, not a correctness bit, so it's omitted here.)
+  if (envelope) return envelopePrefix(senderName, false, isGroup) + text;
   return isGroup && senderName ? `${senderName}: ${text}` : text;
 }
 

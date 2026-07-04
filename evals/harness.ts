@@ -6,7 +6,14 @@ import { classifyDelivery } from '../src/agent/turn.js';
 import { initMemory, memoryPaths } from '../src/memory/index.js';
 import { createTestDb } from '../tests/db.js';
 import { FakeGateway } from '../tests/fakes/gateway.js';
-import { makeChannelEvent, makeConfig, seedMemory, OWNER_THREAD } from '../tests/factories.js';
+import {
+  makeAssistantTurnPayload,
+  makeChannelEvent,
+  makeConfig,
+  seedMemory,
+  OWNER_THREAD,
+} from '../tests/factories.js';
+import type { SunnyConfig } from '../src/config/index.js';
 import type { EvalCase, ToolCallRecord, Trajectory } from './types.js';
 
 const RUNTIME_KEY = Symbol.for('sunny.runtime');
@@ -14,6 +21,27 @@ const g = globalThis as Record<symbol, unknown>;
 
 /** The production model under test by default (design D14 — "practice like we play"). */
 export const DEFAULT_MODEL_ID = 'claude-sonnet-5';
+
+/**
+ * Run-level config knobs from env (grid cells): EVAL_THINKING / EVAL_EFFORT /
+ * EVAL_PROMPT_VARIANT / EVAL_FEWSHOT / EVAL_COMPOSER. An unset (empty) var means
+ * "config default" — omitted entirely, so the default cell stays byte-identical
+ * to production behavior.
+ */
+export function envRunConfig(env: NodeJS.ProcessEnv = process.env): Partial<SunnyConfig> {
+  const rc: Partial<SunnyConfig> = {};
+  if (env.EVAL_THINKING) rc.thinking = env.EVAL_THINKING as SunnyConfig['thinking'];
+  if (env.EVAL_EFFORT) rc.effort = env.EVAL_EFFORT as SunnyConfig['effort'];
+  if (env.EVAL_PROMPT_VARIANT)
+    rc.promptVariant = env.EVAL_PROMPT_VARIANT as SunnyConfig['promptVariant'];
+  if (env.EVAL_ENVELOPE) rc.inboundEnvelope = env.EVAL_ENVELOPE === '1';
+  if (env.EVAL_FEWSHOT) rc.fewshot = env.EVAL_FEWSHOT === '1';
+  if (env.EVAL_COMPOSER) rc.composerAlways = env.EVAL_COMPOSER === '1';
+  // The composer cell defaults to Haiku (production recovery); override to measure the
+  // ceiling with a stronger composer (e.g. EVAL_RECOVERY_MODEL=claude-sonnet-5).
+  if (env.EVAL_RECOVERY_MODEL) rc.recoveryModelId = env.EVAL_RECOVERY_MODEL;
+  return rc;
+}
 
 /**
  * Behavioral eval harness (task 7.1 / agent-evals spec) — DURABLE path.
@@ -29,9 +57,16 @@ export const DEFAULT_MODEL_ID = 'claude-sonnet-5';
  * MUST run under the workflow Vitest config (`vitest.eval.config.ts`) so the `'use workflow'`
  * transform is active — `tsx` cannot run a durable workflow.
  */
-export async function runEvalCase(c: EvalCase, modelId = DEFAULT_MODEL_ID): Promise<Trajectory> {
+export async function runEvalCase(
+  c: EvalCase,
+  modelId = DEFAULT_MODEL_ID,
+  // Run-level knobs (thinking/effort/promptVariant/fewshot/…) win over case config:
+  // case `setup.config` encodes case semantics (e.g. a tiny recentWindowSize); the
+  // comparison grid must be able to force one configuration uniformly.
+  runConfig: Partial<SunnyConfig> = {},
+): Promise<Trajectory> {
   const tdb = await createTestDb();
-  const config = makeConfig({ modelId, ...c.setup?.config });
+  const config = makeConfig({ ...c.setup?.config, modelId, ...runConfig });
   await initMemory(config); // create the memory tree so instruction assembly reads clean files
   await seedMemory(config, c.setup?.memory ?? []);
 
@@ -49,8 +84,9 @@ export async function runEvalCase(c: EvalCase, modelId = DEFAULT_MODEL_ID): Prom
   const store = new ConversationStore(tdb.db, config.recentWindowSize);
   const gateway = new FakeGateway();
   // Inject the runtime the workflow's `'use step'` units read via `getRuntime()` (same seam the
-  // production memo + the workflow test harness use).
-  g[RUNTIME_KEY] = Promise.resolve({ config, gateway, store, db: tdb.db });
+  // production memo + the workflow test harness use). `stubJobs`: a start_job choice is graded,
+  // but the job itself must not run (real model + a zombie run that blocks teardown).
+  g[RUNTIME_KEY] = Promise.resolve({ config, gateway, store, db: tdb.db, stubJobs: true });
 
   try {
     // Seed prior conversation through the real store (so format drift is caught).
@@ -67,6 +103,16 @@ export async function runEvalCase(c: EvalCase, modelId = DEFAULT_MODEL_ID): Prom
             isOwner: c.setup?.isOwner ?? true,
             isGroup: c.setup?.isGroup ?? false,
           }),
+        );
+      } else if (seed.scratch != null || seed.sends) {
+        // Rich assistant turn (scratch and/or multiple bubbles): persist a real
+        // D-MG9 turn payload so history replays the exact production shape —
+        // incl. the deliberately poisoned scratch-only turns of miss-chain cases.
+        const sends = seed.sends ?? (seed.text ? [seed.text] : []);
+        await store.appendTurn(
+          OWNER_THREAD,
+          makeAssistantTurnPayload({ scratch: seed.scratch, sends, id: `seed-${n}` }),
+          sends.join('\n') || seed.text,
         );
       } else {
         await store.appendOutbound(OWNER_THREAD, `seed-${n}`, seed.text);
@@ -109,11 +155,78 @@ export async function runEvalCase(c: EvalCase, modelId = DEFAULT_MODEL_ID): Prom
       await run.returnValue;
     }
 
-    return await buildTrajectory(store, gateway);
+    const trajectory = await buildTrajectory(store, gateway);
+    // EVAL_DUMP_DIR: write a human-readable transcript per case run (hand
+    // sanity-checks). The few-shot block is prompt-input only (injected in
+    // loadPending, never persisted), so it does not appear here — see
+    // src/agent/fewshot.ts for its verbatim content.
+    if (process.env.EVAL_DUMP_DIR) {
+      await dumpTranscript(process.env.EVAL_DUMP_DIR, c.name, store, trajectory);
+    }
+    return trajectory;
   } finally {
-    delete g[RUNTIME_KEY];
-    await tdb.teardown();
+    // TOMBSTONE, never delete: an abandoned (parked/hung) run's step can wake
+    // minutes later and call getRuntime() — with the key ABSENT the production
+    // memo boots the REAL runtime (Sendblue gateway + scheduler + the real
+    // DATABASE_URL) inside the eval process (observed 2026-07-04; no sends went
+    // out, but only because the process died before a scheduler tick). The
+    // tombstone keeps zombies sandboxed: a fresh FakeGateway swallows any late
+    // send; the torn-down store just fails their steps.
+    g[RUNTIME_KEY] = Promise.resolve({
+      config,
+      gateway: new FakeGateway(),
+      store,
+      db: tdb.db,
+      stubJobs: true,
+    });
+    // Best-effort: a leaked background run holding the PGlite connection can make
+    // close() hang; an abandoned world is cheaper than a stuck scorecard. The
+    // escape timer stays REF'D — unref'd it can be the last live handle and the
+    // process exits cleanly mid-scorecard (see withWatchdog in run.eval.test.ts).
+    await Promise.race([
+      tdb.teardown().catch(() => {}),
+      new Promise((resolve) => setTimeout(resolve, 15_000)),
+    ]);
   }
+}
+
+/** Render the full stored window + graded-turn verdict to EVAL_DUMP_DIR (one md per run). */
+async function dumpTranscript(
+  dir: string,
+  caseName: string,
+  store: ConversationStore,
+  t: Trajectory,
+): Promise<void> {
+  const window = await store.recentWindow(OWNER_THREAD);
+  const lines: string[] = [`# ${caseName}`, ``, `delivered=${t.delivered} recovered=${t.recovered}`, ``];
+  for (const row of window) {
+    if (row.role === 'user') {
+      lines.push(`USER (${row.senderName ?? row.senderId}): ${row.text}`);
+      continue;
+    }
+    const payload = row.payload as { parts?: Array<Record<string, unknown>> } | null;
+    if (!payload?.parts) {
+      lines.push(`ASSISTANT (legacy text): ${row.text}`);
+      continue;
+    }
+    lines.push(`ASSISTANT turn:`);
+    for (const p of payload.parts) {
+      const type = String(p.type ?? '');
+      if (type === 'text') lines.push(`  [scratch] ${String(p.text ?? '').replace(/\n/g, '\n            ')}`);
+      else if (type === 'tool-send_message')
+        lines.push(`  → send_message(${JSON.stringify((p.input as { text?: string })?.text ?? '')})`);
+      else if (type === 'tool-stay_silent') lines.push(`  → stay_silent()`);
+      else if (type.startsWith('tool-'))
+        lines.push(`  → ${type.slice(5)}(${JSON.stringify(p.input ?? {}).slice(0, 200)})`);
+    }
+  }
+  mkdirSync(dir, { recursive: true });
+  const slug = caseName.replace(/[^a-z0-9-]+/gi, '_');
+  // One file per run: suffix with an increment to keep N>1 runs apart.
+  let n = 1;
+  const { existsSync } = await import('node:fs');
+  while (existsSync(`${dir}/${slug}.${n}.md`)) n += 1;
+  writeFileSync(`${dir}/${slug}.${n}.md`, lines.join('\n'));
 }
 
 /** Reconstruct the trajectory from the last persisted turn (D-MG9) + the fake gateway. */

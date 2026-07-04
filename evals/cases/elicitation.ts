@@ -2,10 +2,11 @@ import {
   deliveredViaSendMessage,
   elicitedWithoutRecovery,
   finalTurnSilent,
-  isSilent,
   noFallback,
+  scratchNotSecondPerson,
   sentSomething,
 } from '../graders.js';
+import { scratchIsWorkingNotes } from '../judge.js';
 import type { EvalCase } from '../types.js';
 
 /**
@@ -22,71 +23,80 @@ import type { EvalCase } from '../types.js';
  * each turn live — and grade the FINAL turn (the harness builds the trajectory
  * from the last assistant turn). The back-and-forth is what stresses elicitation;
  * the historical misses clustered in multi-step / mid-conversation turns.
+ *
+ * SEEDING POLICY (seed audit, 2026-07): these cases seed NO history — every prior
+ * turn is played live by the model under test, so history is realistic by
+ * construction (real tool calls, real send/scratch shapes). Hand-seeded history
+ * belongs only in cases that deliberately pin a shape (see elicitationMisses.ts).
+ *
+ * Substantive cases also carry the ADVISORY scratch-quality graders — they measure
+ * the dual-channel failure (user-addressed language written into private text even
+ * when the reply was delivered) without gating case pass/fail.
  */
+const scratchAdvisory = [scratchIsWorkingNotes, scratchNotSecondPerson];
+
 export const elicitationCases: EvalCase[] = [
   {
     // 8.1 simple reply: a plain question gets a delivered answer.
     name: 'elicitation/simple-reply',
     dimension: 'elicitation',
     input: 'what is the capital of France?',
-    graders: [deliveredViaSendMessage, noFallback, sentSomething, elicitedWithoutRecovery],
+    graders: [
+      deliveredViaSendMessage,
+      noFallback,
+      sentSomething,
+      elicitedWithoutRecovery,
+      ...scratchAdvisory,
+    ],
   },
   {
     // 8.1 multi-bubble: an explicit ask for several messages.
     name: 'elicitation/multi-bubble',
     dimension: 'elicitation',
     input: 'give me three quick tips for better sleep, one short message each',
-    graders: [deliveredViaSendMessage, noFallback, elicitedWithoutRecovery],
+    graders: [deliveredViaSendMessage, noFallback, elicitedWithoutRecovery, ...scratchAdvisory],
   },
   {
     // 8.1 interview back-and-forth: two turns; the reply both answers and continues.
     name: 'elicitation/interview',
     dimension: 'elicitation',
     input: ['help me plan a weekend trip', 'somewhere warm, leaving Friday'],
-    graders: [deliveredViaSendMessage, noFallback, sentSomething, elicitedWithoutRecovery],
+    graders: [
+      deliveredViaSendMessage,
+      noFallback,
+      sentSomething,
+      elicitedWithoutRecovery,
+      ...scratchAdvisory,
+    ],
   },
   {
-    // 8.2 silence: an acknowledgment after a completed task needs no reply.
+    // 8.2 silence: an acknowledgment after a completed task needs no reply. The
+    // reminder turn is played LIVE (the model actually schedules), so the graded
+    // ack turn follows a realistic task turn — real tool call, real send shape —
+    // not a hand-seeded, unrealistically pristine one (seed audit, 2026-07).
     name: 'elicitation/silence-when-nothing-to-say',
     dimension: 'elicitation',
-    setup: {
-      conversation: [
-        { role: 'user', text: 'remind me to call mom at 6' },
-        { role: 'assistant', text: "Done — I'll remind you at 6pm." },
-      ],
-    },
-    input: '👍',
-    graders: [isSilent],
+    input: ['remind me to call mom at 6pm today', '👍'],
+    graders: [finalTurnSilent],
   },
 
   // --- Promoted from the delivery A/B scenarios (evals/experiments/scenarios.ts) ---
 
   {
-    // Restraint on a worded ack after a completed task — must stay silent.
+    // Restraint on a worded ack after a completed task — the graded final turn
+    // must stay silent. Task turn played live (seed audit, 2026-07).
     name: 'elicitation/ack-thanks-after-task',
     dimension: 'elicitation',
-    setup: {
-      conversation: [
-        { role: 'user', text: 'set a timer for the pasta, 10 min' },
-        { role: 'assistant', text: 'Timer set for 10 minutes.' },
-      ],
-    },
-    input: 'thanks',
-    graders: [isSilent],
+    input: ['set a timer for the pasta, 10 min', 'thanks'],
+    graders: [finalTurnSilent],
   },
   {
     // Speak-vs-silence boundary: an ack, then a real correction. The graded final
     // turn must elicit (not get stuck in the "it's just an ack" groove).
     name: 'elicitation/ack-then-correction',
     dimension: 'elicitation',
-    setup: {
-      conversation: [
-        { role: 'user', text: 'set a timer for the pasta, 10 min' },
-        { role: 'assistant', text: 'Timer set for 10 minutes.' },
-      ],
-    },
-    input: ['got it', 'actually make it 12'],
-    graders: [deliveredViaSendMessage, noFallback, elicitedWithoutRecovery],
+    input: ['set a timer for the pasta, 10 min', 'got it', 'actually make it 12'],
+    graders: [deliveredViaSendMessage, noFallback, elicitedWithoutRecovery, ...scratchAdvisory],
   },
   {
     // Multi-turn back-and-forth (the historical miss hotspot): four live turns;
@@ -99,7 +109,7 @@ export const elicitationCases: EvalCase[] = [
       "i'm in boston, flying is fine",
       'mid-february, 3 days, not too expensive',
     ],
-    graders: [deliveredViaSendMessage, noFallback, elicitedWithoutRecovery],
+    graders: [deliveredViaSendMessage, noFallback, elicitedWithoutRecovery, ...scratchAdvisory],
   },
   {
     // Multi-turn restraint: a debug exchange that ends on "that fixed it, thanks"

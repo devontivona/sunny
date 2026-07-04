@@ -1,20 +1,20 @@
 {
-  "model": "claude-opus-4-8",
-  "timestamp": "2026-06-23T02:18:04.038Z",
+  "model": "claude-sonnet-5",
+  "timestamp": "2026-07-03T21:25:21.000Z",
   "n": 5,
-  "costUsd": 4.61,
+  "costUsd": 9.3,
   "stoppedOnBudget": false,
   "dimensions": {
     "elicitation": {
-      "passRate": 0.975,
-      "pass": true
+      "passRate": 0.7688,
+      "pass": false
     },
     "memory": {
-      "passRate": 0.9333333333333332,
+      "passRate": 0.8667,
       "pass": true
     },
     "tool-selection": {
-      "passRate": 1,
+      "passRate": 1.0,
       "pass": true
     }
   },
@@ -22,153 +22,216 @@
     {
       "name": "elicitation/simple-reply",
       "dimension": "elicitation",
-      "runs": 5,
-      "passes": 4,
-      "passRate": 0.8,
+      "history": "live",
+      "runs": 10,
+      "passes": 10,
+      "passRate": 1.0,
       "threshold": 0.6,
       "pass": true,
-      "graderPasses": {
-        "delivered-via-send_message": 5,
-        "no-fallback": 5,
-        "sent-something": 5,
-        "elicited-without-recovery": 4
-      }
+      "graderPasses": {}
     },
     {
       "name": "elicitation/multi-bubble",
       "dimension": "elicitation",
-      "runs": 5,
-      "passes": 5,
-      "passRate": 1,
+      "history": "live",
+      "runs": 10,
+      "passes": 10,
+      "passRate": 1.0,
       "threshold": 0.6,
       "pass": true,
-      "graderPasses": {
-        "delivered-via-send_message": 5,
-        "no-fallback": 5,
-        "elicited-without-recovery": 5
-      }
+      "graderPasses": {}
     },
     {
       "name": "elicitation/interview",
       "dimension": "elicitation",
-      "runs": 5,
-      "passes": 5,
-      "passRate": 1,
+      "history": "live",
+      "runs": 10,
+      "passes": 10,
+      "passRate": 1.0,
       "threshold": 0.6,
       "pass": true,
-      "graderPasses": {
-        "delivered-via-send_message": 5,
-        "no-fallback": 5,
-        "sent-something": 5,
-        "elicited-without-recovery": 5
-      }
+      "graderPasses": {}
     },
     {
       "name": "elicitation/silence-when-nothing-to-say",
       "dimension": "elicitation",
-      "runs": 5,
-      "passes": 5,
-      "passRate": 1,
+      "history": "live",
+      "runs": 10,
+      "passes": 10,
+      "passRate": 1.0,
       "threshold": 0.6,
       "pass": true,
-      "graderPasses": {
-        "is-silent": 5
-      }
+      "graderPasses": {}
     },
     {
       "name": "elicitation/ack-thanks-after-task",
       "dimension": "elicitation",
-      "runs": 5,
-      "passes": 5,
-      "passRate": 1,
+      "history": "live",
+      "runs": 10,
+      "passes": 8,
+      "passRate": 0.8,
       "threshold": 0.6,
       "pass": true,
-      "graderPasses": {
-        "is-silent": 5
-      }
+      "graderPasses": {}
     },
     {
       "name": "elicitation/ack-then-correction",
       "dimension": "elicitation",
-      "runs": 5,
-      "passes": 5,
-      "passRate": 1,
+      "history": "live",
+      "runs": 10,
+      "passes": 10,
+      "passRate": 1.0,
       "threshold": 0.6,
       "pass": true,
-      "graderPasses": {
-        "delivered-via-send_message": 5,
-        "no-fallback": 5,
-        "elicited-without-recovery": 5
-      }
+      "graderPasses": {}
     },
     {
       "name": "elicitation/multiturn-trip",
       "dimension": "elicitation",
-      "runs": 5,
-      "passes": 5,
-      "passRate": 1,
+      "history": "live",
+      "runs": 10,
+      "passes": 8,
+      "passRate": 0.8,
       "threshold": 0.6,
       "pass": true,
-      "graderPasses": {
-        "delivered-via-send_message": 5,
-        "no-fallback": 5,
-        "elicited-without-recovery": 5
-      }
+      "graderPasses": {}
     },
     {
       "name": "elicitation/multiturn-debug-then-ack",
       "dimension": "elicitation",
-      "runs": 5,
-      "passes": 5,
-      "passRate": 1,
+      "history": "live",
+      "runs": 10,
+      "passes": 10,
+      "passRate": 1.0,
       "threshold": 0.6,
       "pass": true,
-      "graderPasses": {
-        "final-turn-silent": 5
-      }
+      "graderPasses": {}
     },
     {
-      "name": "memory/uses-seeded-user-fact",
-      "dimension": "memory",
-      "runs": 5,
-      "passes": 5,
-      "passRate": 1,
+      "name": "elicitation/miss-chain-smalltalk-clean",
+      "dimension": "elicitation",
+      "history": "seeded-clean",
+      "runs": 10,
+      "passes": 10,
+      "passRate": 1.0,
       "threshold": 0.6,
       "pass": true,
-      "graderPasses": {
-        "delivered-via-send_message": 5,
-        "reply-mentions": 5
-      }
+      "graderPasses": {}
     },
     {
-      "name": "memory/records-durable-fact",
-      "dimension": "memory",
-      "runs": 5,
-      "passes": 5,
-      "passRate": 1,
+      "name": "elicitation/miss-chain-smalltalk-poisoned",
+      "dimension": "elicitation",
+      "history": "seeded-poisoned",
+      "runs": 10,
+      "passes": 3,
+      "passRate": 0.3,
+      "threshold": 0.6,
+      "pass": false,
+      "graderPasses": {}
+    },
+    {
+      "name": "elicitation/miss-chain-interview-clean",
+      "dimension": "elicitation",
+      "history": "seeded-clean",
+      "runs": 10,
+      "passes": 9,
+      "passRate": 0.9,
       "threshold": 0.6,
       "pass": true,
-      "graderPasses": {
-        "memory-written:USER": 5
-      }
+      "graderPasses": {}
     },
     {
-      "name": "memory/recalls-archive",
-      "dimension": "memory",
+      "name": "elicitation/miss-chain-interview-poisoned",
+      "dimension": "elicitation",
+      "history": "seeded-poisoned",
+      "runs": 10,
+      "passes": 2,
+      "passRate": 0.2,
+      "threshold": 0.6,
+      "pass": false,
+      "graderPasses": {}
+    },
+    {
+      "name": "elicitation/miss-chain-meta-clean",
+      "dimension": "elicitation",
+      "history": "seeded-clean",
+      "runs": 10,
+      "passes": 9,
+      "passRate": 0.9,
+      "threshold": 0.6,
+      "pass": true,
+      "graderPasses": {}
+    },
+    {
+      "name": "elicitation/miss-chain-meta-poisoned",
+      "dimension": "elicitation",
+      "history": "seeded-poisoned",
+      "runs": 10,
+      "passes": 0,
+      "passRate": 0.0,
+      "threshold": 0.6,
+      "pass": false,
+      "graderPasses": {}
+    },
+    {
+      "name": "elicitation/real-inbox-clarify",
+      "dimension": "elicitation",
+      "history": "seeded-poisoned",
+      "runs": 10,
+      "passes": 6,
+      "passRate": 0.6,
+      "threshold": 0.6,
+      "pass": true,
+      "graderPasses": {}
+    },
+    {
+      "name": "elicitation/real-batches",
+      "dimension": "elicitation",
+      "history": "seeded-poisoned",
       "runs": 5,
       "passes": 4,
       "passRate": 0.8,
       "threshold": 0.6,
       "pass": true,
-      "graderPasses": {
-        "tool-called:recall_history": 5,
-        "reply-mentions": 4,
-        "natural-recall (judge:claude-sonnet-4-6/v1)": 4
-      }
+      "graderPasses": {}
+    },
+    {
+      "name": "memory/uses-seeded-user-fact",
+      "dimension": "memory",
+      "history": "live",
+      "runs": 10,
+      "passes": 10,
+      "passRate": 1.0,
+      "threshold": 0.6,
+      "pass": true,
+      "graderPasses": {}
+    },
+    {
+      "name": "memory/records-durable-fact",
+      "dimension": "memory",
+      "history": "live",
+      "runs": 10,
+      "passes": 10,
+      "passRate": 1.0,
+      "threshold": 0.6,
+      "pass": true,
+      "graderPasses": {}
+    },
+    {
+      "name": "memory/recalls-archive",
+      "dimension": "memory",
+      "history": "seeded-clean",
+      "runs": 10,
+      "passes": 6,
+      "passRate": 0.6,
+      "threshold": 0.6,
+      "pass": true,
+      "graderPasses": {}
     },
     {
       "name": "tool-selection/research-starts-job",
       "dimension": "tool-selection",
+      "history": "live",
       "runs": 5,
       "passes": 5,
       "passRate": 1,
@@ -182,6 +245,7 @@
     {
       "name": "tool-selection/reminder-schedules",
       "dimension": "tool-selection",
+      "history": "live",
       "runs": 5,
       "passes": 5,
       "passRate": 1,
@@ -194,6 +258,7 @@
     {
       "name": "tool-selection/trivial-greeting-no-heavy-tools",
       "dimension": "tool-selection",
+      "history": "live",
       "runs": 5,
       "passes": 5,
       "passRate": 1,

@@ -48,6 +48,9 @@ export interface GradeResult {
   /** 0..1 — 1 for a passing programmatic grader; the judge's score otherwise. */
   score: number;
   rationale?: string;
+  /** Advisory results are recorded per-grader (quality metrics to track) but do
+   *  NOT flip the case's pass/fail — e.g. scratch-quality on a delivered turn. */
+  advisory?: boolean;
 }
 
 /** A grader reads the trajectory (and the case) and returns a verdict. */
@@ -56,8 +59,16 @@ export type Grader = (t: Trajectory, c: EvalCase) => GradeResult | Promise<Grade
 /** A prior message to seed before the turn under test. */
 export interface ConversationSeed {
   role: 'user' | 'assistant';
+  /** User text, or (assistant, when `sends` is absent) the single delivered bubble. */
   text: string;
   senderName?: string;
+  /** Assistant only: private scratch text persisted alongside the sends — used by
+   *  deliberately "poisoned-history" cases that reproduce the in-context precedent
+   *  of a past miss (scratch with no sends). Seeded via `appendTurn` with a real
+   *  D-MG9 payload shape, not `appendOutbound`. */
+  scratch?: string;
+  /** Assistant only: multiple delivered bubbles (each a `send_message` tool part). */
+  sends?: string[];
 }
 
 /** One REAL captured turn for a fixture-from-a-trace (built by `evals/capture-turn.ts`
@@ -107,4 +118,28 @@ export interface EvalCase {
   graders: Grader[];
   /** Per-case pass-rate threshold (overrides the dimension/run default). */
   threshold?: number;
+  /** Per-case run watchdog override (ms) for legitimately slow cases (e.g. the
+   *  token-heavy real-batches fixture); default is EVAL_RUN_TIMEOUT_MS. */
+  timeoutMs?: number;
+  /**
+   * What history the graded turn runs against (seed-audit policy). `live` — the
+   * model generates its own history turn-by-turn (default when nothing is seeded;
+   * realistic by construction). `seeded-clean` — hand-seeded well-formed history.
+   * `seeded-poisoned` — history deliberately contains the bad precedent (scratch-only
+   * turns / real captured misses); measures robustness, reported separately so it
+   * doesn't blur clean-history elicitation.
+   */
+  history?: HistoryTier;
+}
+
+export type HistoryTier = 'live' | 'seeded-clean' | 'seeded-poisoned';
+
+/** Resolve a case's history tier: explicit tag wins; fixtures from production
+ *  traces default to poisoned (they replay whatever precedent production had);
+ *  hand-seeded conversations default to clean; nothing seeded is live. */
+export function historyTier(c: EvalCase): HistoryTier {
+  if (c.history) return c.history;
+  if (c.setup?.fixtureTurns?.length) return 'seeded-poisoned';
+  if (c.setup?.conversation?.length) return 'seeded-clean';
+  return 'live';
 }
