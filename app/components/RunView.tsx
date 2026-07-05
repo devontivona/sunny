@@ -174,18 +174,21 @@ function ToolPart({ part }: { part: ToolPartShape }) {
   if (part.input != null) sections.push({ label: 'Input', body: pretty(part.input) });
   if (part.output != null) sections.push({ label: 'Output', body: pretty(part.output) });
   if (part.errorText) sections.push({ label: 'Error', body: String(part.errorText) });
+  const inputPreview = part.input != null ? preview(part.input) : '';
 
+  // One shared line grammar with text parts (see Part): inline label, one-line truncated
+  // preview, details pushed to the right edge.
   return (
-    <div className="my-xs">
-      <div className="flex items-baseline gap-sm">
-        <span className="text-secondary">{name}</span>
-        {isError && <span className="text-error">errored</span>}
-        {sections.length > 0 && (
+    <div className="my-xs flex items-baseline gap-sm">
+      <span className="shrink-0 text-secondary">{name}</span>
+      {isError && <span className="shrink-0 text-error">errored</span>}
+      <span className="min-w-0 flex-1 truncate text-fg-dim">
+        {inputPreview !== '{}' ? inputPreview : ''}
+      </span>
+      {sections.length > 0 && (
+        <span className="shrink-0">
           <DetailDrawer trigger={<>[&nbsp;details&nbsp;]</>} title={name} sections={sections} />
-        )}
-      </div>
-      {part.input != null && preview(part.input) !== '{}' && (
-        <div className="truncate pl-md text-fg-dim">{preview(part.input)}</div>
+        </span>
       )}
     </div>
   );
@@ -223,19 +226,19 @@ function Part({ part, delivered }: { part: AnyPart; delivered: boolean }) {
     if (delivered && text.replaceAll(NO_REPLY, '').trim() === '') {
       return <div className="my-xs text-fg-dim italic">(chose silence — no reply sent)</div>;
     }
-    // Delivered reply text at full prominence with its own label (mirrors [update]);
-    // interim notes dimmed.
+    // Delivered reply text at full prominence: inline label, then the text flowing
+    // right after it — wrapped lines return to the container's LEFT edge (no hanging
+    // label column). Plain-text rendering on purpose: delivered texts are iMessage
+    // plain text by design, and inline flow after the label rules out block markdown.
     return delivered ? (
-      <div className="my-xs flex items-baseline gap-sm">
+      <div className="my-xs whitespace-pre-wrap text-fg">
         <span
-          className="shrink-0 text-primary"
+          className="mr-sm select-none text-primary"
           title="The turn's final text — delivered to the user as the reply."
         >
-          [reply]
+          reply
         </span>
-        <div className="min-w-0 flex-1 text-fg">
-          <Markdown>{text.replaceAll(NO_REPLY, '').trim()}</Markdown>
-        </div>
+        {text.replaceAll(NO_REPLY, '').trim()}
       </div>
     ) : (
       <div className="my-xs opacity-60">
@@ -251,20 +254,18 @@ function Part({ part, delivered }: { part: AnyPart; delivered: boolean }) {
     ) : null;
   }
   // Relayed translator update: DELIVERED to the user mid-task — full prominence,
-  // labeled so it's distinguishable from the final reply (same layout as [reply]).
+  // same inline label grammar as the reply.
   if (part.type === 'data-translator') {
     const text = (part as { data?: { text?: string } }).data?.text;
     return text ? (
-      <div className="my-xs flex items-baseline gap-sm">
+      <div className="my-xs whitespace-pre-wrap text-fg">
         <span
-          className="shrink-0 text-secondary"
+          className="mr-sm select-none text-secondary"
           title="Interim progress update relayed to the user while Sunny kept working."
         >
-          [update]
+          update
         </span>
-        <div className="min-w-0 flex-1 text-fg">
-          <Markdown>{text}</Markdown>
-        </div>
+        {text}
       </div>
     ) : null;
   }
