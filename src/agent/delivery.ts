@@ -43,7 +43,13 @@ export function trimTrailingNonUser(messages: ModelMessage[]): ModelMessage[] {
  * dropped (reasoning is private and re-sending it is rejected by Anthropic — see `stripReasoning`).
  * Returns undefined when the turn produced no assistant message.
  */
-export function assistantUIMessageFromResponse(messages: ModelMessage[]): UIMessage | undefined {
+export function assistantUIMessageFromResponse(
+  messages: ModelMessage[],
+  /** Insertion hook (translator chronology): called with each assistant message's index
+   *  (== the step number — the caller builds one assistant message per step) BEFORE that
+   *  step's parts are appended, so injected parts land at their true chronological spot. */
+  beforeAssistant?: (stepIndex: number) => UIMessage['parts'],
+): UIMessage | undefined {
   const outputs = new Map<string, unknown>();
   for (const m of messages) {
     if (m.role !== 'tool' || !Array.isArray(m.content)) continue;
@@ -54,8 +60,11 @@ export function assistantUIMessageFromResponse(messages: ModelMessage[]): UIMess
   const parts: UIMessage['parts'] = [];
   const seenToolCallIds = new Set<string>();
   let sawAssistant = false;
+  let stepIndex = -1;
   for (const m of messages) {
     if (m.role !== 'assistant') continue;
+    stepIndex += 1;
+    if (beforeAssistant) parts.push(...beforeAssistant(stepIndex));
     sawAssistant = true;
     if (typeof m.content === 'string') {
       if (m.content) parts.push({ type: 'text', text: m.content } as UIMessage['parts'][number]);

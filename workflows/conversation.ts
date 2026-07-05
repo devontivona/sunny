@@ -182,7 +182,16 @@ async function finalizeTurn(args: {
   translatorUpdates: { text: string; step: number }[];
 }): Promise<void> {
   const { threadId, ownerName, setup, priorMessages } = args;
-  const assistant = assistantUIMessageFromResponse(args.messages);
+  // Relayed translator updates persist at their TRUE chronological position: an update
+  // triggered at step N was texted before step N generated, so its `data-translator` part
+  // is inserted before that step's parts (2026-07-05: the old post-hoc "after the last
+  // tool call" placement rendered updates out of order in the dashboard trajectory).
+  const inserted = new Set<number>();
+  const assistant = assistantUIMessageFromResponse(args.messages, (stepIndex) => {
+    const ups = args.translatorUpdates.filter((u) => u.step === stepIndex);
+    if (ups.length > 0) inserted.add(stepIndex);
+    return ups.map((u) => translatorPart(u.text, u.step));
+  });
   if (!assistant) return;
 
   // Drop private `reasoning` (extended-thinking) parts before persisting (D-MG8): they are
@@ -225,21 +234,11 @@ async function finalizeTurn(args: {
     }
   }
 
-  // Interleave the relayed updates after the last tool part — before the final reply text —
-  // so a replayed row reads: working notes → updates relayed → final reply.
-  if (args.translatorUpdates.length > 0) {
-    let insertAt = 0;
-    for (let i = parts.length - 1; i >= 0; i--) {
-      if (parts[i]!.type.startsWith('tool-')) {
-        insertAt = i + 1;
-        break;
-      }
-    }
-    parts = [
-      ...parts.slice(0, insertAt),
-      ...args.translatorUpdates.map((u) => translatorPart(u.text, u.step)),
-      ...parts.slice(insertAt),
-    ] as typeof parts;
+  // Safety net: an update whose trigger step never generated (a run cut off mid-step)
+  // has no insertion point above — append it so the record never drops a delivered text.
+  const leftovers = args.translatorUpdates.filter((u) => !inserted.has(u.step));
+  if (leftovers.length > 0) {
+    parts = [...parts, ...leftovers.map((u) => translatorPart(u.text, u.step))] as typeof parts;
   }
 
   const projection = [interim, ...args.translatorUpdates.map((u) => u.text), finalText]
