@@ -6,11 +6,8 @@ import { buildTurnModel } from '../src/agent/turnModel.js';
 import { z } from 'zod';
 import { BASH_TOOL_SPECS } from '../src/agent/tools/bashSpecs.js';
 import { MEMORY_TOOL_SPECS } from '../src/agent/tools/memorySpecs.js';
-import {
-  SEND_IMAGE_SPEC,
-  SEND_MESSAGE_SPEC,
-  STAY_SILENT_SPEC,
-} from '../src/agent/tools/sendMessageSpec.js';
+import { SEND_IMAGE_SPEC } from '../src/agent/tools/sendMessageSpec.js';
+import { START_JOB_SPEC } from '../src/agent/tools/startJobSpec.js';
 import { MESSAGE_SPEC } from '../src/agent/tools/messageSpec.js';
 import { RUNS_TOOL_SPECS, scheduleToolSpecs } from '../src/agent/tools/scheduleSpecs.js';
 import { DELEGATE_TASK_SPEC, type ChildModelName } from '../src/agent/tools/delegationSpecs.js';
@@ -20,14 +17,9 @@ import { isGroupThreadId } from '../src/gateway/threadId.js';
 import {
   assistantUIMessageFromResponse,
   buildTurnRecord,
-  calledStaySilent,
-  classifyDelivery,
   classifyTextDelivery,
   extractFinalText,
   extractInterimText,
-  extractScratch,
-  extractSends,
-  sendMessagePart,
   splitBubbles,
   stripNoReply,
   translatorPart,
@@ -42,7 +34,7 @@ import { bashStep, fileReadStep, streamAgent } from './runShell.js';
  * streams + completes exactly like a Tier-2 job and reuses the same dashboard live-pane path.
  * The gateway (`DurableTurnRouter`) provides per-thread serialization + starts a fresh run
  * for the next turn (replacing the keep-alive hook, which caused the turns-2+ parking bug and
- * didn't map onto the per-run live pane). Gated behind `SUNNY_DURABLE_TURNS=1`.
+ * didn't map onto the per-run live pane).
  *
  * Correctness model (the store is the source of truth):
  * - The gateway persists every inbound on arrival (dedup), then ensures a turn-run is
@@ -64,9 +56,8 @@ interface TurnSetup {
   instructions: SystemModelMessage;
   modelId: string;
   providerOptions: SharedV4ProviderOptions;
-  deliveryMode: 'tool' | 'text';
-  /** Progress-translator cadence (text mode; config.translatorEveryNSteps). Journaled
-   *  here so the body never reads config. */
+  /** Progress-translator cadence (config.translatorEveryNSteps). Journaled here so
+   *  the body never reads config. */
   translatorEveryNSteps: number;
   ownerName: string;
   /** The owner's configured timezone — used for `schedule_create` cron/timestamp evaluation
@@ -123,7 +114,6 @@ export async function runConversation(input: ConversationInput): Promise<void> {
       ownerPresent: setup.ownerPresent,
       timezone: setup.timezone,
       subjectName: setup.subjectName,
-      deliveryMode: setup.deliveryMode,
     }),
     providerOptions: setup.providerOptions,
     messages: pending.messages,
@@ -132,15 +122,12 @@ export async function runConversation(input: ConversationInput): Promise<void> {
       isGroup,
       baseExcludeIds: pending.windowUserIds,
     },
-    translator:
-      setup.deliveryMode === 'text'
-        ? {
-            everyNSteps: setup.translatorEveryNSteps,
-            compose: (interim, recentUpdates) =>
-              translateStep(threadId, subject, interim, recentUpdates),
-            send: (text) => sendStep(threadId, text),
-          }
-        : undefined,
+    translator: {
+      everyNSteps: setup.translatorEveryNSteps,
+      compose: (interim, recentUpdates) =>
+        translateStep(threadId, subject, interim, recentUpdates),
+      send: (text) => sendStep(threadId, text),
+    },
   });
 
   await finalizeTurn({
@@ -170,15 +157,13 @@ export async function runConversation(input: ConversationInput): Promise<void> {
   await markAnswered(threadId, [...pending.windowUserIds, ...foldedIds]);
 }
 
-/** Classify delivery, deliver (text mode), run the recovery backstop on a miss, and persist
- *  one row per turn (D-MG8 / D-MG9). Mirrors the in-process loop; every side effect is a
- *  durable step. Forks on the journaled `setup.deliveryMode`:
- *  - `tool` — the untouched pre-migration path (send_message fired mid-stream; a scratch-only
- *    turn takes the recovery backstop). The rollback path; byte-for-byte behavior preserved.
- *  - `text` — text-as-reply (Phase 2): the FINAL text (after the last tool call) IS the reply,
- *    delivered here as blank-line bubbles via the memoized send step; interim narration is the
- *    translator's source material; an empty final with narration is the miss the backstop
- *    composes from. Relayed translator updates persist as `data-translator` parts. */
+/** Deliver the turn's reply and persist one row per turn (text-as-reply, PR #31; D-MG9).
+ *  The FINAL text (after the last tool call) IS the reply, delivered here as blank-line
+ *  bubbles via the memoized send step; a bare `<no-reply/>` sentinel is deliberate silence;
+ *  interim narration is the translator's source material; an empty final with narration is
+ *  an ABNORMAL turn end (step limit / length / error finish) that the backstop composes a
+ *  status message from. Relayed translator updates persist as `data-translator` parts.
+ *  Every side effect is a durable step. */
 async function finalizeTurn(args: {
   threadId: string;
   ownerName: string;
@@ -200,84 +185,63 @@ async function finalizeTurn(args: {
   // `stripReasoning` in turn.ts), and shouldn't be stored or shown on the dashboard. Keeps
   // the durable turn record consistent with the in-process loop's.
   let parts = assistant.parts.filter((p) => p.type !== 'reasoning') as typeof assistant.parts;
-  // Frame recovered/relayed messages for the thread's subject (D-RA4/F6) — a family member
+  // Frame backstop/relayed messages for the thread's subject (D-RA4/F6) — a family member
   // when the owner is absent — not hardcoded to the owner.
   const subject = setup.subjectName ?? ownerName;
-  let delivered: Delivery;
   let recovered = false;
-  let projection: string;
 
-  if (setup.deliveryMode === 'text') {
-    const interim = extractInterimText(parts);
-    // Silence is the <no-reply/> sentinel reply, parsed out here; the raw text (sentinel
-    // included) still persists in the row, so history carries the exact silence precedent.
-    // calledStaySilent covers rows replayed from the tool-mode era.
-    const parsed = stripNoReply(extractFinalText(parts));
-    let finalText = parsed.text;
-    delivered = classifyTextDelivery(finalText, interim, parsed.sentinel || calledStaySilent(parts));
+  const interim = extractInterimText(parts);
+  // Silence is the <no-reply/> sentinel reply, parsed out here; the raw text (sentinel
+  // included) still persists in the row, so history carries the exact silence precedent.
+  const parsed = stripNoReply(extractFinalText(parts));
+  let finalText = parsed.text;
+  let delivered: Delivery = classifyTextDelivery(finalText, interim, parsed.sentinel);
 
-    if (delivered === 'text') {
-      // Each blank-line paragraph is its own bubble; each send is a separate memoized step,
-      // so a replay resumes mid-sequence without re-sending delivered bubbles.
-      for (const bubble of splitBubbles(finalText)) {
-        await sendStep(threadId, bubble);
-      }
-    } else if (delivered === 'fallback_text') {
-      // Empty-final miss: the turn narrated work but never wrote the reply. The recovery
-      // backstop composes it from the narration ('said' labeling — in this mode prior text
-      // WAS delivered speech). Marked recovered regardless of outcome (the [R] signal).
-      recovered = true;
-      const recoveryText = await recoverDelivery(threadId, subject, priorMessages, interim, 'text');
-      if (recoveryText) {
-        await sendStep(threadId, recoveryText);
-        // Recorded as a PLAIN TEXT part — never a synthetic tool part (tool_use id hygiene).
-        // Replayed as history it reads as the turn's final reply text, so the persisted
-        // precedent reinforces the correct shape (the PR #30 self-reinforcement argument).
-        parts = [...parts, { type: 'text', text: recoveryText } as (typeof parts)[number]];
-        finalText = recoveryText;
-        delivered = 'text';
-      }
+  if (delivered === 'text') {
+    // Each blank-line paragraph is its own bubble; each send is a separate memoized step,
+    // so a replay resumes mid-sequence without re-sending delivered bubbles.
+    for (const bubble of splitBubbles(finalText)) {
+      await sendStep(threadId, bubble);
     }
-
-    // Interleave the relayed updates after the last tool part — before the final reply text —
-    // so a replayed row reads: working notes → updates relayed → final reply.
-    if (args.translatorUpdates.length > 0) {
-      let insertAt = 0;
-      for (let i = parts.length - 1; i >= 0; i--) {
-        if (parts[i]!.type.startsWith('tool-')) {
-          insertAt = i + 1;
-          break;
-        }
-      }
-      parts = [
-        ...parts.slice(0, insertAt),
-        ...args.translatorUpdates.map((u) => translatorPart(u.text, u.step)),
-        ...parts.slice(insertAt),
-      ] as typeof parts;
+  } else if (delivered === 'fallback_text') {
+    // Abnormal turn end: the turn narrated work but never wrote the reply (step limit,
+    // length cap, or an error finish — a deliberate turn always ends on reply text or the
+    // silence sentinel). The backstop composes an honest status from the narration ('said'
+    // labeling — prior turns' text WAS delivered speech). Marked recovered regardless of
+    // outcome (the dashboard [R] / Activity "Backstop" signal).
+    recovered = true;
+    const recoveryText = await recoverDelivery(threadId, subject, priorMessages, interim);
+    if (recoveryText) {
+      await sendStep(threadId, recoveryText);
+      // Recorded as a PLAIN TEXT part — never a synthetic tool part (tool_use id hygiene).
+      // Replayed as history it reads as the turn's final reply text, so the persisted
+      // precedent reinforces the correct shape (the PR #30 self-reinforcement argument).
+      parts = [...parts, { type: 'text', text: recoveryText } as (typeof parts)[number]];
+      finalText = recoveryText;
+      delivered = 'text';
     }
-
-    projection = [interim, ...args.translatorUpdates.map((u) => u.text), finalText]
-      .filter(Boolean)
-      .join('\n');
-  } else {
-    const scratch = extractScratch(parts);
-    delivered = classifyDelivery(extractSends(parts).length, scratch, calledStaySilent(parts));
-
-    if (delivered === 'fallback_text') {
-      // Elicitation miss (D-MG8): the model wrote text but called neither send_message nor
-      // stay_silent. The miss took the backstop path, so mark it recovered regardless of the
-      // pass's outcome (the dashboard [R] / Activity "Backstop" signal).
-      recovered = true;
-      const recoveryText = await recoverDelivery(threadId, subject, priorMessages, scratch);
-      if (recoveryText) {
-        await sendStep(threadId, recoveryText);
-        parts = [...parts, sendMessagePart(recoveryText, 'recovery-0')];
-        delivered = 'send_message';
-      }
-    }
-
-    projection = [scratch, ...extractSends(parts)].filter(Boolean).join('\n');
   }
+
+  // Interleave the relayed updates after the last tool part — before the final reply text —
+  // so a replayed row reads: working notes → updates relayed → final reply.
+  if (args.translatorUpdates.length > 0) {
+    let insertAt = 0;
+    for (let i = parts.length - 1; i >= 0; i--) {
+      if (parts[i]!.type.startsWith('tool-')) {
+        insertAt = i + 1;
+        break;
+      }
+    }
+    parts = [
+      ...parts.slice(0, insertAt),
+      ...args.translatorUpdates.map((u) => translatorPart(u.text, u.step)),
+      ...parts.slice(insertAt),
+    ] as typeof parts;
+  }
+
+  const projection = [interim, ...args.translatorUpdates.map((u) => u.text), finalText]
+    .filter(Boolean)
+    .join('\n');
 
   if (parts.length > 0) {
     const usage = args.usage
@@ -298,7 +262,7 @@ async function finalizeTurn(args: {
  *  (owner OR family — gateway auth admits only trusted senders to a DM; multiplayer-family D2);
  *  groups stay tool-limited regardless of trust (design D5). Editing the owner-only core files
  *  (USER.md, SUNNY.md) is gated on `ownerPresent`. Every side-effecting `execute` is a `'use step'`
- *  so a replay never re-applies it (and `send_message` never re-sends). */
+ *  so a replay never re-applies it (and a delivered bubble never re-sends). */
 function buildTools(ctx: {
   threadId: string;
   ownerName: string;
@@ -306,53 +270,19 @@ function buildTools(ctx: {
   ownerPresent: boolean;
   timezone: string;
   subjectName?: string;
-  deliveryMode: 'tool' | 'text';
 }) {
-  const { threadId, ownerName, trustedDm, ownerPresent, timezone, subjectName, deliveryMode } =
-    ctx;
+  const { threadId, ownerName, trustedDm, ownerPresent, timezone, subjectName } = ctx;
   const scheduleSpecs = scheduleToolSpecs(timezone);
   return {
-    // The mode's voice tooling: tool mode speaks via send_message and chooses silence via
-    // stay_silent; text mode's reply IS the final text (delivered in finalizeTurn), silence
-    // is the <no-reply/> sentinel reply (no tool — silence-by-text goes WITH the trained
-    // end-with-text prior; see NO_REPLY_SENTINEL), and send_image handles outbound media.
-    ...(deliveryMode === 'text'
-      ? {
-          send_image: tool({
-            ...SEND_IMAGE_SPEC,
-            execute: ({ pathOrUrl, caption }) => sendStep(threadId, caption ?? '', pathOrUrl),
-          }),
-        }
-      : {
-          send_message: tool({
-            ...SEND_MESSAGE_SPEC,
-            execute: ({ text, image }) => sendStep(threadId, text, image),
-          }),
-          stay_silent: tool({
-            ...STAY_SILENT_SPEC,
-            // No side effect — the choice of silence is read back from the turn's parts.
-            execute: async () => 'ok: staying silent',
-          }),
-        }),
+    // The reply IS the final text (delivered in finalizeTurn); silence is the <no-reply/>
+    // sentinel reply (no tool — silence-by-text goes WITH the trained end-with-text prior;
+    // see NO_REPLY_SENTINEL). send_image is the one outbound-media verb.
+    send_image: tool({
+      ...SEND_IMAGE_SPEC,
+      execute: ({ pathOrUrl, caption }) => sendStep(threadId, caption ?? '', pathOrUrl),
+    }),
     start_job: tool({
-      description:
-        'Promote a long-running or asynchronous task to a durable background job. Use this ' +
-        "for work that takes a while (research, building something, multi-step tasks you can't " +
-        'finish in one quick reply). The job runs to completion even across restarts and ' +
-        'messages the user with the result when done. ' +
-        (deliveryMode === 'text'
-          ? 'Use this INSTEAD of working through a long task inline — the chat is blocked ' +
-            'while you work, so promote anything beyond a few quick tool calls (do not grind ' +
-            'through research with dozens of calls in the conversation). After calling this, ' +
-            'your reply just tells the user you are on it; the job reports back separately.'
-          : 'Tell the user you are on it (via send_message) first, then call this.'),
-      inputSchema: z.object({
-        task: z
-          .string()
-          .describe(
-            'A complete, self-contained description of the task to perform in the background.',
-          ),
-      }),
+      ...START_JOB_SPEC,
       execute: ({ task }) => startJobStep(threadId, task, ownerName, subjectName),
     }),
     memory_write: tool({
@@ -437,7 +367,6 @@ async function setupTurn(threadId: string, isGroup: boolean): Promise<TurnSetup>
   const { personId, ensureAndLoadPeople } = await import('../src/memory/index.js');
   const { rosterMatch } = await import('../src/agent/audience.js');
   const { config, store } = await getRuntime();
-  const deliveryMode = config.deliveryMode;
 
   // Resolve the thread's trusted participants from persisted history (multiplayer-family D3).
   // Owner presence comes from the persisted `isOwner` tag (also correct for the loopback test
@@ -461,10 +390,9 @@ async function setupTurn(threadId: string, isGroup: boolean): Promise<TurnSetup>
   void isGroup; // group-specific gating happens in buildTools / gateway auth
 
   return {
-    instructions: assembleTurnInstructions(config, deliveryMode, people),
+    instructions: assembleTurnInstructions(config, people),
     modelId: config.modelId,
     providerOptions: anthropicProviderOptions(config),
-    deliveryMode,
     translatorEveryNSteps: config.translatorEveryNSteps,
     ownerName: config.owner.name,
     timezone: config.timezone,
@@ -533,36 +461,33 @@ async function sendStep(
   return result?.media ? { status: 'delivered', media: result.media } : 'delivered';
 }
 
-/** Delivery-recovery backstop (D-MG8) as a step: a cheap model rewrites the private notes
- *  into a clean iMessage. Returns '' if there is nothing to compose. In text mode prior
- *  assistant text WAS delivered speech, so the transcript labels it 'said', not
- *  'private note' (see RecoveryOptions.assistantTextLabel). */
+/** Abnormal-turn-end backstop as a step: when a turn ends without reply text (step limit /
+ *  length / error finish), the cheap utility model composes an honest status message from
+ *  the turn's working notes. Returns '' if there is nothing to compose. */
 async function recoverDelivery(
   threadId: string,
   ownerName: string,
   messages: ModelMessage[],
-  scratch: string,
-  deliveryMode: 'tool' | 'text' = 'tool',
+  notes: string,
 ): Promise<string> {
   'use step';
 
   const { getRuntime } = await import('../src/runtime.js');
   const rt = (await getRuntime()) as Awaited<
     ReturnType<typeof import('../src/runtime.js').getRuntime>
-  > & { recoverOverride?: (scratch: string) => string };
+  > & { recoverOverride?: (notes: string) => string };
   // Test seam (mirrors translateOverride/stubJobs): workflow tests stub the composed
   // text so the backstop path is exercised hermetically, without a live model call.
-  if (rt.recoverOverride) return rt.recoverOverride(scratch);
-  const { getRecoveryModel } = await import('../src/agent/model.js');
-  const { runRecoveryPass } = await import('../src/agent/recovery.js');
+  if (rt.recoverOverride) return rt.recoverOverride(notes);
+  const { getUtilityModel } = await import('../src/agent/model.js');
+  const { runBackstopPass } = await import('../src/agent/recovery.js');
   try {
-    return await runRecoveryPass({
-      model: getRecoveryModel(rt.config),
+    return await runBackstopPass({
+      model: getUtilityModel(rt.config),
       ownerName,
       messages,
-      scratch,
+      notes,
       threadId,
-      assistantTextLabel: deliveryMode === 'text' ? 'said' : 'private note',
     });
   } catch {
     return '';
@@ -571,7 +496,7 @@ async function recoverDelivery(
 
 /**
  * Compose one interim progress update (text-delivery Phase 3) as a step: the cheap
- * recovery-tier model summarizes the turn's narration since the last update, or declines
+ * utility model summarizes the turn's narration since the last update, or declines
  * ('' — silence is the translator's default). Journaled, so a replay reuses the composed
  * text; the SEND is a separate memoized step (never re-relays). Best-effort by design: a
  * translator failure must never fail the turn, so errors collapse to silence.
@@ -590,11 +515,11 @@ async function translateStep(
     ReturnType<typeof import('../src/runtime.js').getRuntime>
   > & { translateOverride?: (interim: string, recentUpdates: string[]) => string };
   if (rt.translateOverride) return rt.translateOverride(interim, recentUpdates);
-  const { getRecoveryModel } = await import('../src/agent/model.js');
+  const { getUtilityModel } = await import('../src/agent/model.js');
   const { runTranslatorPass } = await import('../src/agent/translator.js');
   try {
     return await runTranslatorPass({
-      model: getRecoveryModel(rt.config),
+      model: getUtilityModel(rt.config),
       subject,
       interim,
       recentUpdates,
@@ -607,8 +532,8 @@ async function translateStep(
 
 /**
  * Persist one enriched UIMessage row for the turn (D-MG9). BEST-EFFORT: a persist
- * failure must NOT abort the run, because the turn has already DELIVERED (send_message
- * fires mid-stream) — if this threw, the run would fail before `markAnswered`, the
+ * failure must NOT abort the run, because the turn has already DELIVERED (bubbles send
+ * before this step) — if this threw, the run would fail before `markAnswered`, the
  * inbound would stay unanswered, and the router would re-run the turn and re-deliver
  * (the duplicate-reply bug). Losing a transcript row is a far smaller harm than
  * re-texting the user, so we log + swallow. The store also sanitizes NUL/surrogates,
@@ -789,8 +714,8 @@ async function personRelayStepBody(
     threadId = sendblueDmThreadId(from, identity);
   }
 
-  // An optional image rides along as a single outbound attachment, exactly like send_message's
-  // image path; the gateway hosts/sends + persists it (degrading to text in group threads).
+  // An optional image rides along as a single outbound attachment, exactly like send_image's
+  // path; the gateway hosts/sends + persists it (degrading to text in group threads).
   await gateway.send(
     threadId,
     { text, ...(image ? { attachment: { pathOrUrl: image } } : {}) },

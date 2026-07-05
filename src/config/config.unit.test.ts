@@ -7,7 +7,7 @@ describe('ConfigSchema defaults', () => {
   it('fills sensible defaults from an empty object', () => {
     const c = ConfigSchema.parse({});
     expect(c.modelId).toBe('claude-sonnet-5');
-    expect(c.recoveryModelId).toBe('claude-haiku-4-5');
+    expect(c.utilityModelId).toBe('claude-haiku-4-5');
     expect(c.thinking).toBe('adaptive');
     expect(c.effort).toBe('high');
     expect(c.timezone).toBe('America/New_York');

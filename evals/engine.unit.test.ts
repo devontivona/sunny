@@ -11,7 +11,7 @@ import {
   type Scorecard,
 } from './scorecard.js';
 import {
-  deliveredViaSendMessage,
+  deliveredReply,
   scratchNotSecondPerson,
   sendCount,
   toolCalled,
@@ -67,12 +67,10 @@ describe('CostMeter', () => {
 
 describe('programmatic graders', () => {
   // These graders are synchronous; `await` resolves the `Grader` union cleanly.
-  it('deliveredViaSendMessage passes only for send_message delivery', async () => {
+  it('deliveredReply passes only for delivered final text', async () => {
+    expect((await deliveredReply(trajectory({ delivered: 'text' }), {} as never)).pass).toBe(true);
     expect(
-      (await deliveredViaSendMessage(trajectory({ delivered: 'send_message' }), {} as never)).pass,
-    ).toBe(true);
-    expect(
-      (await deliveredViaSendMessage(trajectory({ delivered: 'fallback_text' }), {} as never)).pass,
+      (await deliveredReply(trajectory({ delivered: 'fallback_text' }), {} as never)).pass,
     ).toBe(false);
   });
 
@@ -156,10 +154,10 @@ describe('cellSlug', () => {
     );
   });
 
-  it('encodes the text-delivery grid axes', () => {
+  it('encodes the translator grid axes', () => {
     expect(
-      cellSlug('claude-sonnet-5', { deliveryMode: 'text', translatorHistory: 'excluded' }),
-    ).toBe('claude-sonnet-5__d-text__th-excluded');
+      cellSlug('claude-sonnet-5', { translatorHistory: 'excluded', translatorEveryNSteps: 2 }),
+    ).toBe('claude-sonnet-5__th-excluded__tn-2');
   });
 });
 

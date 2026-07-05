@@ -10,23 +10,13 @@ import { z } from 'zod';
 export const ConfigSchema = z.object({
   /** AI SDK model id (D-PS3). Provider-agnostic; Sonnet 5 is the default. */
   modelId: z.string().default('claude-sonnet-5'),
-  /** Cheap model for the delivery-recovery pass (D-MG8). Defaults to Haiku. */
-  recoveryModelId: z.string().default('claude-haiku-4-5'),
+  /** The cheap utility model: powers the interim-progress translator and the
+   *  abnormal-turn-end backstop (src/agent/recovery.ts). Defaults to Haiku. */
+  utilityModelId: z.string().default('claude-haiku-4-5'),
   /** Extended thinking for conversational turns: `adaptive` (default) or `off`. */
   thinking: z.enum(['adaptive', 'off']).default('adaptive'),
   /** Reasoning effort for agentic turns when thinking is on (D-PS3). */
   effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).default('high'),
-  /**
-   * How replies are delivered. `text` (default; the 2026-07 text-delivery migration) —
-   * the model's final text IS the message (delivered as blank-line bubbles), silence is
-   * the `<no-reply/>` sentinel reply, and a cheap translator relays interim progress on
-   * long turns. `tool` — the LEGACY rollback path: the model speaks only via the
-   * `send_message` tool and chooses silence via `stay_silent` (a missed call is
-   * recovered by the recovery pass). Kept intact for rollback; PR #30 proved it
-   * self-poisoning in a rolling window, and PR #31's gates measured text at/above it
-   * on every dimension.
-   */
-  deliveryMode: z.enum(['tool', 'text']).default('text'),
   /**
    * Interim-progress translator cadence (text delivery mode only). On a multi-step turn a
    * cheap model relays short progress updates to the user: the first fires on the FIRST
@@ -124,9 +114,8 @@ export type SunnyConfig = z.infer<typeof ConfigSchema> & {
 
 const DEFAULT_CONFIG_JSON = `{
   "modelId": "claude-sonnet-5",
-  "recoveryModelId": "claude-haiku-4-5",
+  "utilityModelId": "claude-haiku-4-5",
   "effort": "high",
-  "deliveryMode": "text",
   "timezone": "America/New_York",
   "owner": {
     "name": "Devon",

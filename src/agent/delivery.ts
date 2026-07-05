@@ -12,32 +12,12 @@ import type { LanguageModelUsage, ModelMessage, UIMessage } from 'ai';
  * the media-resolution helpers that DO touch the filesystem stay in `turn.ts`.
  */
 
-/** How a turn's reply reached (or didn't reach) the user (D-MG8). `text` is the
- *  text-as-reply mode: the model's final text delivered directly as bubbles. */
+/** How a turn's reply reached (or didn't reach) the user. `text` — the final text
+ *  delivered directly as bubbles (the one live path); `fallback_text` — an abnormal
+ *  turn end the backstop composes from; `silence` — the deliberate no-reply.
+ *  `send_message` survives only as a READ value: rows persisted before the 2026-07
+ *  text-delivery migration carry it in their metadata. */
 export type Delivery = 'send_message' | 'text' | 'fallback_text' | 'silence';
-
-/**
- * Classify how a turn was delivered from three observable signals: how many times
- * `send_message` was called, whether the model affirmatively called `stay_silent`,
- * and whether any private scratch text exists.
- *
- * - `send_message` — the intended path: the model spoke via the tool.
- * - `silence` — a deliberate, valid choice: the model called `stay_silent`, OR it
- *   produced nothing at all (no send, no scratch).
- * - `fallback_text` — an elicitation MISS: the model wrote private scratch but
- *   called NEITHER `send_message` nor `stay_silent`. This is what triggers the
- *   recovery pass (and, if recovery is somehow skipped, what gets logged as the
- *   regression signal). Raw scratch is never delivered as-is.
- *
- * From the user's perspective `silence` and an unrecovered `fallback_text` both
- * mean "no message arrived"; they are kept distinct purely as telemetry.
- */
-export function classifyDelivery(sendCount: number, scratch: string, staySilent = false): Delivery {
-  if (sendCount > 0) return 'send_message';
-  if (staySilent) return 'silence';
-  if (scratch) return 'fallback_text';
-  return 'silence';
-}
 
 /**
  * Trim trailing non-user messages (assistant + tool) back to the last user
@@ -115,29 +95,14 @@ function unwrapToolOutput(output: unknown): unknown {
   return output;
 }
 
-/** The private scratchpad text of a turn: all `text` parts, joined and trimmed. */
+/** All `text` parts of a turn, joined and trimmed (a legacy turn's private scratch;
+ *  used with slicing for a live turn's interim/final split — see extractFinalText). */
 export function extractScratch(parts: UIMessage['parts']): string {
   return parts
     .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
     .map((p) => p.text)
     .join('\n')
     .trim();
-}
-
-/**
- * Build a `tool-send_message` UIMessage part for a delivered message. Used to
- * record a recovery-pass send (which happens in a separate model call) into the
- * turn's history as a `send_message` tool call — the same shape the main loop
- * persists — so the next turn's context reinforces "speaking == send_message".
- */
-export function sendMessagePart(text: string, toolCallId: string): UIMessage['parts'][number] {
-  return {
-    type: 'tool-send_message',
-    toolCallId,
-    state: 'output-available',
-    input: { text },
-    output: 'delivered',
-  } as UIMessage['parts'][number];
 }
 
 /**
@@ -240,7 +205,8 @@ export function splitBubbles(text: string): string[] {
     .filter(Boolean);
 }
 
-/** The delivered messages of a turn: the `text` input of each `send_message` call. */
+/** LEGACY-ROW helper: the delivered bubbles of a pre-text-migration turn (each
+ *  `send_message` call's text input). Read paths only — no live turn produces these. */
 export function extractSends(parts: UIMessage['parts']): string[] {
   return parts
     .filter((p) => p.type === 'tool-send_message')
@@ -248,7 +214,8 @@ export function extractSends(parts: UIMessage['parts']): string[] {
     .filter((t): t is string => !!t);
 }
 
-/** Whether the turn affirmatively chose silence (a `stay_silent` tool call, D-MG8). */
+/** LEGACY-ROW helper: whether a pre-text-migration turn chose silence via the old
+ *  `stay_silent` tool. Read paths only. */
 export function calledStaySilent(parts: UIMessage['parts']): boolean {
   return parts.some((p) => p.type === 'tool-stay_silent');
 }

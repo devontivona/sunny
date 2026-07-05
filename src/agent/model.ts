@@ -12,14 +12,12 @@ export function getModel(config: SunnyConfig): LanguageModel {
 }
 
 /**
- * The cheap model for the delivery-recovery pass (D-MG8): when the main turn
- * produces text but never calls `send_message`/`stay_silent`, a one-shot pass on
- * this model rewrites the private notes into a clean iMessage (returned as plain
- * text — the runner does the delivery). Defaults to Haiku; overridable via
- * `config.recoveryModelId`.
+ * The cheap utility model: the interim-progress translator and the abnormal-turn-end
+ * backstop (a turn that ended without final reply text — step limit, length cap, or an
+ * error finish). Defaults to Haiku; overridable via `config.utilityModelId`.
  */
-export function getRecoveryModel(config: SunnyConfig): LanguageModel {
-  return anthropic(config.recoveryModelId);
+export function getUtilityModel(config: SunnyConfig): LanguageModel {
+  return anthropic(config.utilityModelId);
 }
 
 /**

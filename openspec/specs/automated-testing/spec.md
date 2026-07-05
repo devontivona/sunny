@@ -98,14 +98,14 @@ The unit and integration lanes plus type-checking SHALL run automatically in CI 
 - **AND** it does not invoke the paid eval harness
 
 ### Requirement: Initial coverage of the current surface
-This change SHALL deliver written tests covering the existing foundation, not only the harness. The **unit** lane SHALL cover, at minimum: sender authorization and identity normalization; inbound thread-kind (DM vs group) derivation; schedule duration/next-run (once/interval/cron) computation; memory write semantics (add/replace/remove), topic-name sanitization, and core-file overflow; system-prompt assembly including its byte-stability under unchanged inputs; the turn delivery classification (`send_message` vs fallback vs silence), trailing non-user-message trimming, and group speaker-prefixing; config schema defaults/validation; and dispatcher dedup, eviction, and steering-vs-new-run behavior. The **integration** lane SHALL cover, at minimum: inbound dedup, recent-window ordering, and full-text keyword recall against real Postgres; the scheduler ticker dispatching due schedules and advancing next-run; and the agent loop end-to-end with the mock model and fake gateway (including the fallback-delivery path and the persisted per-turn record).
+This change SHALL deliver written tests covering the existing foundation, not only the harness. The **unit** lane SHALL cover, at minimum: sender authorization and identity normalization; inbound thread-kind (DM vs group) derivation; schedule duration/next-run (once/interval/cron) computation; memory write semantics (add/replace/remove), topic-name sanitization, and core-file overflow; system-prompt assembly including its byte-stability under unchanged inputs; the turn delivery classification (delivered final text vs abnormal-end fallback vs sentinel silence), trailing non-user-message trimming, and group speaker-prefixing; config schema defaults/validation; and dispatcher dedup, eviction, and steering-vs-new-run behavior. The **integration** lane SHALL cover, at minimum: inbound dedup, recent-window ordering, and full-text keyword recall against real Postgres; the scheduler ticker dispatching due schedules and advancing next-run; and the agent loop end-to-end with the mock model and fake gateway (including the fallback-delivery path and the persisted per-turn record).
 
 #### Scenario: Foundation has written coverage
 - **WHEN** this change is complete
 - **THEN** the listed unit and integration behaviors each have at least one test
 - **AND** those tests run in the default CI gate
 
-#### Scenario: send_message guard is covered both ways
+#### Scenario: Delivery classification is covered both ways
 - **WHEN** the loop coverage runs
-- **THEN** a turn that calls `send_message` is recorded as delivered via `send_message`
-- **AND** a turn that produces only private scratch delivers nothing to the user and is flagged as a `fallback_text` miss (raw model text is never auto-sent)
+- **THEN** a turn ending on reply text is recorded as delivered (`text`) and its bubbles reach the user exactly once
+- **AND** a turn that ends with only working notes delivers nothing raw and is flagged as a `fallback_text` abnormal end (working notes are never auto-sent)

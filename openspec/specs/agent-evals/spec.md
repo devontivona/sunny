@@ -28,8 +28,8 @@ Eval cases SHALL be defined as versioned, human-readable files checked into the 
 The eval harness SHALL support deterministic, programmatic graders that assert on observable facts of a turn — which tools were called and with what arguments, how many user-facing messages were sent, and whether a gated action was taken.
 
 #### Scenario: Assertion on tool usage
-- **WHEN** a programmatic grader checks that exactly one `send_message` occurred
-- **THEN** the case passes only if the captured turn made exactly one `send_message` call
+- **WHEN** a programmatic grader checks that a specific tool call occurred (e.g. exactly one `start_job`)
+- **THEN** the case passes only if the captured turn made exactly that call
 
 ### Requirement: LLM-as-judge graders
 The eval harness SHALL support rubric-based LLM-as-judge graders for qualities that are not deterministically checkable (helpfulness, tone, appropriate use of recalled memory). The judge model and rubric SHALL be versioned, and SHALL be distinct from the model under evaluation.
@@ -40,12 +40,12 @@ The eval harness SHALL support rubric-based LLM-as-judge graders for qualities t
 - **AND** the judge model and rubric used are recorded with the result
 
 ### Requirement: Core eval dimensions
-The scenario dataset SHALL cover, at minimum, these behavioral dimensions: **`send_message` elicitation** (the model communicates only via the tool, never leaking private scratch as the user-facing reply), **memory recall** (seeded facts are retrieved and used, including recording a durable fact via `memory_write` and recalling older history), and **tool selection** (the appropriate tool is chosen for a request — e.g. a durable job vs an inline reply, scheduling vs immediate action, and not over-calling tools for a trivial message). Security-gating evaluation is deferred — the current focus is owner DMs — and returns alongside the Phase-4 `security-tools-credentials` work.
+The scenario dataset SHALL cover, at minimum, these behavioral dimensions: **reply delivery** (the turn ends on delivered final reply text — or the deliberate silence sentinel — never on an abnormal end the backstop must rescue), **memory recall** (seeded facts are retrieved and used, including recording a durable fact via `memory_write` and recalling older history), and **tool selection** (the appropriate tool is chosen for a request — e.g. a durable job vs an inline reply, scheduling vs immediate action, and not over-calling tools for a trivial message). Security-gating evaluation is deferred — the current focus is owner DMs — and returns alongside the Phase-4 `security-tools-credentials` work.
 
-#### Scenario: send_message elicitation is evaluated
+#### Scenario: Reply delivery is evaluated
 - **WHEN** the elicitation dimension is evaluated over its cases
-- **THEN** each case checks that the user-facing reply was delivered via `send_message`
-- **AND** flags any turn that fell back to delivering private scratch text
+- **THEN** each case checks that the reply was delivered as the turn's final text (without the backstop rescuing it)
+- **AND** silence cases check the turn chose the `<no-reply/>` sentinel rather than over-talking
 
 #### Scenario: Tool selection is evaluated
 - **WHEN** a tool-selection case presents a request that warrants a specific tool

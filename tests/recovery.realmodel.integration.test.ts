@@ -2,12 +2,12 @@ import { readFileSync } from 'node:fs';
 import { anthropic } from '@ai-sdk/anthropic';
 import type { ModelMessage } from 'ai';
 import { describe, expect, it } from 'vitest';
-import { runRecoveryPass } from '../src/agent/recovery.js';
+import { runBackstopPass } from '../src/agent/recovery.js';
 
 /**
  * Real-model regression for the delivery-recovery backstop (D-MG8) — exercised by calling the
- * SHARED `runRecoveryPass` directly (the same function the durable turn invokes via its
- * `recoverDelivery` step → `getRecoveryModel(config)`), so it guards the recovery LOGIC
+ * SHARED `runBackstopPass` directly (the same function the durable turn invokes via its
+ * `recoverDelivery` step → `getUtilityModel(config)`), so it guards the backstop LOGIC
  * independent of which turn path calls it. The durable turn's end-to-end miss→recovery→deliver
  * wiring is verified live via the loopback channel (a deterministic version would need a
  * recovery-model test seam — deferred).
@@ -32,14 +32,14 @@ describe('delivery-recovery on the captured ghost trajectory (real Haiku)', () =
       new URL('../evals/cases/fixtures/recoveryGhostTrajectory.json', import.meta.url),
       'utf8',
     ),
-  ) as { scratch: string; messages: ModelMessage[] };
+  ) as { scratch: string; messages: ModelMessage[] }; // fixture key predates the notes rename
 
   it('recovers the real ghosted turn (non-empty reply)', async () => {
-    const out = await runRecoveryPass({
+    const out = await runBackstopPass({
       model: anthropic('claude-haiku-4-5'),
       ownerName: 'Devon',
       messages: fixture.messages,
-      scratch: fixture.scratch,
+      notes: fixture.scratch,
       threadId: 'regression-ghost-trajectory',
     });
 
@@ -57,7 +57,7 @@ describe('delivery-recovery on the captured ghost trajectory (real Haiku)', () =
  */
 describe('delivery-recovery collapses interim progress on a completed turn (real Haiku)', () => {
   it('sends the final result, dropping contradictory progress chatter', async () => {
-    const scratch = [
+    const notes = [
       "On it — I'll build the one-pager and host it. Give me a few minutes.",
       'Style picked (terminal). Writing the page.',
       "Done — it's live: https://example.waywardlane.com — built with website-builder, hosted via devbox. Want any changes?",
@@ -66,11 +66,11 @@ describe('delivery-recovery collapses interim progress on a completed turn (real
       { role: 'user', content: [{ type: 'text', text: 'Build a one-pager about X and host it.' }] },
     ] as unknown as ModelMessage[];
 
-    const out = await runRecoveryPass({
+    const out = await runBackstopPass({
       model: anthropic('claude-haiku-4-5'),
       ownerName: 'Devon',
       messages,
-      scratch,
+      notes,
       threadId: 'regression-progress-collapse',
     });
 

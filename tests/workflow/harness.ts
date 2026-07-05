@@ -80,24 +80,25 @@ export async function setupTestRuntime(
     wakeThread: wake,
     spawnChild,
     steerChild,
+    // Hermetic default: the progress translator is always armed on conversational turns,
+    // so any multi-step mock would otherwise reach a LIVE utility model. Tests that assert
+    // translator behavior override this via runtimeExtras.
+    translateOverride: () => '',
     ...runtimeExtras,
   });
   return { db, store, gateway, config, spawnChild, steerChild, wakeCalls };
 }
 
-/** Script the turn's model (a `send_message`/`stay_silent` tool call, text, etc.). Sets the
+/** Script the turn's model (reply text, tool calls, the silence sentinel, etc.). Sets the
  *  plain RESPONSES array on the seam global; the workflow's `setupTurn` step reads it and the
  *  body builds the mock (responses[N] is returned for the Nth model step). */
 export function setTurnModel(responses: MockResponseDescriptor[]): void {
   g[TEST_TURN_MODEL_KEY] = responses;
 }
 
-/** Convenience: a turn that delivers one message then stops. */
-export function sendOnce(text: string): MockResponseDescriptor[] {
-  return [
-    { type: 'tool-call', toolName: 'send_message', input: JSON.stringify({ text }) },
-    { type: 'text', text: '' },
-  ];
+/** Convenience: a turn that replies with one final text (text-as-reply). */
+export function replyOnce(text: string): MockResponseDescriptor[] {
+  return [{ type: 'text', text }];
 }
 
 export async function teardownTestRuntime(ctx: TestRuntimeCtx): Promise<void> {

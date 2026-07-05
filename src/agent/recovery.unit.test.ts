@@ -59,7 +59,7 @@ describe('renderTranscript', () => {
 
     expect(out.split('\n')).toEqual([
       "Devon: how's it going",
-      'Sunny (private note): going well — humming along',
+      'Sunny (said): going well — humming along',
       'Sunny [ran bash: uname -a]',
       'Sunny (sent): Linux janeway',
       'Devon: [sent an attachment]',

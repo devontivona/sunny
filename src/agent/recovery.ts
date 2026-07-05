@@ -2,52 +2,47 @@ import { generateText, type LanguageModel, type ModelMessage } from 'ai';
 import { telemetryEnabled } from '../observability/instrumentation.js';
 
 /**
- * Delivery-recovery pass (messaging-gateway D-MG8).
+ * Abnormal-turn-end backstop.
  *
- * Runs only when the main turn produced text but never delivered it (an
- * elicitation miss). A cheap model rewrites the agent's private notes into a clean
- * iMessage and returns it as PLAIN TEXT — no tool call, no forced tool use. The
- * runner then delivers that text and records it in history as a `send_message`
- * tool call, so a recovered miss is indistinguishable from a clean send and
- * reinforces the positive pattern.
+ * Under text-as-reply (PR #31) a deliberate turn always ends on reply text or the
+ * `<no-reply/>` silence sentinel — so this pass runs only when a turn ended
+ * ABNORMALLY with working notes but no reply: the step limit cut it off mid-task,
+ * a `length`/`content-filter`/`error` finish killed the generation, or (rare) an
+ * empty final. Rather than ghosting the user, a cheap utility model composes an
+ * honest status message from the turn's notes ("here's where I got"), which the
+ * runner delivers and persists as the turn's final reply text. It fired ZERO times
+ * across the PR #31 gate runs — this is tail insurance, and how often it fires in
+ * production is itself a tracked signal (Langfuse functionId `turn-backstop`).
  *
- * Why plain text and not a forced tool call: generating text is the single most
- * reliable thing the model does. The old `toolChoice: 'required'` pass was fragile
- * (incompatible with extended thinking on Anthropic) and in production resolved
- * without ever emitting a usable tool call — ghosting the user while reporting it
- * had recovered. Removing the forcing removes that whole failure class.
+ * Historical note: this began life as the D-MG8 "delivery-recovery" pass, rescuing
+ * tool-mode elicitation misses (replies written into scratch instead of
+ * send_message). The text migration removed that disease by construction; the
+ * mechanism survives with a smaller job. Two hard-won lessons carry over:
+ * plain-text output (never a forced tool call — the old `toolChoice: 'required'`
+ * pass resolved without a usable call, ghosting while reporting success), and the
+ * third-person transcript framing (below).
  *
- * The backstop has NO "stay silent" option: choosing silence is the main turn's
- * job (via `stay_silent`). By the time the backstop runs the model has already
- * written a reply it simply failed to send, so the backstop always composes and
- * delivers it. With the transcript framing (below) an empty result should be
- * impossible; the runner treats one as a CRITICAL error rather than silently
- * dropping the turn.
+ * The backstop has NO "stay silent" option: by the time it runs the turn did real
+ * work worth accounting for, so it always composes.
  */
-export interface RecoveryOptions {
+export interface BackstopOptions {
   model: LanguageModel;
   ownerName: string;
   /** The turn's conversation (recent window), ending in the user message. */
   messages: ModelMessage[];
-  /** The model's private notes/draft for the missed turn. */
-  scratch: string;
-  /** The turn's thread id, so the recovery span groups with that turn's session. */
+  /** The cut-off turn's working notes (interim narration; never delivered raw). */
+  notes: string;
+  /** The turn's thread id, so the backstop span groups with that turn's session. */
   threadId: string;
-  /**
-   * How the transcript labels the assistant's PLAIN TEXT lines. Tool mode: 'private note'
-   * (text was never delivered — it's scratch). Text mode: 'said' (prior turns' text WAS the
-   * delivered reply, so labeling it private would misread the history).
-   */
-  assistantTextLabel?: string;
 }
 
 /**
- * Render the turn's messages as a labeled, third-person TRANSCRIPT for the recovery
- * model — `Devon: …` / `Sunny (sent): …` / `Sunny [ran bash: …]` — to be embedded in
+ * Render the turn's messages as a labeled, third-person TRANSCRIPT for the backstop
+ * model — `Devon: …` / `Sunny (said): …` / `Sunny [ran bash: …]` — to be embedded in
  * a single user message rather than replayed as native assistant/tool turns.
  *
  * Why this shape is load-bearing: fed the raw trajectory as its own assistant/tool
- * turns, the Haiku recovery call identifies AS Sunny and tries to CONTINUE the task
+ * turns, the Haiku backstop call identifies AS Sunny and tries to CONTINUE the task
  * (given a tool it emits another `bash`/`agent-browser` call to "finish fetching");
  * with no tools defined — the real recovery call — that impulse collapses into an
  * empty `stop` turn, which is the production ghosting bug. Presenting the history as
@@ -61,7 +56,9 @@ export interface RecoveryOptions {
 export function renderTranscript(
   messages: ModelMessage[],
   ownerName: string,
-  assistantTextLabel = 'private note',
+  // Prior turns' plain text WAS the delivered reply under text-as-reply; legacy rows'
+  // send_message tool calls still render as `Sunny (sent):` below.
+  assistantTextLabel = 'said',
 ): string {
   const brief = (v: unknown): string => {
     const s = typeof v === 'string' ? v : JSON.stringify(v ?? '');
@@ -100,48 +97,47 @@ export function renderTranscript(
   return lines.join('\n');
 }
 
-/** Compose the clean iMessage the missed turn should have sent. Empty = nothing to send. */
-export async function runRecoveryPass(opts: RecoveryOptions): Promise<string> {
-  const transcript = renderTranscript(opts.messages, opts.ownerName, opts.assistantTextLabel);
+/** Compose the status message the cut-off turn should send. Empty = nothing to send. */
+export async function runBackstopPass(opts: BackstopOptions): Promise<string> {
+  const transcript = renderTranscript(opts.messages, opts.ownerName);
   const userMessage =
     `Conversation transcript:\n${transcript}\n\n` +
-    `Sunny's private draft notes for the latest turn (the reply it failed to send):\n${opts.scratch}\n\n` +
+    `Sunny's working notes for the latest turn (which was cut off before it wrote its reply):\n${opts.notes}\n\n` +
     `Write the message Sunny should send to ${opts.ownerName} now.`;
   const result = await generateText({
     model: opts.model,
-    instructions: recoverySystem(opts.ownerName),
+    instructions: backstopSystem(opts.ownerName),
     messages: [{ role: 'user', content: userMessage }],
-    // Trace the recovery pass too (observability D-OB1), tagged as a recovery so it is
-    // filterable in Langfuse — how often this path fires is itself a signal worth watching
-    // (the elicitation miss it backstops; D-MG8). Linked to the turn's session via threadId.
-    // v7 carries metadata via runtimeContext (the v6 telemetry.metadata channel was removed).
+    // Trace the backstop too (observability D-OB1) — how often this path fires is itself
+    // a signal worth watching (an abnormal turn end). Linked to the turn's session via
+    // threadId. (Renamed from functionId 'delivery-recovery' on 2026-07-05.)
     runtimeContext: {
       recovery: true,
-      trigger: 'elicitation-miss',
+      trigger: 'abnormal-turn-end',
       langfuseSessionId: opts.threadId,
     },
     telemetry: {
       isEnabled: telemetryEnabled(),
-      functionId: 'delivery-recovery',
+      functionId: 'turn-backstop',
       includeRuntimeContext: { recovery: true, trigger: true, langfuseSessionId: true },
     },
   });
   return result.text.trim();
 }
 
-function recoverySystem(ownerName: string): string {
+function backstopSystem(ownerName: string): string {
   return [
-    `You are the delivery checkpoint for ${ownerName}'s iMessage assistant, Sunny.`,
-    `Sunny just finished a turn but its reply never went out — it left the reply in its`,
-    `private draft notes instead of sending it. You are given the recent conversation`,
-    `TRANSCRIPT plus those notes; write the clean iMessage Sunny should send to ${ownerName} now.`,
-    `- You are NOT Sunny and you are NOT continuing the task — only compose the message`,
-    `  Sunny already meant to send, drawn from its notes.`,
-    `- The notes are written incrementally across the turn and may mix interim progress`,
-    `  ("on it", "one moment", "give me a few minutes") with the final result. Send the`,
-    `  message that reflects the FINAL state: if the work is already done, deliver the`,
-    `  completed result and DROP the earlier progress / "working on it" lines — by the time`,
-    `  this sends the work is finished, so a "give me a minute" line would contradict it.`,
+    `You are the safety net for ${ownerName}'s iMessage assistant, Sunny. Sunny's turn was`,
+    `CUT OFF mid-task (it ran out of steps or hit an error) before it wrote its reply — so`,
+    `${ownerName} would otherwise hear nothing. You are given the recent conversation`,
+    `TRANSCRIPT plus Sunny's working notes for the cut-off turn; write the honest message`,
+    `Sunny should send now, in Sunny's voice (warm, concise, first person).`,
+    `- You are NOT Sunny and you are NOT continuing the task — only report where things`,
+    `  stand, drawn from the notes.`,
+    `- If the notes contain a finished result, deliver it. If the work is clearly`,
+    `  UNFINISHED, say so honestly — what got done, what didn't — and never claim or imply`,
+    `  the task completed. Do not promise Sunny will keep working; the turn is over, so`,
+    `  invite ${ownerName} to nudge if they want it picked back up.`,
     `- Plain text, no markdown. Concise — one or two short messages at most.`,
     `- Deliver what the notes already convey; do not invent new content.`,
     `- Output ONLY the message text Sunny should send — no preamble, no quotes, nothing else.`,

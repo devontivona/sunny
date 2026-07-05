@@ -15,7 +15,7 @@ const TYPING_THROTTLE_MS = 4000;
 
 /**
  * Durable Tier-1 router (durable-main-loop), the gateway-side counterpart of the per-turn
- * durable conversational run. Gated behind `SUNNY_DURABLE_TURNS=1`.
+ * durable conversational run.
  *
  * ONE run = ONE turn. This router provides what the keep-alive hook used to (and what caused
  * the turns-2+ parking bug): per-thread serialization + "start the next turn when there's

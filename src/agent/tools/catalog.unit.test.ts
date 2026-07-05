@@ -10,8 +10,7 @@ describe('toolCatalog', () => {
     // factory should appear here automatically — update this assertion when it does.
     expect(new Set(names)).toEqual(
       new Set([
-        'send_message',
-        'stay_silent',
+        'send_image',
         'start_job',
         'memory_write',
         'read_topic',
@@ -33,7 +32,7 @@ describe('toolCatalog', () => {
     for (const n of ['bash', 'file_read', 'credential_manage', 'mcp_manage', 'schedule_create']) {
       expect(byName.get(n)?.ownerOnly, n).toBe(true);
     }
-    for (const n of ['send_message', 'stay_silent', 'start_job', 'memory_write']) {
+    for (const n of ['send_image', 'start_job', 'memory_write']) {
       expect(byName.get(n)?.ownerOnly, n).toBe(false);
     }
   });
@@ -61,7 +60,9 @@ describe('toolCatalog', () => {
     });
     // Optional params are flagged not-required (e.g. bash `cwd`).
     expect(bash.params.find((p) => p.name === 'cwd')?.required).toBe(false);
-    // A no-arg tool (stay_silent) has no parameters.
-    expect(toolCatalog(makeConfig()).find((e) => e.name === 'stay_silent')?.params).toEqual([]);
+    // send_image: pathOrUrl required, caption optional.
+    const sendImage = toolCatalog(makeConfig()).find((e) => e.name === 'send_image')!;
+    expect(sendImage.params.find((x) => x.name === 'pathOrUrl')?.required).toBe(true);
+    expect(sendImage.params.find((x) => x.name === 'caption')?.required).toBe(false);
   });
 });

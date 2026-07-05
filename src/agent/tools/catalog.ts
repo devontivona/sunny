@@ -1,11 +1,9 @@
 import { asSchema } from '@ai-sdk/provider-utils';
-import type { Gateway } from '../../gateway/types.js';
 import type { Db } from '../../db/client.js';
 import type { ConversationStore } from '../../gateway/store.js';
 import type { SunnyConfig } from '../../config/index.js';
-import { createSendMessageTool } from './sendMessage.js';
-import { createStaySilentTool } from './staySilent.js';
-import { createStartJobTool } from './startJob.js';
+import { SEND_IMAGE_SPEC } from './sendMessageSpec.js';
+import { START_JOB_SPEC } from './startJobSpec.js';
 import { createScheduleTools } from './schedule.js';
 import { RUNS_TOOL_SPECS } from './scheduleSpecs.js';
 import { createCredentialTools } from './credentialManage.js';
@@ -86,21 +84,17 @@ function purposeOf(description: string | ((options: never) => string) | undefine
 }
 
 export function toolCatalog(config: SunnyConfig): ToolCatalogEntry[] {
-  // Inert per-turn state + deps — construction never reads these; we only read
-  // tool metadata. Cast through `undefined` for the deps used solely in closures.
-  const counter = { count: 0 };
-  const silence = { silent: false };
-  const inertGateway = undefined as unknown as Gateway;
+  // Inert deps — construction never reads these; we only read tool metadata.
   const inertDb = undefined as unknown as Db;
   const inertStore = undefined as unknown as ConversationStore;
 
-  // Mirror `conversation.ts` `buildTools`. `send_message`/`stay_silent`/`start_job`/memory are
-  // registered on every turn; scheduling/credentials/mcp/host tools are trusted-DM-only (owner
-  // OR family).
+  // Mirror `conversation.ts` `buildTools` (text-as-reply, PR #31: the reply is the model's
+  // final text — no send_message/stay_silent tools). `send_image`/`start_job`/memory are
+  // registered on every turn; scheduling/credentials/mcp/host tools are trusted-DM-only
+  // (owner OR family).
   const broad: Record<string, ToolLike> = {
-    send_message: createSendMessageTool(inertGateway, '', counter),
-    stay_silent: createStaySilentTool(silence),
-    start_job: createStartJobTool('', config.owner.name),
+    send_image: SEND_IMAGE_SPEC,
+    start_job: START_JOB_SPEC,
     ...createMemoryTools(config, inertStore),
   };
   const ownerOnly: Record<string, ToolLike> = {
