@@ -29,7 +29,7 @@ describe('self-scheduling on a trusted-DM turn (run-audiences Phase 1a)', () => 
   });
 
   it('a trusted-DM turn creates a schedule via schedule_create and confirms it', async () => {
-    ctx = await setupTestRuntime();
+    ctx = await setupTestRuntime({ deliveryMode: 'tool' });
     const event = makeChannelEvent({ text: 'remind me to check on Leo every morning at 8' });
     await ctx.store.appendInbound(event);
     setTurnModel([
@@ -69,7 +69,7 @@ describe('self-scheduling on a trusted-DM turn (run-audiences Phase 1a)', () => 
 
   it('a non-owner family member can also schedule (gate is trusted-DM, not owner-only)', async () => {
     const KATE = '+17195550000';
-    ctx = await setupTestRuntime({ family: [{ name: 'Kate', identities: [KATE] }] });
+    ctx = await setupTestRuntime({ deliveryMode: 'tool', family: [{ name: 'Kate', identities: [KATE] }] });
     const event = makeChannelEvent({
       threadId: 'sendblue:owner:kate',
       senderId: KATE,
@@ -107,7 +107,7 @@ describe('self-scheduling on a trusted-DM turn (run-audiences Phase 1a)', () => 
   });
 
   it('cancel_run on a trusted-DM turn cancels an existing schedule', async () => {
-    ctx = await setupTestRuntime();
+    ctx = await setupTestRuntime({ deliveryMode: 'tool' });
     // Seed a schedule directly, then drive a turn that cancels it by id.
     const { createSchedule } = await import('../../src/scheduler/index.js');
     const seeded = await createSchedule(ctx.db.db, {
@@ -137,6 +137,7 @@ describe('self-scheduling on a trusted-DM turn (run-audiences Phase 1a)', () => 
 
   it('cross-person (#4): the owner can schedule FOR a family member via `for`', async () => {
     ctx = await setupTestRuntime({
+    deliveryMode: 'tool',
       owner: { name: 'Devon', identities: ['+15551230000'] },
       family: [{ name: 'Kate', identities: ['+17193146820'] }],
     });
@@ -169,7 +170,7 @@ describe('self-scheduling on a trusted-DM turn (run-audiences Phase 1a)', () => 
   });
 
   it('cross-person: scheduling for a NON-roster name is refused', async () => {
-    ctx = await setupTestRuntime({ owner: { name: 'Devon', identities: ['+15551230000'] } });
+    ctx = await setupTestRuntime({ deliveryMode: 'tool', owner: { name: 'Devon', identities: ['+15551230000'] } });
     const devon = makeChannelEvent({ text: 'remind Stranger tomorrow' });
     await ctx.store.appendInbound(devon);
     setTurnModel([
@@ -188,7 +189,7 @@ describe('self-scheduling on a trusted-DM turn (run-audiences Phase 1a)', () => 
   });
 
   it('list_runs shows the owner all schedules', async () => {
-    ctx = await setupTestRuntime();
+    ctx = await setupTestRuntime({ deliveryMode: 'tool' });
     const { createSchedule } = await import('../../src/scheduler/index.js');
     await createSchedule(ctx.db.db, {
       kind: 'cron',

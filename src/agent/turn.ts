@@ -10,7 +10,7 @@ import {
   type AttachmentRef,
   type PreparedImage,
 } from '../gateway/media.js';
-import { userMessagePrefix } from './delivery.js';
+import { groupSpeakerPrefix as speakerPrefix } from './delivery.js';
 
 /**
  * Stored-row → model-message conversion + inbound media resolution (D-MG9 / D-MM3).
@@ -57,9 +57,6 @@ export interface MediaResolveOptions {
   prepareImage?: (bytes: Buffer, mediaType: string) => PreparedImage | null;
   maxInlineCount?: number;
   maxInlineBytes?: number;
-  /** Prefix every user message with the relay envelope (config.inboundEnvelope).
-   *  Applied at READ time — old rows replay uniformly, no persisted-row change. */
-  envelope?: boolean;
   /** How persisted `data-translator` parts render in history (config.translatorHistory,
    *  text-delivery Phase 3): 'attributed' (default) — as `[progress update relayed to
    *  <subject>: "…"]` text lines, so the model knows what the user already heard;
@@ -78,7 +75,7 @@ export function toModelMessages(
     stripReasoning(
       resolveMedia(
         renderTranslatorParts(
-          rowToUIMessage(row, isGroup, opts.envelope ?? false),
+          rowToUIMessage(row, isGroup),
           opts.translatorHistory ?? 'attributed',
           opts.translatorSubject ?? 'the user',
         ),
@@ -233,13 +230,9 @@ function attachmentToPart(
   return filePart(prepared.mediaType, ref.name, prepared.bytes);
 }
 
-export function rowToUIMessage(
-  row: StoredMessage,
-  isGroup: boolean,
-  envelope = false,
-): Omit<UIMessage, 'id'> {
+export function rowToUIMessage(row: StoredMessage, isGroup: boolean): Omit<UIMessage, 'id'> {
   const prefix =
-    row.role === 'user' ? userMessagePrefix(row.senderName, row.isOwner, isGroup, envelope) : '';
+    row.role === 'user' && isGroup ? speakerPrefix(row.senderName, row.isOwner) : '';
   if (row.payload && typeof row.payload === 'object') {
     const msg = row.payload as UIMessage;
     if (prefix && msg.role === 'user') return prefixUserMessage(msg, prefix);

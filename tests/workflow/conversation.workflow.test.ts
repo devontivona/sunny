@@ -24,7 +24,7 @@ describe('runConversation (workflow integration — real Local World)', () => {
   });
 
   it('answers an inbound: delivers via send_message, persists one turn, marks it processed', async () => {
-    ctx = await setupTestRuntime();
+    ctx = await setupTestRuntime({ deliveryMode: 'tool' });
     const event = makeChannelEvent({ text: 'hey sunny' });
     await ctx.store.appendInbound(event);
     setTurnModel(sendOnce('hey! what is up?'));
@@ -46,7 +46,7 @@ describe('runConversation (workflow integration — real Local World)', () => {
     // turn and reintroduces earlier `tool_use` ids — Anthropic then rejects every later turn with
     // "`tool_use` ids must be unique", and the durable run retries forever. The turn must persist
     // ONLY its own generated content.
-    ctx = await setupTestRuntime();
+    ctx = await setupTestRuntime({ deliveryMode: 'tool' });
 
     // A prior, already-answered turn whose payload carries a distinctive tool-call id.
     const first = makeChannelEvent({ text: 'earlier question' });
@@ -116,33 +116,9 @@ describe('runConversation (workflow integration — real Local World)', () => {
     expect(new Set(allToolIds).size).toBe(allToolIds.length); // no duplicate tool_use ids anywhere
   });
 
-  it('prepends the canned few-shot block to the prompt when config.fewshot is on', async () => {
-    ctx = await setupTestRuntime({ fewshot: true });
-    const event = makeChannelEvent({ text: 'hello there' });
-    await ctx.store.appendInbound(event);
-    // The mock model picks responses[count of assistant messages in its prompt]. The canned
-    // block contributes exactly 3 assistant turns (asserted in fewshot.unit.test.ts), so the
-    // first live step must land at index 3 — proof the block actually reached the prompt.
-    setTurnModel([
-      { type: 'text', text: 'wrong: block missing (index 0)' },
-      { type: 'text', text: 'wrong: block thinned (index 1)' },
-      { type: 'text', text: 'wrong: block thinned (index 2)' },
-      {
-        type: 'tool-call',
-        toolName: 'send_message',
-        input: JSON.stringify({ text: 'few-shot block is in the prompt' }),
-      },
-      { type: 'text', text: '' },
-    ]);
-
-    const run = await start(runConversation, [{ threadId: event.threadId }]);
-    await run.returnValue;
-    expect(await run.status).toBe('completed');
-    expect(ctx.gateway.texts()).toEqual(['few-shot block is in the prompt']);
-  });
 
   it('is a no-op when there is no unanswered inbound', async () => {
-    ctx = await setupTestRuntime();
+    ctx = await setupTestRuntime({ deliveryMode: 'tool' });
     const event = makeChannelEvent({ text: 'already answered' });
     await ctx.store.appendInbound(event);
     await ctx.store.markProcessedMany('imessage', [event.messageId]);
@@ -156,7 +132,7 @@ describe('runConversation (workflow integration — real Local World)', () => {
   });
 
   it('folds a message that arrives mid-turn into the same turn (double-text steering)', async () => {
-    ctx = await setupTestRuntime();
+    ctx = await setupTestRuntime({ deliveryMode: 'tool' });
     const a = makeChannelEvent({ text: 'plan a trip' });
     await ctx.store.appendInbound(a);
     // A second message lands AFTER the window is read (step 0) but before the model's next
@@ -189,6 +165,7 @@ describe('runConversation (workflow integration — real Local World)', () => {
   it('family DM: routes a person-fact to people:<id>, never the owner USER.md (multiplayer-family)', async () => {
     const KATE = '+17193146820';
     ctx = await setupTestRuntime({
+      deliveryMode: 'tool',
       owner: { name: 'Devon', identities: ['+15551230000'] },
       family: [{ name: 'Kate', identities: [KATE] }],
     });
@@ -229,6 +206,7 @@ describe('runConversation (workflow integration — real Local World)', () => {
   it('family DM: cannot edit the owner USER.md (owner-only carve-out)', async () => {
     const KATE = '+17193146820';
     ctx = await setupTestRuntime({
+      deliveryMode: 'tool',
       owner: { name: 'Devon', identities: ['+15551230000'] },
       family: [{ name: 'Kate', identities: [KATE] }],
     });
@@ -263,6 +241,7 @@ describe('runConversation (workflow integration — real Local World)', () => {
   it('family DM: cannot edit SUNNY.md (owner-only operating notes)', async () => {
     const KATE = '+17193146820';
     ctx = await setupTestRuntime({
+      deliveryMode: 'tool',
       owner: { name: 'Devon', identities: ['+15551230000'] },
       family: [{ name: 'Kate', identities: [KATE] }],
     });
@@ -297,6 +276,7 @@ describe('runConversation (workflow integration — real Local World)', () => {
   it('message (person): relays to another roster member on their thread, confirms on the current one', async () => {
     const KATE = '+17193146820';
     ctx = await setupTestRuntime({
+      deliveryMode: 'tool',
       owner: { name: 'Devon', identities: ['+15551230000'] },
       family: [{ name: 'Kate', identities: [KATE] }],
     });
@@ -340,6 +320,7 @@ describe('runConversation (workflow integration — real Local World)', () => {
   it('message (person): relays an image attachment to the recipient thread', async () => {
     const KATE = '+17193146820';
     ctx = await setupTestRuntime({
+      deliveryMode: 'tool',
       owner: { name: 'Devon', identities: ['+15551230000'] },
       family: [{ name: 'Kate', identities: [KATE] }],
     });
@@ -382,6 +363,7 @@ describe('runConversation (workflow integration — real Local World)', () => {
 
   it('message (person): refuses a non-roster recipient (roster-only)', async () => {
     ctx = await setupTestRuntime({
+      deliveryMode: 'tool',
       owner: { name: 'Devon', identities: ['+15551230000'] },
       family: [{ name: 'Kate', identities: ['+17193146820'] }],
     });
@@ -648,26 +630,9 @@ describe('runConversation (workflow integration — real Local World)', () => {
     expect(ctx.gateway.texts()).toContain('chart sent — red line is spend');
   });
 
-  it('text mode: the few-shot block is NOT prepended (tool-mode-only mitigation)', async () => {
-    ctx = await setupTestRuntime({ deliveryMode: 'text', fewshot: true });
-    const event = makeChannelEvent({ text: 'hello there' });
-    await ctx.store.appendInbound(event);
-    // The mock indexes by assistant-message count in the prompt: with the block absent the
-    // first step lands at index 0. If the block leaked in, it would land at index 3.
-    setTurnModel([
-      { type: 'text', text: 'clean prompt reply' },
-      { type: 'text', text: 'wrong: fewshot block leaked (1)' },
-      { type: 'text', text: 'wrong: fewshot block leaked (2)' },
-      { type: 'text', text: 'wrong: fewshot block leaked (3)' },
-    ]);
-
-    const run = await start(runConversation, [{ threadId: event.threadId }]);
-    await run.returnValue;
-    expect(ctx.gateway.texts()).toEqual(['clean prompt reply']);
-  });
 
   it('delivers EXACTLY ONCE when a post-send step fails and the workflow replays', async () => {
-    ctx = await setupTestRuntime();
+    ctx = await setupTestRuntime({ deliveryMode: 'tool' });
     const event = makeChannelEvent({ text: 'crash test' });
     await ctx.store.appendInbound(event);
     setTurnModel(sendOnce('delivered once'));

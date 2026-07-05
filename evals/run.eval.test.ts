@@ -57,10 +57,6 @@ function parseOptions(): Options {
   const cell: ScorecardConfig = {};
   if (runConfig.thinking) cell.thinking = runConfig.thinking;
   if (runConfig.effort) cell.effort = runConfig.effort;
-  if (runConfig.promptVariant) cell.promptVariant = runConfig.promptVariant;
-  if (runConfig.inboundEnvelope !== undefined) cell.inboundEnvelope = runConfig.inboundEnvelope;
-  if (runConfig.fewshot !== undefined) cell.fewshot = runConfig.fewshot;
-  if (runConfig.composerAlways !== undefined) cell.composerAlways = runConfig.composerAlways;
   if (runConfig.deliveryMode) cell.deliveryMode = runConfig.deliveryMode;
   if (runConfig.translatorHistory) cell.translatorHistory = runConfig.translatorHistory;
   if (runConfig.translatorEveryNSteps) cell.translatorEveryNSteps = runConfig.translatorEveryNSteps;
@@ -247,10 +243,9 @@ describe('eval scorecard', () => {
     reportDiff(scorecard);
     console.log(`\nCost: $${scorecard.costUsd.toFixed(4)}`);
 
-    // Text-cell silence gate (the d487a98 over-talk risk — a Phase 6 flip gate): the
-    // silence tier must hold at or above the committed tool-mode baseline. Reported
-    // here per run; the flip decision reads it off the grid.
-    if (opts.cell?.deliveryMode === 'text') {
+    // Silence-tier gate (the d487a98 over-talk risk): reported for every text-mode run
+    // (the default since 2026-07-05) — silence must hold at or above the committed baseline.
+    if ((opts.runConfig.deliveryMode ?? 'text') === 'text') {
       const gate = silenceTierGate(readBaseline(), scorecard);
       const pct = (v: number | null) => (v === null ? 'n/a' : `${(v * 100).toFixed(0)}%`);
       console.log(`\nSilence-tier gate (text cell vs tool baseline): ${gate.pass ? 'PASS' : 'FAIL'}`);

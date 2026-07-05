@@ -151,13 +151,9 @@ describe('historyTier', () => {
 describe('cellSlug', () => {
   it('encodes only the forced knobs', () => {
     expect(cellSlug('claude-sonnet-5')).toBe('claude-sonnet-5');
-    expect(
-      cellSlug('claude-opus-4-8', {
-        thinking: 'off',
-        promptVariant: 'gateway',
-        fewshot: true,
-      }),
-    ).toBe('claude-opus-4-8__t-off__v-gateway__fs1');
+    expect(cellSlug('claude-opus-4-8', { thinking: 'off', effort: 'low' })).toBe(
+      'claude-opus-4-8__t-off__e-low',
+    );
   });
 
   it('encodes the text-delivery grid axes', () => {

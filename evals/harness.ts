@@ -32,24 +32,19 @@ export const DEFAULT_MODEL_ID = 'claude-sonnet-5';
 
 /**
  * Run-level config knobs from env (grid cells): EVAL_THINKING / EVAL_EFFORT /
- * EVAL_PROMPT_VARIANT / EVAL_FEWSHOT / EVAL_COMPOSER. An unset (empty) var means
- * "config default" — omitted entirely, so the default cell stays byte-identical
- * to production behavior.
+ * EVAL_DELIVERY / EVAL_TRANSLATOR_*. An unset (empty) var means "config default"
+ * — omitted entirely, so the default cell stays byte-identical to production
+ * behavior. (The PR #30 experiment knobs — promptVariant/envelope/fewshot/
+ * composer — were retired when text became the default.)
  */
 export function envRunConfig(env: NodeJS.ProcessEnv = process.env): Partial<SunnyConfig> {
   const rc: Partial<SunnyConfig> = {};
   if (env.EVAL_THINKING) rc.thinking = env.EVAL_THINKING as SunnyConfig['thinking'];
   if (env.EVAL_EFFORT) rc.effort = env.EVAL_EFFORT as SunnyConfig['effort'];
-  if (env.EVAL_PROMPT_VARIANT)
-    rc.promptVariant = env.EVAL_PROMPT_VARIANT as SunnyConfig['promptVariant'];
-  if (env.EVAL_ENVELOPE) rc.inboundEnvelope = env.EVAL_ENVELOPE === '1';
-  if (env.EVAL_FEWSHOT) rc.fewshot = env.EVAL_FEWSHOT === '1';
-  if (env.EVAL_COMPOSER) rc.composerAlways = env.EVAL_COMPOSER === '1';
-  // The composer cell defaults to Haiku (production recovery); override to measure the
-  // ceiling with a stronger composer (e.g. EVAL_RECOVERY_MODEL=claude-sonnet-5).
+  // The recovery/translator model defaults to Haiku; override to measure a stronger one.
   if (env.EVAL_RECOVERY_MODEL) rc.recoveryModelId = env.EVAL_RECOVERY_MODEL;
-  // Text-delivery migration (Phase 5/6 grid): the delivery-mode axis, the
-  // translator-history mini-axis, and the translator cadence.
+  // The delivery-mode axis ('tool' = the legacy rollback cell), the translator-history
+  // mini-axis, and the translator cadence.
   if (env.EVAL_DELIVERY) rc.deliveryMode = env.EVAL_DELIVERY as SunnyConfig['deliveryMode'];
   if (env.EVAL_TRANSLATOR_HISTORY)
     rc.translatorHistory = env.EVAL_TRANSLATOR_HISTORY as SunnyConfig['translatorHistory'];
@@ -169,13 +164,9 @@ export async function runEvalCase(
       await run.returnValue;
     }
 
-    // Mode-aware trajectory (text-delivery Phase 5): the same resolution setupTurn uses.
-    const deliveryMode = config.composerAlways ? 'text' : config.deliveryMode;
-    const trajectory = await buildTrajectory(store, gateway, deliveryMode);
-    // EVAL_DUMP_DIR: write a human-readable transcript per case run (hand
-    // sanity-checks). The few-shot block is prompt-input only (injected in
-    // loadPending, never persisted), so it does not appear here — see
-    // src/agent/fewshot.ts for its verbatim content.
+    // Mode-aware trajectory (text-delivery Phase 5).
+    const trajectory = await buildTrajectory(store, gateway, config.deliveryMode);
+    // EVAL_DUMP_DIR: write a human-readable transcript per case run (hand sanity-checks).
     if (process.env.EVAL_DUMP_DIR) {
       await dumpTranscript(process.env.EVAL_DUMP_DIR, c.name, store, trajectory);
     }
