@@ -85,6 +85,22 @@ export class DurableTurnRouter {
     this.ensureWorker(threadId);
   }
 
+  /**
+   * Adopt a run already RUNNING in the WDK world at startup (restart-orphan safety,
+   * 2026-07-05 investigation): the orphan is driven through the SAME machinery as a fresh
+   * turn — stream bridge (typing + live pane), watchdog, explicit abandon — inside the
+   * thread's serial worker. Restart recovery for this thread then naturally queues BEHIND
+   * the orphan instead of racing it on a global timeout, which is what produced a full
+   * duplicate answer (the PR #29 class): the old 30s bound expired while a healthy orphan
+   * still had minutes to run, and recovery started a second run for the same inbound.
+   */
+  adoptRun(threadId: string, run: TurnRunHandle): void {
+    this.adopted.set(threadId, run);
+    this.ensureWorker(threadId);
+  }
+
+  private readonly adopted = new Map<string, TurnRunHandle>();
+
   /** Re-drive any inbound that was received but never answered (durable-main-loop D5): on
    *  startup, ensure a worker runs for each affected thread. The worker reads the store, so a
    *  message that landed while the gateway was down is answered. */
@@ -108,6 +124,13 @@ export class DurableTurnRouter {
     try {
       for (;;) {
         this.dirty.delete(threadId);
+        // An adopted restart-orphan runs FIRST, through the full turn machinery; only after
+        // it settles (and marked its messages) does the drain below see what's left.
+        const orphan = this.adopted.get(threadId);
+        if (orphan) {
+          this.adopted.delete(threadId);
+          await this.driveTurn(threadId, orphan);
+        }
         while (await this.store.hasUnansweredInbound(threadId)) {
           await this.runTurn(threadId);
         }
@@ -129,20 +152,31 @@ export class DurableTurnRouter {
    *  (hung-model-stream exposure): a stalled model stream must never block the thread forever. */
   private async runTurn(threadId: string): Promise<void> {
     let run: TurnRunHandle | undefined;
-    const startedAt = Date.now();
     try {
       run = await this.runs(threadId);
+    } catch (err) {
+      log.error('conversation turn-run failed to start', { threadId, err: String(err) });
+      return;
+    }
+    await this.driveTurn(threadId, run);
+  }
+
+  /** Drive one (fresh or adopted) turn-run: stream bridge (live pane + typing), watchdog
+   *  race, explicit abandon on timeout. Shared by `runTurn` and `adoptRun`. */
+  private async driveTurn(threadId: string, run: TurnRunHandle): Promise<void> {
+    const startedAt = Date.now();
+    try {
       this.bridgeRunStream(run.runId, threadId);
       // Durable: resolves when the turn (incl. its delivery step) is done. Raced against the
       // watchdog so a hung stream costs one abandoned turn, not the whole thread.
       await raceTurnWatchdog(run.returnValue, this.meta.turnWatchdogMs);
     } catch (err) {
-      if (err instanceof TurnWatchdogTimeout && run) {
+      if (err instanceof TurnWatchdogTimeout) {
         await this.abandonHungTurn(threadId, run, startedAt, err.timeoutMs);
       } else {
         log.error('conversation turn-run failed', {
           threadId,
-          runId: run?.runId,
+          runId: run.runId,
           err: String(err),
         });
       }

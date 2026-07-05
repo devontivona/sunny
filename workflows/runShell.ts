@@ -41,9 +41,15 @@ export interface TranslatorConfig {
    *  `stepNumber >= 1 && (stepNumber - 1) % N === 0` — the FIRST non-terminal step
    *  (the user gets an immediate "on it…" beat), then every N steps (1, 1+N, …). */
   everyNSteps: number;
-  /** Compose one short update from the interim narration + the last few relayed
-   *  updates. Returns '' for silence (the translator's default). */
-  compose: (interim: string, recentUpdates: string[], stepNumber: number) => Promise<string>;
+  /** Compose one short update from the working notes + the last few relayed updates.
+   *  `stepsSinceUpdate` = steps since the last SENT update (or since the turn began).
+   *  Returns '' for silence (the translator's default). */
+  compose: (
+    interim: string,
+    recentUpdates: string[],
+    stepNumber: number,
+    stepsSinceUpdate: number,
+  ) => Promise<string>;
   /** Deliver a composed update (the memoized send step). */
   send: (text: string) => Promise<unknown>;
 }
@@ -172,14 +178,22 @@ export async function streamAgent(opts: StreamAgentOpts): Promise<{
 
       const tr = opts.translator;
       if (tr && !folded && (stepNumber - 1) % tr.everyNSteps === 0) {
+        // Notes ACCUMULATE across declined beats: the cursor advances only when an update
+        // is actually sent. (2026-07-05 investigation: advancing on decline gave every
+        // beat a ~3-step window, so the translator's "quick work" rule matched every
+        // window of a 15-step turn — 9/9 declines on exactly the turns the feature is
+        // for. Accumulation lets long-task evidence build until it has a reason to speak.)
         const interim = stepNarration(steps.slice(translatorCursor));
-        translatorCursor = steps.length;
         if (interim) {
+          const lastUpdateStep = translatorUpdates[translatorUpdates.length - 1]?.step ?? 0;
           const recent = translatorUpdates.slice(-3).map((u) => u.text);
-          const update = (await tr.compose(interim, recent, stepNumber)).trim();
+          const update = (
+            await tr.compose(interim, recent, stepNumber, stepNumber - lastUpdateStep)
+          ).trim();
           if (update) {
             await tr.send(update);
             translatorUpdates.push({ text: update, step: stepNumber });
+            translatorCursor = steps.length;
           }
         }
       }

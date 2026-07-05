@@ -170,11 +170,12 @@ async function start(): Promise<Runtime> {
   // Restart recovery: re-run any inbound received but never answered (process died mid-turn).
   if (durableRouter) {
     // A turn-run that was in flight when the gateway died is still RUNNING in the WDK world and
-    // resumes on its own. Await those first (bounded) so they mark their messages BEFORE we
-    // recover — otherwise recovery could start a duplicate run alongside the resuming orphan and
-    // double-reply. (On a code-change deploy the orphan diverges and fails instead; awaiting it
-    // then falls through to recovery, which is correct since a failed orphan marked nothing.)
-    await adoptOrphanConversationRuns(db);
+    // resumes on its own. ADOPT those into the router first: each orphan is driven through the
+    // full turn machinery (stream bridge → typing + live pane, watchdog, explicit abandon)
+    // inside its thread's serial worker, so the recovery pass below queues BEHIND it instead of
+    // racing it into a duplicate reply (2026-07-05: the old 30s global await expired under a
+    // healthy 7-minute orphan and recovery double-answered the same inbound — the PR #29 class).
+    await adoptOrphanConversationRuns(db, durableRouter);
     const unprocessed = await store.findUnprocessedInbound();
     if (unprocessed.length > 0) {
       log.info('recovering un-answered messages', { count: unprocessed.length });
@@ -247,8 +248,9 @@ async function start(): Promise<Runtime> {
   return { config, gateway, store, db, wakeThread, spawnChild, steerChild };
 }
 
-/** Longest we wait on an in-flight conversation run at startup before proceeding to recovery
- *  anyway — a single turn is far shorter, so this only ever guards a wedged run. */
+/** Fallback bound for an orphan run whose thread id can't be recovered from the WDK run
+ *  record (it then can't be routed to a serial worker — we just await it before recovery,
+ *  the pre-adoption behavior). A wedged one can't block startup past this. */
 const ORPHAN_AWAIT_MS = 30_000;
 
 /**
@@ -285,31 +287,54 @@ async function reattachRunningChildren(db: Db, supervisor: DelegationSupervisor)
 }
 
 /**
- * Await any `runConversation` runs still RUNNING at startup (durable-main-loop restart-orphan
- * safety). A turn-run in flight when the gateway died resumes in the WDK world; letting it
- * finish (so it marks its messages) before restart-recovery prevents a duplicate run +
- * double-reply. Bounded per run so a wedged orphan can't block startup; failures (e.g. a
- * code-change replay divergence) are swallowed — recovery then handles those messages.
+ * Adopt any `runConversation` runs still RUNNING at startup into the router (durable-main-loop
+ * restart-orphan safety). A turn-run in flight when the gateway died resumes in the WDK world;
+ * the router drives it exactly like a fresh turn (bridge/typing/watchdog) inside the thread's
+ * serial worker, so recovery for that thread queues behind it — never a duplicate run. The
+ * thread id comes from the run record's serialized input (the WDK devalue text format,
+ * `devl[[…],{"threadId":"…"}…]`); a run whose thread id can't be recovered falls back to a
+ * bounded bare await (the pre-adoption behavior). Failures (e.g. a code-change replay
+ * divergence) surface through the router's normal turn-failure path; recovery then handles
+ * those messages.
  */
-async function adoptOrphanConversationRuns(db: Db): Promise<void> {
-  let ids: string[] = [];
+async function adoptOrphanConversationRuns(db: Db, router: DurableTurnRouter): Promise<void> {
+  let rows: { id: string; threadId?: string }[] = [];
   try {
     const res = await db.execute(sql`
-      select id from workflow.workflow_runs
+      select id, convert_from(input_cbor, 'utf8') as input_text from workflow.workflow_runs
       where name like '%runConversation%' and status = 'running'
       order by created_at asc limit 50
     `);
-    ids = ((res as unknown as { rows: { id: string }[] }).rows ?? []).map((r) => String(r.id));
+    rows = (
+      (res as unknown as { rows: { id: string; input_text: string | null }[] }).rows ?? []
+    ).map((r) => ({
+      id: String(r.id),
+      threadId: /"threadId":"([^"]+)"/.exec(r.input_text ?? '')?.[1],
+    }));
   } catch (err) {
     // WDK tables absent (e.g. first boot) or unreadable — nothing to adopt.
     log.debug('orphan-run query skipped', { err: String(err) });
     return;
   }
-  if (ids.length === 0) return;
-  log.info('awaiting in-flight conversation runs before recovery', { count: ids.length });
-  await Promise.all(
-    ids.map((id) => withTimeout(getRun(id).returnValue, ORPHAN_AWAIT_MS).catch(() => undefined)),
-  );
+  if (rows.length === 0) return;
+  log.info('adopting in-flight conversation runs', {
+    count: rows.length,
+    unrouted: rows.filter((r) => !r.threadId).length,
+  });
+  const unrouted: Promise<unknown>[] = [];
+  for (const row of rows) {
+    const run = getRun(row.id);
+    if (row.threadId) {
+      router.adoptRun(row.threadId, {
+        runId: row.id,
+        returnValue: run.returnValue as Promise<void>,
+        cancel: () => (run as unknown as { cancel: () => Promise<void> }).cancel(),
+      });
+    } else {
+      unrouted.push(withTimeout(run.returnValue, ORPHAN_AWAIT_MS).catch(() => undefined));
+    }
+  }
+  await Promise.all(unrouted);
 }
 
 /** Resolve with `undefined` if `p` hasn't settled within `ms` (the timer never holds the

@@ -27,6 +27,10 @@ export interface TranslatorOptions {
   interim: string;
   /** The last few updates already relayed, oldest first (so news isn't repeated). */
   recentUpdates: string[];
+  /** The step the turn is on (1-based-ish; grows with tool use). */
+  stepNumber: number;
+  /** Steps since the last SENT update — or since the turn began if none was sent. */
+  stepsSinceUpdate: number;
   /** The turn's thread id, so the span groups with that turn's Langfuse session. */
   threadId: string;
 }
@@ -38,6 +42,12 @@ const SILENCE = 'NO_UPDATE';
 /** Compose one short progress update, or '' for silence (the default). */
 export async function runTranslatorPass(opts: TranslatorOptions): Promise<string> {
   const sections = [
+    // The "longness" signal (2026-07-05 investigation: without it, every beat of a long
+    // turn looked like quick work and the translator declined 9/9 on a 15-step task).
+    `Sunny is on step ${opts.stepNumber} of this task. ` +
+      (opts.recentUpdates.length > 0
+        ? `The last update went out ${opts.stepsSinceUpdate} steps ago.`
+        : `${opts.subject} has heard NOTHING yet this turn (${opts.stepsSinceUpdate} steps and counting).`),
     `Sunny's working notes since the last update:\n${opts.interim}`,
     opts.recentUpdates.length > 0
       ? `Updates already sent to ${opts.subject} this turn (do not repeat their news):\n` +
@@ -87,10 +97,11 @@ function translatorSystem(subject: string): string {
     `  internal bookkeeping, a step still in progress with nothing to show, or nothing beyond`,
     `  what the already-sent updates said. Send an update only when ${subject} would genuinely`,
     `  want the heads-up.`,
-    `- Quick work needs no update: if the notes show only a couple of fast tool calls (saving a`,
-    `  note, setting a reminder, one lookup), Sunny will reply directly in a moment — output`,
-    `  ${SILENCE}. Updates are for genuinely long tasks (research, building something,`,
-    `  many steps).`,
+    `- Quick work needs no update: EARLY in a task (the first couple of steps), a few fast tool`,
+    `  calls (saving a note, setting a reminder, one lookup) mean Sunny will reply directly in a`,
+    `  moment — output ${SILENCE}. But the deeper into a task this gets with nothing sent, the`,
+    `  more the silence costs: once Sunny is many steps in and ${subject} has heard nothing,`,
+    `  a brief "here's where things stand" beat is genuinely wanted — err toward sending one.`,
     `- Output ONLY the update text (or ${SILENCE}) — no preamble, no quotes, nothing else.`,
   ].join('\n');
 }

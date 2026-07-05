@@ -124,8 +124,8 @@ export async function runConversation(input: ConversationInput): Promise<void> {
     },
     translator: {
       everyNSteps: setup.translatorEveryNSteps,
-      compose: (interim, recentUpdates) =>
-        translateStep(threadId, subject, interim, recentUpdates),
+      compose: (interim, recentUpdates, stepNumber, stepsSinceUpdate) =>
+        translateStep(threadId, subject, interim, recentUpdates, stepNumber, stepsSinceUpdate),
       send: (text) => sendStep(threadId, text),
     },
   });
@@ -507,25 +507,53 @@ async function translateStep(
   subject: string,
   interim: string,
   recentUpdates: string[],
+  stepNumber: number,
+  stepsSinceUpdate: number,
 ): Promise<string> {
   'use step';
 
   const { getRuntime } = await import('../src/runtime.js');
+  const { logger } = await import('../src/logger.js');
   const rt = (await getRuntime()) as Awaited<
     ReturnType<typeof import('../src/runtime.js').getRuntime>
-  > & { translateOverride?: (interim: string, recentUpdates: string[]) => string };
-  if (rt.translateOverride) return rt.translateOverride(interim, recentUpdates);
+  > & {
+    translateOverride?: (
+      interim: string,
+      recentUpdates: string[],
+      stepNumber?: number,
+      stepsSinceUpdate?: number,
+    ) => string;
+  };
+  if (rt.translateOverride) {
+    return rt.translateOverride(interim, recentUpdates, stepNumber, stepsSinceUpdate);
+  }
   const { getUtilityModel } = await import('../src/agent/model.js');
   const { runTranslatorPass } = await import('../src/agent/translator.js');
   try {
-    return await runTranslatorPass({
+    const update = await runTranslatorPass({
       model: getUtilityModel(rt.config),
       subject,
       interim,
       recentUpdates,
+      stepNumber,
+      stepsSinceUpdate,
       threadId,
     });
-  } catch {
+    // One line per decision — the 2026-07-05 investigation had to reconstruct translator
+    // behavior from generic Langfuse spans because nothing here was logged.
+    logger('translator').info('progress-update decision', {
+      threadId,
+      stepNumber,
+      stepsSinceUpdate,
+      sent: update.length > 0,
+    });
+    return update;
+  } catch (err) {
+    logger('translator').warn('translator pass failed (skipping update)', {
+      threadId,
+      stepNumber,
+      err: String(err),
+    });
     return '';
   }
 }
