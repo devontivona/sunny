@@ -19,7 +19,9 @@ import { WORKFLOW_DESERIALIZE, WORKFLOW_SERIALIZE } from '@workflow/serde';
 
 export type MockResponseDescriptor =
   | { type: 'text'; text: string }
-  | { type: 'tool-call'; toolName: string; input: string };
+  /** One step: an optional narration `text` emitted BEFORE the tool call (the text-delivery
+   *  mode's interim notes — the translator's source material), then the call. */
+  | { type: 'tool-call'; toolName: string; input: string; text?: string };
 
 /** Build the inner `MockLanguageModelV4` (separate fn so the `new` is not a step closure local —
  *  SWC plugin workaround, vercel/workflow#1365). Picks the response by assistant-message count. */
@@ -50,6 +52,13 @@ function buildInner(responses: MockResponseDescriptor[]): MockLanguageModelV4 {
           : [
               { type: 'stream-start', warnings: [] },
               meta,
+              ...(r.text
+                ? [
+                    { type: 'text-start', id: '1' },
+                    { type: 'text-delta', id: '1', delta: r.text },
+                    { type: 'text-end', id: '1' },
+                  ]
+                : []),
               {
                 type: 'tool-call',
                 toolCallId: `call-${idx + 1}`,

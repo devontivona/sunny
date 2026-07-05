@@ -95,45 +95,8 @@ describe('steerMessageText', () => {
     expect(steerMessageText('hey', undefined, true)).toBe('hey');
   });
 
-  it('wraps steers in the relay envelope when enabled', () => {
-    expect(steerMessageText('hey', 'Alex', false, true)).toBe('[iMessage from Alex] hey');
-    expect(steerMessageText('hey', undefined, false, true)).toBe('[iMessage] hey');
-  });
 });
 
-describe('inbound envelope (config.inboundEnvelope, read-time)', () => {
-  it('wraps a DM user row — payload and legacy alike', () => {
-    const legacy = makeStoredMessage({ role: 'user', text: 'hello', payload: null });
-    expect((rowToUIMessage(legacy, false, true) as UIMessage).parts).toEqual([
-      { type: 'text', text: '[iMessage from Devon] hello' },
-    ]);
-
-    const payloadRow = makeStoredMessage({
-      role: 'user',
-      text: 'hello',
-      payload: { id: 'u1', role: 'user', parts: [{ type: 'text', text: 'hello' }] },
-    });
-    expect((rowToUIMessage(payloadRow, false, true) as UIMessage).parts).toEqual([
-      { type: 'text', text: '[iMessage from Devon] hello' },
-    ]);
-  });
-
-  it('keeps the (owner) tag in groups and replaces the speaker prefix', () => {
-    const row = makeStoredMessage({ role: 'user', text: 'hi', payload: null, isOwner: true });
-    expect((rowToUIMessage(row, true, true) as UIMessage).parts).toEqual([
-      { type: 'text', text: '[iMessage from Devon (owner)] hi' },
-    ]);
-  });
-
-  it('never touches assistant rows and is byte-identical when off', () => {
-    const payload = makeAssistantTurnPayload({ sends: ['hi'] });
-    const row = makeStoredMessage({ role: 'assistant', text: 'hi', payload });
-    expect(rowToUIMessage(row, false, true)).toBe(payload);
-
-    const user = makeStoredMessage({ role: 'user', text: 'hello', payload: null });
-    expect(rowToUIMessage(user, false, false)).toEqual(rowToUIMessage(user, false));
-  });
-});
 
 describe('usageOf', () => {
   it('flattens AI-SDK usage to the persisted shape, defaulting missing fields to null', () => {
@@ -219,6 +182,51 @@ describe('toModelMessages — strips reasoning (extended-thinking) parts from hi
     expect(json).not.toContain('PRIVATE THINKING');
     expect(json).not.toContain('reasoning');
     expect(json).toContain('hello there'); // the send_message tool call survives
+  });
+});
+
+describe('renderTranslatorParts — read-time rendering of relayed progress updates', () => {
+  const payload = {
+    id: 'a1',
+    role: 'assistant',
+    parts: [
+      { type: 'text', text: 'working notes' },
+      {
+        type: 'tool-bash',
+        toolCallId: 'b1',
+        state: 'output-available',
+        input: { command: 'ls' },
+        output: 'ok',
+      },
+      { type: 'data-translator', data: { text: 'on it — checking now', step: 1 } },
+      { type: 'text', text: 'here is the answer' },
+    ],
+  };
+
+  it('attributed (default): renders each update as a bracketed text line naming the subject', async () => {
+    const row = makeStoredMessage({ role: 'assistant', text: 'here is the answer', payload });
+    const json = JSON.stringify(
+      await toModelMessages([row], false, { translatorHistory: 'attributed', translatorSubject: 'Devon' }),
+    );
+    expect(json).toContain('progress update relayed to Devon');
+    expect(json).toContain('on it — checking now');
+    expect(json).not.toContain('data-translator');
+  });
+
+  it('excluded: strips the updates entirely (the A/B arm)', async () => {
+    const row = makeStoredMessage({ role: 'assistant', text: 'here is the answer', payload });
+    const json = JSON.stringify(
+      await toModelMessages([row], false, { translatorHistory: 'excluded', translatorSubject: 'Devon' }),
+    );
+    expect(json).not.toContain('on it — checking now');
+    expect(json).not.toContain('progress update relayed');
+    expect(json).toContain('here is the answer'); // the rest of the turn survives
+  });
+
+  it('defaults to attributed with a generic subject when no options are passed', async () => {
+    const row = makeStoredMessage({ role: 'assistant', text: 'here is the answer', payload });
+    const json = JSON.stringify(await toModelMessages([row], false));
+    expect(json).toContain('progress update relayed to the user');
   });
 });
 

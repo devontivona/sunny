@@ -17,37 +17,32 @@ export const ConfigSchema = z.object({
   /** Reasoning effort for agentic turns when thinking is on (D-PS3). */
   effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).default('high'),
   /**
-   * How replies are delivered (D-MG8): `tool` — the model speaks only via the
-   * `send_message` tool (a missed call is recovered by the recovery pass); `text` —
-   * the model's reply text IS the message (delivered directly as bubbles), and it
-   * calls `stay_silent` to say nothing. `text` removes the send_message friction
-   * that makes the model over-choose silence.
+   * How replies are delivered. `text` (default; the 2026-07 text-delivery migration) —
+   * the model's final text IS the message (delivered as blank-line bubbles), silence is
+   * the `<no-reply/>` sentinel reply, and a cheap translator relays interim progress on
+   * long turns. `tool` — the LEGACY rollback path: the model speaks only via the
+   * `send_message` tool and chooses silence via `stay_silent` (a missed call is
+   * recovered by the recovery pass). Kept intact for rollback; PR #30 proved it
+   * self-poisoning in a rolling window, and PR #31's gates measured text at/above it
+   * on every dimension.
    */
-  deliveryMode: z.enum(['tool', 'text']).default('tool'),
+  deliveryMode: z.enum(['tool', 'text']).default('text'),
   /**
-   * System-prompt framing experiment (elicitation): how the prompt frames who the
-   * model's raw text output is addressed to. `baseline` — today's prompt, byte-identical.
-   * `gateway` — the conversation is with a relay that forwards messages both ways and
-   * reads (but never forwards) the model's raw output. `diary` — raw text is a private
-   * worklog written after acting. Only affects `deliveryMode: 'tool'`.
+   * Interim-progress translator cadence (text delivery mode only). On a multi-step turn a
+   * cheap model relays short progress updates to the user: the first fires on the FIRST
+   * non-terminal step (an immediate "on it…" beat), then every N steps after (steps 1, 1+N,
+   * 1+2N, …). Silence is the translator's default — it declines when there's no
+   * user-relevant news. The translator model is `recoveryModelId`.
    */
-  promptVariant: z.enum(['baseline', 'gateway', 'diary']).default('baseline'),
-  /** Prefix EVERY inbound user message (DM and group) with a relay envelope naming the
-   *  sender/channel — recency-positioned reinforcement that the message arrived via a
-   *  channel, not as raw conversation. Applied at read time (no persisted-row change). */
-  inboundEnvelope: z.boolean().default(false),
-  /** Prepend a canned few-shot exchange block (correct send_message/stay_silent usage)
-   *  to every conversation window. */
-  fewshot: z.boolean().default(false),
+  translatorEveryNSteps: z.number().int().positive().default(3),
   /**
-   * Architectural reference arm (eval-only in spirit): the two-model-pass design as the
-   * PRIMARY path. The turn runs with the text-mode prompt (the model replies naturally in
-   * plain text — no send_message pressure, zero fight with training), and the composer
-   * (the recovery pass) rewrites that text into the delivered iMessage on every
-   * substantive turn. Delivery is ~100% by construction; the eval cell measures what
-   * that buys and what it costs in voice/latency. Not intended for production.
+   * How relayed translator updates render in the model's HISTORY at read time (text mode):
+   * `attributed` — as `[progress update relayed to <user>: "…"]` lines, so the model knows
+   * what the user already heard and the final reply doesn't repeat it; `excluded` — stripped
+   * entirely (the A/B arm). Rows always persist the updates as `data-translator` parts;
+   * this toggle is read-time only, so flipping it needs no migration.
    */
-  composerAlways: z.boolean().default(false),
+  translatorHistory: z.enum(['attributed', 'excluded']).default('attributed'),
   /** Devon's timezone (used by scheduling later). */
   timezone: z.string().default('America/New_York'),
   /** Owner identity allowlist — phone numbers / emails (messaging-gateway D-MG6, task 2.4). */
@@ -131,7 +126,7 @@ const DEFAULT_CONFIG_JSON = `{
   "modelId": "claude-sonnet-5",
   "recoveryModelId": "claude-haiku-4-5",
   "effort": "high",
-  "deliveryMode": "tool",
+  "deliveryMode": "text",
   "timezone": "America/New_York",
   "owner": {
     "name": "Devon",

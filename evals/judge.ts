@@ -106,3 +106,57 @@ export const scratchIsWorkingNotes: Grader = (t, c) => {
   }
   return scratchJudge(t, c);
 };
+
+/**
+ * Completeness judge (text-delivery migration, Phase 5 — GATING for text mode): the
+ * delivered reply must stand on its own — the answer, not a dangling promise ("let me
+ * check…", "one sec", "I'll get back to you") with no answer behind it. The named
+ * dangling-final risk of final-text delivery: a mid-work register that reads fine as a
+ * send_message but strands the user as a turn's LAST words. Vacuous outside text mode
+ * (and on silence turns) so the committed tool-mode baseline keeps its meaning.
+ */
+const replyCompleteJudge = rubricJudge({
+  name: 'reply-complete',
+  question:
+    'Is this a complete, self-standing reply — it delivers the answer/result (or a real ' +
+    'question back to the user)? Answer N if it is a dangling promise: it ends on "let me ' +
+    'check…" / "one sec" / "working on it" with no answer, leaving the user waiting for a ' +
+    'message that will never come. A reply that says a background job was started and will ' +
+    'report back counts as complete.',
+});
+
+export const replyComplete: Grader = (t, c) => {
+  if (t.delivered !== 'text' || !t.finalText) {
+    return { name: 'reply-complete', pass: true, score: 1 };
+  }
+  return replyCompleteJudge(t, c);
+};
+
+/**
+ * Translator-fidelity judge (text-delivery migration, Phase 5 — GATING when updates
+ * exist): relayed progress updates must only summarize the working notes — never add
+ * facts/results the notes don't contain, and never imply the task is finished (the
+ * final reply is the primary model's job). Vacuous when the turn relayed no updates
+ * (most turns; every tool-mode turn).
+ */
+const translatorFidelityJudge = rubricJudge({
+  name: 'translator-fidelity',
+  question:
+    'Do the relayed progress updates ONLY summarize what the working notes say — adding no ' +
+    'facts, numbers, or results absent from the notes — and avoid implying the task is ' +
+    'finished or delivering a final answer? Answer N if any update invents content or reads ' +
+    'as a completed result.',
+  outputOf: (t) =>
+    [
+      `Working notes (the updates' only allowed source):\n${t.interimText || '(none)'}`,
+      `Relayed progress updates:\n${t.translatorUpdates.map((u) => `- ${u}`).join('\n')}`,
+    ].join('\n\n'),
+  outputLabel: 'Interim material for one assistant turn:',
+});
+
+export const translatorFidelity: Grader = (t, c) => {
+  if (t.translatorUpdates.length === 0) {
+    return { name: 'translator-fidelity', pass: true, score: 1 };
+  }
+  return translatorFidelityJudge(t, c);
+};

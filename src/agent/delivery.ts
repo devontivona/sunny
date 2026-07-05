@@ -12,8 +12,9 @@ import type { LanguageModelUsage, ModelMessage, UIMessage } from 'ai';
  * the media-resolution helpers that DO touch the filesystem stay in `turn.ts`.
  */
 
-/** How a turn's reply reached (or didn't reach) the user (D-MG8). */
-export type Delivery = 'send_message' | 'fallback_text' | 'silence';
+/** How a turn's reply reached (or didn't reach) the user (D-MG8). `text` is the
+ *  text-as-reply mode: the model's final text delivered directly as bubbles. */
+export type Delivery = 'send_message' | 'text' | 'fallback_text' | 'silence';
 
 /**
  * Classify how a turn was delivered from three observable signals: how many times
@@ -140,6 +141,95 @@ export function sendMessagePart(text: string, toolCallId: string): UIMessage['pa
 }
 
 /**
+ * Text-as-reply extraction (text delivery mode): the FINAL text is everything the
+ * model wrote AFTER its last tool call — the reply that gets delivered as bubbles.
+ * A turn with no tool parts is all final. Text at/before the last tool part is
+ * INTERIM narration (the translator's source material; see extractInterimText).
+ */
+export function extractFinalText(parts: UIMessage['parts']): string {
+  return extractScratch(parts.slice(lastToolIndex(parts) + 1));
+}
+
+/** The interim narration of a text-mode turn: text parts at/before the last tool part. */
+export function extractInterimText(parts: UIMessage['parts']): string {
+  return extractScratch(parts.slice(0, lastToolIndex(parts) + 1));
+}
+
+/** Index of the last `tool-*` part, or -1 (data-* parts don't count — they're not turns
+ *  of work, so translator updates never shift the final/interim boundary). */
+function lastToolIndex(parts: UIMessage['parts']): number {
+  for (let i = parts.length - 1; i >= 0; i--) {
+    if (parts[i]!.type.startsWith('tool-')) return i;
+  }
+  return -1;
+}
+
+/**
+ * Text-mode silence sentinel: the model chooses silence by making this token its ENTIRE
+ * reply. Silence-by-sentinel goes WITH the trained "end the turn with text" prior instead
+ * of fighting it — the 2026-07-04 grid showed the model inventing its own sentinels
+ * ("(silent)", "(no reply needed)") 9/9 when told to end with nothing, and the translator's
+ * NO_UPDATE sentinel has been reliable on the same job. A weird verbatim token (not a
+ * natural-language sentence) so it never drifts into paraphrase the parser would miss.
+ */
+export const NO_REPLY_SENTINEL = '<no-reply/>';
+
+/**
+ * Parse the sentinel out of a text-mode final. `sentinel` reports whether it appeared;
+ * `text` is what remains. A reply that is ONLY the sentinel parses to silence; real
+ * content alongside a (stray) sentinel is delivered with the token stripped — nothing
+ * genuinely written for the user is ever swallowed.
+ */
+export function stripNoReply(finalText: string): { text: string; sentinel: boolean } {
+  if (!finalText.includes(NO_REPLY_SENTINEL)) return { text: finalText, sentinel: false };
+  return { text: finalText.split(NO_REPLY_SENTINEL).join('').trim(), sentinel: true };
+}
+
+/**
+ * Classify a TEXT-mode turn from its extracted signals. Callers pass the final text
+ * AFTER `stripNoReply` (a sentinel-only reply arrives here as empty + silent=true).
+ * Final text wins FIRST — by design: the stay_silent-spam pathology (PR #30
+ * transcripts) showed the model can write a real reply and ALSO signal silence; when
+ * final text exists it is the reply and must be delivered, never swallowed.
+ *
+ * - final text present → `text` (delivered directly as bubbles)
+ * - no final, silence signaled (sentinel; or a legacy row's stay_silent call) → `silence`
+ * - no final, interim narration only → `fallback_text` (the empty-final miss; the
+ *   recovery backstop composes the reply from the narration)
+ * - nothing at all → `silence`
+ */
+export function classifyTextDelivery(
+  finalText: string,
+  interimText: string,
+  staySilent: boolean,
+): Delivery {
+  if (finalText) return 'text';
+  if (staySilent) return 'silence';
+  if (interimText) return 'fallback_text';
+  return 'silence';
+}
+
+/**
+ * Build a `data-translator` UIMessage part recording one relayed progress update
+ * (text mode). Persisted in the turn row (same `data-*` convention as
+ * `data-attachment`); rendered attributed or stripped at READ time per
+ * `config.translatorHistory` — see `renderTranslatorParts` in turn.ts.
+ */
+export function translatorPart(text: string, step: number): UIMessage['parts'][number] {
+  return { type: 'data-translator', data: { text, step } } as UIMessage['parts'][number];
+}
+
+/** The relayed translator updates persisted on a turn, in order. */
+export function extractTranslatorUpdates(
+  parts: UIMessage['parts'],
+): { text: string; step: number }[] {
+  return parts
+    .filter((p) => p.type === 'data-translator')
+    .map((p) => (p as { data?: { text?: string; step?: number } }).data)
+    .filter((d): d is { text: string; step: number } => typeof d?.text === 'string');
+}
+
+/**
  * Split a reply into iMessage bubbles on blank lines (text delivery mode). A reply
  * with no blank line is one bubble; empty/whitespace yields no bubbles.
  */
@@ -173,53 +263,15 @@ export function groupSpeakerPrefix(senderName: string | undefined, isOwner: bool
 }
 
 /**
- * Relay envelope for an inbound user message (elicitation experiment,
- * `config.inboundEnvelope`) — e.g. `[iMessage from Devon] `. Marks EVERY user
- * message (DM and group) as having arrived via a channel relay, reinforcing at
- * the RECENT end of the context — where instructions actually win in long
- * threads — that replies travel back the same way (send_message), not as raw
- * conversation text. Token-lean on purpose. The `(owner)` tag only matters where
- * senders can differ (groups), matching `groupSpeakerPrefix`.
- */
-export function envelopePrefix(
-  senderName: string | undefined,
-  isOwner: boolean,
-  isGroup: boolean,
-): string {
-  if (!senderName) return '[iMessage] ';
-  return `[iMessage from ${senderName}${isGroup && isOwner ? ' (owner)' : ''}] `;
-}
-
-/** The prefix for an inbound user message under the active config: envelope when
- *  enabled (all threads), else the group speaker prefix (groups only). */
-export function userMessagePrefix(
-  senderName: string | undefined,
-  isOwner: boolean,
-  isGroup: boolean,
-  envelope: boolean,
-): string {
-  if (envelope) return envelopePrefix(senderName, isOwner, isGroup);
-  return isGroup ? groupSpeakerPrefix(senderName, isOwner) : '';
-}
-
-/**
  * Render a steered/folded-in message's text for a model `user` turn (D-DE steering;
  * task 1.3). In a group, prefix the sender name so the model can follow who said what
- * (R1); in a DM, the text passes through unchanged. The shared seam used by both the
- * in-process loop's `prepareStep` and the durable workflow's queue drain — the only
- * thing that differs between tiers is the feed (in-process push vs. hook resume) and
- * the `ModelMessage` vs. `LanguageModelV3Prompt` shape each wraps this text in.
+ * (R1); in a DM, the text passes through unchanged.
  */
 export function steerMessageText(
   text: string,
   senderName: string | undefined,
   isGroup: boolean,
-  envelope = false,
 ): string {
-  // Envelope mode wraps steers too, so mid-turn arrivals read like every other
-  // relayed message. (Steer rows don't carry `isOwner`; the group owner tag is
-  // a group-disambiguation nicety, not a correctness bit, so it's omitted here.)
-  if (envelope) return envelopePrefix(senderName, false, isGroup) + text;
   return isGroup && senderName ? `${senderName}: ${text}` : text;
 }
 

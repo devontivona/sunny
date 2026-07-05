@@ -1,12 +1,12 @@
 import {
-  deliveredViaSendMessage,
+  deliveredReply,
   elicitedWithoutRecovery,
   finalTurnSilent,
   noFallback,
   scratchNotSecondPerson,
   sentSomething,
 } from '../graders.js';
-import { scratchIsWorkingNotes } from '../judge.js';
+import { replyComplete, scratchIsWorkingNotes, translatorFidelity } from '../judge.js';
 import type { EvalCase } from '../types.js';
 
 /**
@@ -34,6 +34,9 @@ import type { EvalCase } from '../types.js';
  * when the reply was delivered) without gating case pass/fail.
  */
 const scratchAdvisory = [scratchIsWorkingNotes, scratchNotSecondPerson];
+// Text-mode gates (vacuous outside text mode / with no relayed updates): the reply
+// stands on its own (the dangling-final risk) and updates only summarize.
+const textModeGates = [replyComplete, translatorFidelity];
 
 export const elicitationCases: EvalCase[] = [
   {
@@ -42,11 +45,12 @@ export const elicitationCases: EvalCase[] = [
     dimension: 'elicitation',
     input: 'what is the capital of France?',
     graders: [
-      deliveredViaSendMessage,
+      deliveredReply,
       noFallback,
       sentSomething,
       elicitedWithoutRecovery,
       ...scratchAdvisory,
+      ...textModeGates,
     ],
   },
   {
@@ -54,7 +58,7 @@ export const elicitationCases: EvalCase[] = [
     name: 'elicitation/multi-bubble',
     dimension: 'elicitation',
     input: 'give me three quick tips for better sleep, one short message each',
-    graders: [deliveredViaSendMessage, noFallback, elicitedWithoutRecovery, ...scratchAdvisory],
+    graders: [deliveredReply, noFallback, elicitedWithoutRecovery, ...scratchAdvisory, ...textModeGates],
   },
   {
     // 8.1 interview back-and-forth: two turns; the reply both answers and continues.
@@ -62,11 +66,12 @@ export const elicitationCases: EvalCase[] = [
     dimension: 'elicitation',
     input: ['help me plan a weekend trip', 'somewhere warm, leaving Friday'],
     graders: [
-      deliveredViaSendMessage,
+      deliveredReply,
       noFallback,
       sentSomething,
       elicitedWithoutRecovery,
       ...scratchAdvisory,
+      ...textModeGates,
     ],
   },
   {
@@ -96,7 +101,7 @@ export const elicitationCases: EvalCase[] = [
     name: 'elicitation/ack-then-correction',
     dimension: 'elicitation',
     input: ['set a timer for the pasta, 10 min', 'got it', 'actually make it 12'],
-    graders: [deliveredViaSendMessage, noFallback, elicitedWithoutRecovery, ...scratchAdvisory],
+    graders: [deliveredReply, noFallback, elicitedWithoutRecovery, ...scratchAdvisory, ...textModeGates],
   },
   {
     // Multi-turn back-and-forth (the historical miss hotspot): four live turns;
@@ -109,7 +114,7 @@ export const elicitationCases: EvalCase[] = [
       "i'm in boston, flying is fine",
       'mid-february, 3 days, not too expensive',
     ],
-    graders: [deliveredViaSendMessage, noFallback, elicitedWithoutRecovery, ...scratchAdvisory],
+    graders: [deliveredReply, noFallback, elicitedWithoutRecovery, ...scratchAdvisory, ...textModeGates],
   },
   {
     // Multi-turn restraint: a debug exchange that ends on "that fixed it, thanks"

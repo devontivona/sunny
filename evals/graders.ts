@@ -21,6 +21,19 @@ export const deliveredViaSendMessage: Grader = (t) =>
   pass('delivered-via-send_message', t.delivered === 'send_message', `delivered=${t.delivered}`);
 
 /**
+ * The reply reached the user by the active mode's intended path — `send_message`
+ * (tool mode) OR direct final text (text mode). The mode-agnostic delivery grader
+ * every substantive case wires (text-delivery migration, Phase 5), so the same
+ * dataset gates both cells of the EVAL_DELIVERY grid.
+ */
+export const deliveredReply: Grader = (t) =>
+  pass(
+    'delivered-reply',
+    t.delivered === 'send_message' || t.delivered === 'text',
+    `delivered=${t.delivered}`,
+  );
+
+/**
  * No message reached the user — the silence outcome. Asserts on the user-facing
  * fact (zero outbound) rather than the internal `delivered` label: with the
  * fallback removed, raw model text is never delivered, so "deliberate silence"
@@ -57,7 +70,7 @@ export const noRecovery: Grader = (t) =>
 export const elicitedWithoutRecovery: Grader = (t) =>
   pass(
     'elicited-without-recovery',
-    t.delivered === 'send_message' && !t.recovered,
+    (t.delivered === 'send_message' || t.delivered === 'text') && !t.recovered,
     `delivered=${t.delivered} recovered=${t.recovered}`,
   );
 
@@ -83,6 +96,25 @@ export function toolNotCalled(name: string): Grader {
 /** The model elected to start a durable job (recorded by the fake start). */
 export const startedJob: Grader = (t) =>
   pass('started-job', t.startJobs.length > 0, `startJobs=${t.startJobs.length}`);
+
+/**
+ * A long task was BACKGROUNDED — promoted to a durable job OR delegated to a subagent
+ * (both durable, both report back to the thread) — and NOT ground through inline. The
+ * policy this grades is thread responsiveness: a turn that grinds through research with
+ * dozens of tool calls blocks the chat for minutes (observed: 23 curl steps, 5+ min, in
+ * the 2026-07-04 text cell) even if it eventually answers well. The bash allowance
+ * covers a quick probe before deciding; the grind threshold is deliberately loose.
+ */
+export const backgroundedLongTask: Grader = (t) => {
+  const delegated = t.toolCalls.some((c) => c.name === 'delegate_task');
+  const started = t.startJobs.length > 0;
+  const bashCalls = t.toolCalls.filter((c) => c.name === 'bash').length;
+  return pass(
+    'backgrounded-long-task',
+    (started || delegated) && bashCalls < 5,
+    `start_job=${t.startJobs.length} delegate_task=${delegated} bash=${bashCalls}`,
+  );
+};
 
 /** A `memory_write` targeted the given core file with content matching a pattern. */
 export function memoryWritten(file: 'USER' | 'SUNNY' | 'INDEX', contentMatches: RegExp): Grader {

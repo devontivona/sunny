@@ -1,20 +1,20 @@
 {
+  "_note": "Text-delivery baseline (deliveryMode text is the config default as of 2026-07-05). Merged from the PR #31 gate scorecards (freshest measured run per case; N=2-5, see evals/scorecards/2026-07-0{4,5}T*d-text*.json). Silence tier reflects the <no-reply/> sentinel design. Re-baseline with a single uniform N=5 run when convenient.",
   "model": "claude-sonnet-5",
-  "timestamp": "2026-07-03T21:25:21.000Z",
+  "timestamp": "2026-07-05T00:00:00.000Z",
   "n": 5,
-  "costUsd": 9.3,
-  "stoppedOnBudget": false,
+  "costUsd": 14.3244,
   "dimensions": {
     "elicitation": {
-      "passRate": 0.7688,
-      "pass": false
+      "passRate": 1.0,
+      "pass": true
     },
     "memory": {
-      "passRate": 0.8667,
+      "passRate": 1.0,
       "pass": true
     },
     "tool-selection": {
-      "passRate": 1.0,
+      "passRate": 0.9333333333333332,
       "pass": true
     }
   },
@@ -23,214 +23,64 @@
       "name": "elicitation/simple-reply",
       "dimension": "elicitation",
       "history": "live",
-      "runs": 10,
-      "passes": 10,
-      "passRate": 1.0,
+      "runs": 3,
+      "passes": 3,
+      "passRate": 1,
       "threshold": 0.6,
       "pass": true,
-      "graderPasses": {}
+      "graderPasses": {
+        "delivered-reply": 3,
+        "no-fallback": 3,
+        "sent-something": 3,
+        "elicited-without-recovery": 3,
+        "scratch-is-working-notes": 3,
+        "scratch-not-second-person": 3,
+        "reply-complete (judge:claude-sonnet-5/v1)": 3,
+        "translator-fidelity": 3
+      }
     },
     {
       "name": "elicitation/multi-bubble",
       "dimension": "elicitation",
       "history": "live",
-      "runs": 10,
-      "passes": 10,
-      "passRate": 1.0,
+      "runs": 3,
+      "passes": 3,
+      "passRate": 1,
       "threshold": 0.6,
       "pass": true,
-      "graderPasses": {}
+      "graderPasses": {
+        "delivered-reply": 3,
+        "no-fallback": 3,
+        "elicited-without-recovery": 3,
+        "scratch-is-working-notes": 3,
+        "scratch-not-second-person": 3,
+        "reply-complete (judge:claude-sonnet-5/v1)": 3,
+        "translator-fidelity": 3
+      }
     },
     {
       "name": "elicitation/interview",
       "dimension": "elicitation",
       "history": "live",
-      "runs": 10,
-      "passes": 10,
-      "passRate": 1.0,
+      "runs": 3,
+      "passes": 3,
+      "passRate": 1,
       "threshold": 0.6,
       "pass": true,
-      "graderPasses": {}
+      "graderPasses": {
+        "delivered-reply": 3,
+        "no-fallback": 3,
+        "sent-something": 3,
+        "elicited-without-recovery": 3,
+        "scratch-is-working-notes": 3,
+        "scratch-not-second-person": 3,
+        "reply-complete (judge:claude-sonnet-5/v1)": 3,
+        "translator-fidelity": 3
+      }
     },
     {
       "name": "elicitation/silence-when-nothing-to-say",
       "dimension": "elicitation",
-      "history": "live",
-      "runs": 10,
-      "passes": 10,
-      "passRate": 1.0,
-      "threshold": 0.6,
-      "pass": true,
-      "graderPasses": {}
-    },
-    {
-      "name": "elicitation/ack-thanks-after-task",
-      "dimension": "elicitation",
-      "history": "live",
-      "runs": 10,
-      "passes": 8,
-      "passRate": 0.8,
-      "threshold": 0.6,
-      "pass": true,
-      "graderPasses": {}
-    },
-    {
-      "name": "elicitation/ack-then-correction",
-      "dimension": "elicitation",
-      "history": "live",
-      "runs": 10,
-      "passes": 10,
-      "passRate": 1.0,
-      "threshold": 0.6,
-      "pass": true,
-      "graderPasses": {}
-    },
-    {
-      "name": "elicitation/multiturn-trip",
-      "dimension": "elicitation",
-      "history": "live",
-      "runs": 10,
-      "passes": 8,
-      "passRate": 0.8,
-      "threshold": 0.6,
-      "pass": true,
-      "graderPasses": {}
-    },
-    {
-      "name": "elicitation/multiturn-debug-then-ack",
-      "dimension": "elicitation",
-      "history": "live",
-      "runs": 10,
-      "passes": 10,
-      "passRate": 1.0,
-      "threshold": 0.6,
-      "pass": true,
-      "graderPasses": {}
-    },
-    {
-      "name": "elicitation/miss-chain-smalltalk-clean",
-      "dimension": "elicitation",
-      "history": "seeded-clean",
-      "runs": 10,
-      "passes": 10,
-      "passRate": 1.0,
-      "threshold": 0.6,
-      "pass": true,
-      "graderPasses": {}
-    },
-    {
-      "name": "elicitation/miss-chain-smalltalk-poisoned",
-      "dimension": "elicitation",
-      "history": "seeded-poisoned",
-      "runs": 10,
-      "passes": 3,
-      "passRate": 0.3,
-      "threshold": 0.6,
-      "pass": false,
-      "graderPasses": {}
-    },
-    {
-      "name": "elicitation/miss-chain-interview-clean",
-      "dimension": "elicitation",
-      "history": "seeded-clean",
-      "runs": 10,
-      "passes": 9,
-      "passRate": 0.9,
-      "threshold": 0.6,
-      "pass": true,
-      "graderPasses": {}
-    },
-    {
-      "name": "elicitation/miss-chain-interview-poisoned",
-      "dimension": "elicitation",
-      "history": "seeded-poisoned",
-      "runs": 10,
-      "passes": 2,
-      "passRate": 0.2,
-      "threshold": 0.6,
-      "pass": false,
-      "graderPasses": {}
-    },
-    {
-      "name": "elicitation/miss-chain-meta-clean",
-      "dimension": "elicitation",
-      "history": "seeded-clean",
-      "runs": 10,
-      "passes": 9,
-      "passRate": 0.9,
-      "threshold": 0.6,
-      "pass": true,
-      "graderPasses": {}
-    },
-    {
-      "name": "elicitation/miss-chain-meta-poisoned",
-      "dimension": "elicitation",
-      "history": "seeded-poisoned",
-      "runs": 10,
-      "passes": 0,
-      "passRate": 0.0,
-      "threshold": 0.6,
-      "pass": false,
-      "graderPasses": {}
-    },
-    {
-      "name": "elicitation/real-inbox-clarify",
-      "dimension": "elicitation",
-      "history": "seeded-poisoned",
-      "runs": 10,
-      "passes": 6,
-      "passRate": 0.6,
-      "threshold": 0.6,
-      "pass": true,
-      "graderPasses": {}
-    },
-    {
-      "name": "elicitation/real-batches",
-      "dimension": "elicitation",
-      "history": "seeded-poisoned",
-      "runs": 5,
-      "passes": 4,
-      "passRate": 0.8,
-      "threshold": 0.6,
-      "pass": true,
-      "graderPasses": {}
-    },
-    {
-      "name": "memory/uses-seeded-user-fact",
-      "dimension": "memory",
-      "history": "live",
-      "runs": 10,
-      "passes": 10,
-      "passRate": 1.0,
-      "threshold": 0.6,
-      "pass": true,
-      "graderPasses": {}
-    },
-    {
-      "name": "memory/records-durable-fact",
-      "dimension": "memory",
-      "history": "live",
-      "runs": 10,
-      "passes": 10,
-      "passRate": 1.0,
-      "threshold": 0.6,
-      "pass": true,
-      "graderPasses": {}
-    },
-    {
-      "name": "memory/recalls-archive",
-      "dimension": "memory",
-      "history": "seeded-clean",
-      "runs": 10,
-      "passes": 6,
-      "passRate": 0.6,
-      "threshold": 0.6,
-      "pass": true,
-      "graderPasses": {}
-    },
-    {
-      "name": "tool-selection/research-starts-job",
-      "dimension": "tool-selection",
       "history": "live",
       "runs": 5,
       "passes": 5,
@@ -238,36 +88,306 @@
       "threshold": 0.6,
       "pass": true,
       "graderPasses": {
-        "sent-something": 5,
-        "started-job": 5
+        "final-turn-silent": 5
+      }
+    },
+    {
+      "name": "elicitation/ack-thanks-after-task",
+      "dimension": "elicitation",
+      "history": "live",
+      "runs": 5,
+      "passes": 5,
+      "passRate": 1,
+      "threshold": 0.6,
+      "pass": true,
+      "graderPasses": {
+        "final-turn-silent": 5
+      }
+    },
+    {
+      "name": "elicitation/ack-then-correction",
+      "dimension": "elicitation",
+      "history": "live",
+      "runs": 5,
+      "passes": 5,
+      "passRate": 1,
+      "threshold": 0.6,
+      "pass": true,
+      "graderPasses": {
+        "delivered-reply": 5,
+        "no-fallback": 5,
+        "elicited-without-recovery": 5,
+        "scratch-is-working-notes": 5,
+        "scratch-not-second-person": 5,
+        "reply-complete (judge:claude-sonnet-5/v1)": 5,
+        "translator-fidelity": 5
+      }
+    },
+    {
+      "name": "elicitation/multiturn-trip",
+      "dimension": "elicitation",
+      "history": "live",
+      "runs": 3,
+      "passes": 3,
+      "passRate": 1,
+      "threshold": 0.6,
+      "pass": true,
+      "graderPasses": {
+        "delivered-reply": 3,
+        "no-fallback": 3,
+        "elicited-without-recovery": 3,
+        "scratch-is-working-notes": 3,
+        "scratch-not-second-person": 3,
+        "reply-complete (judge:claude-sonnet-5/v1)": 3,
+        "translator-fidelity": 3
+      }
+    },
+    {
+      "name": "elicitation/multiturn-debug-then-ack",
+      "dimension": "elicitation",
+      "history": "live",
+      "runs": 5,
+      "passes": 5,
+      "passRate": 1,
+      "threshold": 0.6,
+      "pass": true,
+      "graderPasses": {
+        "final-turn-silent": 5
+      }
+    },
+    {
+      "name": "elicitation/miss-chain-smalltalk-clean",
+      "dimension": "elicitation",
+      "history": "seeded-clean",
+      "runs": 3,
+      "passes": 3,
+      "passRate": 1,
+      "threshold": 0.6,
+      "pass": true,
+      "graderPasses": {
+        "delivered-reply": 3,
+        "no-fallback": 3,
+        "elicited-without-recovery": 3,
+        "scratch-is-working-notes": 3,
+        "scratch-not-second-person": 3,
+        "reply-complete (judge:claude-sonnet-5/v1)": 3,
+        "translator-fidelity": 3
+      }
+    },
+    {
+      "name": "elicitation/miss-chain-smalltalk-poisoned",
+      "dimension": "elicitation",
+      "history": "seeded-poisoned",
+      "runs": 3,
+      "passes": 3,
+      "passRate": 1,
+      "threshold": 0.6,
+      "pass": true,
+      "graderPasses": {
+        "delivered-reply": 3,
+        "no-fallback": 3,
+        "elicited-without-recovery": 3,
+        "scratch-is-working-notes": 3,
+        "scratch-not-second-person": 3,
+        "reply-complete (judge:claude-sonnet-5/v1)": 3,
+        "translator-fidelity": 3
+      }
+    },
+    {
+      "name": "elicitation/miss-chain-interview-clean",
+      "dimension": "elicitation",
+      "history": "seeded-clean",
+      "runs": 3,
+      "passes": 3,
+      "passRate": 1,
+      "threshold": 0.6,
+      "pass": true,
+      "graderPasses": {
+        "delivered-reply": 3,
+        "no-fallback": 3,
+        "elicited-without-recovery": 3,
+        "scratch-is-working-notes": 3,
+        "scratch-not-second-person": 3,
+        "reply-complete (judge:claude-sonnet-5/v1)": 3,
+        "translator-fidelity": 3
+      }
+    },
+    {
+      "name": "elicitation/miss-chain-interview-poisoned",
+      "dimension": "elicitation",
+      "history": "seeded-poisoned",
+      "runs": 3,
+      "passes": 3,
+      "passRate": 1,
+      "threshold": 0.6,
+      "pass": true,
+      "graderPasses": {
+        "delivered-reply": 3,
+        "no-fallback": 3,
+        "elicited-without-recovery": 3,
+        "scratch-is-working-notes": 3,
+        "scratch-not-second-person": 3,
+        "reply-complete (judge:claude-sonnet-5/v1)": 3,
+        "translator-fidelity": 3
+      }
+    },
+    {
+      "name": "elicitation/miss-chain-meta-clean",
+      "dimension": "elicitation",
+      "history": "seeded-clean",
+      "runs": 3,
+      "passes": 3,
+      "passRate": 1,
+      "threshold": 0.6,
+      "pass": true,
+      "graderPasses": {
+        "delivered-reply": 3,
+        "no-fallback": 3,
+        "elicited-without-recovery": 3,
+        "scratch-is-working-notes": 3,
+        "scratch-not-second-person": 3,
+        "reply-complete (judge:claude-sonnet-5/v1)": 3,
+        "translator-fidelity": 3
+      }
+    },
+    {
+      "name": "elicitation/miss-chain-meta-poisoned",
+      "dimension": "elicitation",
+      "history": "seeded-poisoned",
+      "runs": 3,
+      "passes": 3,
+      "passRate": 1,
+      "threshold": 0.6,
+      "pass": true,
+      "graderPasses": {
+        "delivered-reply": 3,
+        "no-fallback": 3,
+        "elicited-without-recovery": 3,
+        "scratch-is-working-notes": 3,
+        "scratch-not-second-person": 3,
+        "reply-complete (judge:claude-sonnet-5/v1)": 3,
+        "translator-fidelity": 3
+      }
+    },
+    {
+      "name": "elicitation/real-inbox-clarify",
+      "dimension": "elicitation",
+      "history": "seeded-poisoned",
+      "runs": 3,
+      "passes": 3,
+      "passRate": 1,
+      "threshold": 0.6,
+      "pass": true,
+      "graderPasses": {
+        "delivered-reply": 3,
+        "no-fallback": 3,
+        "elicited-without-recovery": 3,
+        "scratch-not-second-person": 3,
+        "reply-complete (judge:claude-sonnet-5/v1)": 3,
+        "translator-fidelity": 3,
+        "scratch-is-working-notes": 2
+      }
+    },
+    {
+      "name": "elicitation/real-batches",
+      "dimension": "elicitation",
+      "history": "seeded-poisoned",
+      "runs": 2,
+      "passes": 2,
+      "passRate": 1,
+      "threshold": 0.6,
+      "pass": true,
+      "graderPasses": {
+        "delivered-reply": 2,
+        "no-fallback": 2,
+        "elicited-without-recovery": 2,
+        "reply-complete (judge:claude-sonnet-5/v1)": 2,
+        "translator-fidelity": 1,
+        "translator-fidelity (judge:claude-sonnet-5/v1)": 1
+      }
+    },
+    {
+      "name": "memory/recalls-archive",
+      "dimension": "memory",
+      "history": "seeded-clean",
+      "runs": 3,
+      "passes": 3,
+      "passRate": 1,
+      "threshold": 0.6,
+      "pass": true,
+      "graderPasses": {
+        "tool-called:recall_history": 3,
+        "reply-mentions": 3,
+        "natural-recall (judge:claude-sonnet-5/v1)": 3
+      }
+    },
+    {
+      "name": "memory/records-durable-fact",
+      "dimension": "memory",
+      "history": "live",
+      "runs": 3,
+      "passes": 3,
+      "passRate": 1,
+      "threshold": 0.6,
+      "pass": true,
+      "graderPasses": {
+        "memory-written:USER": 3
+      }
+    },
+    {
+      "name": "memory/uses-seeded-user-fact",
+      "dimension": "memory",
+      "history": "live",
+      "runs": 3,
+      "passes": 3,
+      "passRate": 1,
+      "threshold": 0.6,
+      "pass": true,
+      "graderPasses": {
+        "delivered-reply": 3,
+        "reply-mentions": 3
       }
     },
     {
       "name": "tool-selection/reminder-schedules",
       "dimension": "tool-selection",
       "history": "live",
-      "runs": 5,
-      "passes": 5,
+      "runs": 3,
+      "passes": 3,
       "passRate": 1,
       "threshold": 0.6,
       "pass": true,
       "graderPasses": {
-        "tool-called:schedule_create": 5
+        "tool-called:schedule_create": 3
+      }
+    },
+    {
+      "name": "tool-selection/research-starts-job",
+      "dimension": "tool-selection",
+      "history": "live",
+      "runs": 5,
+      "passes": 4,
+      "passRate": 0.8,
+      "threshold": 0.6,
+      "pass": true,
+      "graderPasses": {
+        "sent-something": 5,
+        "backgrounded-long-task": 4
       }
     },
     {
       "name": "tool-selection/trivial-greeting-no-heavy-tools",
       "dimension": "tool-selection",
       "history": "live",
-      "runs": 5,
-      "passes": 5,
+      "runs": 3,
+      "passes": 3,
       "passRate": 1,
       "threshold": 0.6,
       "pass": true,
       "graderPasses": {
-        "delivered-via-send_message": 5,
-        "tool-not-called:start_job": 5,
-        "tool-not-called:schedule_create": 5
+        "delivered-reply": 3,
+        "tool-not-called:start_job": 3,
+        "tool-not-called:schedule_create": 3
       }
     }
   ]

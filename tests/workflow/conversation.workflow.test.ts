@@ -24,7 +24,7 @@ describe('runConversation (workflow integration — real Local World)', () => {
   });
 
   it('answers an inbound: delivers via send_message, persists one turn, marks it processed', async () => {
-    ctx = await setupTestRuntime();
+    ctx = await setupTestRuntime({ deliveryMode: 'tool' });
     const event = makeChannelEvent({ text: 'hey sunny' });
     await ctx.store.appendInbound(event);
     setTurnModel(sendOnce('hey! what is up?'));
@@ -46,7 +46,7 @@ describe('runConversation (workflow integration — real Local World)', () => {
     // turn and reintroduces earlier `tool_use` ids — Anthropic then rejects every later turn with
     // "`tool_use` ids must be unique", and the durable run retries forever. The turn must persist
     // ONLY its own generated content.
-    ctx = await setupTestRuntime();
+    ctx = await setupTestRuntime({ deliveryMode: 'tool' });
 
     // A prior, already-answered turn whose payload carries a distinctive tool-call id.
     const first = makeChannelEvent({ text: 'earlier question' });
@@ -116,33 +116,9 @@ describe('runConversation (workflow integration — real Local World)', () => {
     expect(new Set(allToolIds).size).toBe(allToolIds.length); // no duplicate tool_use ids anywhere
   });
 
-  it('prepends the canned few-shot block to the prompt when config.fewshot is on', async () => {
-    ctx = await setupTestRuntime({ fewshot: true });
-    const event = makeChannelEvent({ text: 'hello there' });
-    await ctx.store.appendInbound(event);
-    // The mock model picks responses[count of assistant messages in its prompt]. The canned
-    // block contributes exactly 3 assistant turns (asserted in fewshot.unit.test.ts), so the
-    // first live step must land at index 3 — proof the block actually reached the prompt.
-    setTurnModel([
-      { type: 'text', text: 'wrong: block missing (index 0)' },
-      { type: 'text', text: 'wrong: block thinned (index 1)' },
-      { type: 'text', text: 'wrong: block thinned (index 2)' },
-      {
-        type: 'tool-call',
-        toolName: 'send_message',
-        input: JSON.stringify({ text: 'few-shot block is in the prompt' }),
-      },
-      { type: 'text', text: '' },
-    ]);
-
-    const run = await start(runConversation, [{ threadId: event.threadId }]);
-    await run.returnValue;
-    expect(await run.status).toBe('completed');
-    expect(ctx.gateway.texts()).toEqual(['few-shot block is in the prompt']);
-  });
 
   it('is a no-op when there is no unanswered inbound', async () => {
-    ctx = await setupTestRuntime();
+    ctx = await setupTestRuntime({ deliveryMode: 'tool' });
     const event = makeChannelEvent({ text: 'already answered' });
     await ctx.store.appendInbound(event);
     await ctx.store.markProcessedMany('imessage', [event.messageId]);
@@ -156,7 +132,7 @@ describe('runConversation (workflow integration — real Local World)', () => {
   });
 
   it('folds a message that arrives mid-turn into the same turn (double-text steering)', async () => {
-    ctx = await setupTestRuntime();
+    ctx = await setupTestRuntime({ deliveryMode: 'tool' });
     const a = makeChannelEvent({ text: 'plan a trip' });
     await ctx.store.appendInbound(a);
     // A second message lands AFTER the window is read (step 0) but before the model's next
@@ -189,6 +165,7 @@ describe('runConversation (workflow integration — real Local World)', () => {
   it('family DM: routes a person-fact to people:<id>, never the owner USER.md (multiplayer-family)', async () => {
     const KATE = '+17193146820';
     ctx = await setupTestRuntime({
+      deliveryMode: 'tool',
       owner: { name: 'Devon', identities: ['+15551230000'] },
       family: [{ name: 'Kate', identities: [KATE] }],
     });
@@ -229,6 +206,7 @@ describe('runConversation (workflow integration — real Local World)', () => {
   it('family DM: cannot edit the owner USER.md (owner-only carve-out)', async () => {
     const KATE = '+17193146820';
     ctx = await setupTestRuntime({
+      deliveryMode: 'tool',
       owner: { name: 'Devon', identities: ['+15551230000'] },
       family: [{ name: 'Kate', identities: [KATE] }],
     });
@@ -263,6 +241,7 @@ describe('runConversation (workflow integration — real Local World)', () => {
   it('family DM: cannot edit SUNNY.md (owner-only operating notes)', async () => {
     const KATE = '+17193146820';
     ctx = await setupTestRuntime({
+      deliveryMode: 'tool',
       owner: { name: 'Devon', identities: ['+15551230000'] },
       family: [{ name: 'Kate', identities: [KATE] }],
     });
@@ -297,6 +276,7 @@ describe('runConversation (workflow integration — real Local World)', () => {
   it('message (person): relays to another roster member on their thread, confirms on the current one', async () => {
     const KATE = '+17193146820';
     ctx = await setupTestRuntime({
+      deliveryMode: 'tool',
       owner: { name: 'Devon', identities: ['+15551230000'] },
       family: [{ name: 'Kate', identities: [KATE] }],
     });
@@ -340,6 +320,7 @@ describe('runConversation (workflow integration — real Local World)', () => {
   it('message (person): relays an image attachment to the recipient thread', async () => {
     const KATE = '+17193146820';
     ctx = await setupTestRuntime({
+      deliveryMode: 'tool',
       owner: { name: 'Devon', identities: ['+15551230000'] },
       family: [{ name: 'Kate', identities: [KATE] }],
     });
@@ -382,6 +363,7 @@ describe('runConversation (workflow integration — real Local World)', () => {
 
   it('message (person): refuses a non-roster recipient (roster-only)', async () => {
     ctx = await setupTestRuntime({
+      deliveryMode: 'tool',
       owner: { name: 'Devon', identities: ['+15551230000'] },
       family: [{ name: 'Kate', identities: ['+17193146820'] }],
     });
@@ -411,8 +393,246 @@ describe('runConversation (workflow integration — real Local World)', () => {
     expect(offRoster).toHaveLength(0);
   });
 
+  it('text mode: delivers the final text as blank-line bubbles, persists delivered=text', async () => {
+    ctx = await setupTestRuntime({ deliveryMode: 'text' });
+    const event = makeChannelEvent({ text: 'two tips please' });
+    await ctx.store.appendInbound(event);
+    setTurnModel([{ type: 'text', text: 'tip one: sleep early\n\ntip two: less coffee' }]);
+
+    const run = await start(runConversation, [{ threadId: event.threadId }]);
+    await run.returnValue;
+    expect(await run.status).toBe('completed');
+
+    expect(ctx.gateway.texts()).toEqual(['tip one: sleep early', 'tip two: less coffee']);
+    const window = await ctx.store.recentWindow(event.threadId);
+    const turn = window.find((m) => m.role === 'assistant')!;
+    const meta = (turn.payload as UIMessage).metadata as { delivered?: string; recovered?: boolean };
+    expect(meta.delivered).toBe('text');
+    expect(meta.recovered).toBe(false);
+    expect(await ctx.store.hasUnansweredInbound(event.threadId)).toBe(false);
+  });
+
+  it('text mode: a <no-reply/> sentinel reply means nothing is sent (delivered=silence)', async () => {
+    // Silence-by-sentinel (2026-07-05 redesign): the model chooses silence by making the
+    // sentinel its ENTIRE reply — WITH the trained end-with-text prior, not against it.
+    // The raw sentinel still persists in the row (self-reinforcing precedent).
+    ctx = await setupTestRuntime({ deliveryMode: 'text' });
+    const event = makeChannelEvent({ text: '👍' });
+    await ctx.store.appendInbound(event);
+    setTurnModel([{ type: 'text', text: '<no-reply/>' }]);
+
+    const run = await start(runConversation, [{ threadId: event.threadId }]);
+    await run.returnValue;
+    expect(await run.status).toBe('completed');
+
+    expect(ctx.gateway.sendCount).toBe(0);
+    const window = await ctx.store.recentWindow(event.threadId);
+    const payload = window.find((m) => m.role === 'assistant')!.payload as UIMessage;
+    expect((payload.metadata as { delivered?: string }).delivered).toBe('silence');
+    // The sentinel persists verbatim in the row's text part.
+    expect(
+      payload.parts.some((p) => p.type === 'text' && (p as { text?: string }).text === '<no-reply/>'),
+    ).toBe(true);
+  });
+
+  it('text mode: real content alongside a stray sentinel is delivered with the token stripped', async () => {
+    // The safety property the terminal-stay_silent design lacked: a genuine reply is
+    // never swallowed just because a silence signal also appeared.
+    ctx = await setupTestRuntime({ deliveryMode: 'text' });
+    const event = makeChannelEvent({ text: 'so what should I do?' });
+    await ctx.store.appendInbound(event);
+    setTurnModel([{ type: 'text', text: '<no-reply/> actually — take the earlier flight.' }]);
+
+    const run = await start(runConversation, [{ threadId: event.threadId }]);
+    await run.returnValue;
+    expect(await run.status).toBe('completed');
+
+    expect(ctx.gateway.texts()).toEqual(['actually — take the earlier flight.']);
+    const window = await ctx.store.recentWindow(event.threadId);
+    const meta = (window.find((m) => m.role === 'assistant')!.payload as UIMessage)
+      .metadata as { delivered?: string };
+    expect(meta.delivered).toBe('text');
+  });
+
+  it('text mode: empty final with interim narration takes the recovery backstop (recovered=true)', async () => {
+    ctx = await setupTestRuntime({ deliveryMode: 'text' }, {
+      recoverOverride: (scratch: string) => `composed from notes: ${scratch.slice(0, 20)}`,
+      translateOverride: () => '', // keep the cadence step from reaching a live model
+    });
+    const event = makeChannelEvent({ text: 'check the weather' });
+    await ctx.store.appendInbound(event);
+    // Narration + a tool call, then the turn ENDS on a tool step (no final text).
+    setTurnModel([
+      { type: 'tool-call', toolName: 'bash', input: '{"command":"echo sunny"}', text: 'checking forecast' },
+      { type: 'text', text: '' },
+    ]);
+
+    const run = await start(runConversation, [{ threadId: event.threadId }]);
+    await run.returnValue;
+    expect(await run.status).toBe('completed');
+
+    expect(ctx.gateway.texts()).toEqual(['composed from notes: checking forecast']);
+    const window = await ctx.store.recentWindow(event.threadId);
+    const payload = window.find((m) => m.role === 'assistant')!.payload as UIMessage;
+    const meta = payload.metadata as { delivered?: string; recovered?: boolean };
+    expect(meta.delivered).toBe('text');
+    expect(meta.recovered).toBe(true);
+    // The composed reply persists as a PLAIN TEXT part (never a synthetic tool part).
+    const types = payload.parts.map((p) => p.type);
+    expect(types).not.toContain('tool-send_message');
+    expect(
+      payload.parts.some(
+        (p) => p.type === 'text' && (p as { text?: string }).text?.startsWith('composed from notes'),
+      ),
+    ).toBe(true);
+  });
+
+  it('text mode: translator relays narration on the first non-terminal step, persists data-translator', async () => {
+    const composed: string[] = [];
+    ctx = await setupTestRuntime({ deliveryMode: 'text', translatorEveryNSteps: 3 }, {
+      translateOverride: (interim: string) => {
+        composed.push(interim);
+        return `update: ${interim.split('\n')[0]}`;
+      },
+    });
+    const event = makeChannelEvent({ text: 'plan my trip' });
+    await ctx.store.appendInbound(event);
+    // Step 0: narration + tool call (non-terminal). Step 1: the final reply text.
+    setTurnModel([
+      { type: 'tool-call', toolName: 'bash', input: '{"command":"echo x"}', text: 'looking at flights first' },
+      { type: 'text', text: 'booked research done — options coming up' },
+    ]);
+
+    const run = await start(runConversation, [{ threadId: event.threadId }]);
+    await run.returnValue;
+    expect(await run.status).toBe('completed');
+
+    // The translator fired exactly once (step 1), fed step 0's narration + tool-call log
+    // (tool lines matter: with thinking on, narration text is usually absent — measured
+    // zero across a full grid — so tool calls are the only progress signal); the update
+    // was delivered BEFORE the final reply.
+    expect(composed).toEqual(['looking at flights first\n[ran bash: echo x]']);
+    expect(ctx.gateway.texts()).toEqual([
+      'update: looking at flights first',
+      'booked research done — options coming up',
+    ]);
+    const window = await ctx.store.recentWindow(event.threadId);
+    const payload = window.find((m) => m.role === 'assistant')!.payload as UIMessage;
+    const trParts = payload.parts.filter((p) => p.type === 'data-translator');
+    expect(trParts).toHaveLength(1);
+    expect((trParts[0] as { data?: { text?: string; step?: number } }).data).toEqual({
+      text: 'update: looking at flights first',
+      step: 1,
+    });
+    // Interleave: the update sits before the final reply text in the persisted row.
+    const types = payload.parts.map((p) => p.type);
+    expect(types.indexOf('data-translator')).toBeLessThan(types.lastIndexOf('text'));
+  });
+
+  it('text mode: a declined update (translator silence) relays nothing and persists no part', async () => {
+    ctx = await setupTestRuntime({ deliveryMode: 'text' }, {
+      translateOverride: () => '',
+    });
+    const event = makeChannelEvent({ text: 'quick check' });
+    await ctx.store.appendInbound(event);
+    setTurnModel([
+      { type: 'tool-call', toolName: 'bash', input: '{"command":"echo x"}', text: 'internal bookkeeping' },
+      { type: 'text', text: 'all set: nothing to change' },
+    ]);
+
+    const run = await start(runConversation, [{ threadId: event.threadId }]);
+    await run.returnValue;
+
+    expect(ctx.gateway.texts()).toEqual(['all set: nothing to change']);
+    const window = await ctx.store.recentWindow(event.threadId);
+    const payload = window.find((m) => m.role === 'assistant')!.payload as UIMessage;
+    expect(payload.parts.filter((p) => p.type === 'data-translator')).toHaveLength(0);
+  });
+
+  it('text mode: translator cadence — fires at steps 1 and 1+N, not in between', async () => {
+    const firedAt: string[] = [];
+    ctx = await setupTestRuntime({ deliveryMode: 'text', translatorEveryNSteps: 2 }, {
+      translateOverride: (interim: string) => {
+        firedAt.push(interim);
+        return `u${firedAt.length}`;
+      },
+    });
+    const event = makeChannelEvent({ text: 'long task' });
+    await ctx.store.appendInbound(event);
+    // Steps 0-3 are tool calls with narration; step 4 is the final reply. With N=2 the
+    // trigger fires at steps 1 and 3 (and would at 5): step1 sees step 0's notes, step3
+    // sees steps 1-2's. Notes = narration text + the [ran tool] log line per step.
+    setTurnModel([
+      { type: 'tool-call', toolName: 'bash', input: '{"command":"echo a"}', text: 'n0' },
+      { type: 'tool-call', toolName: 'bash', input: '{"command":"echo b"}', text: 'n1' },
+      { type: 'tool-call', toolName: 'bash', input: '{"command":"echo c"}', text: 'n2' },
+      { type: 'tool-call', toolName: 'bash', input: '{"command":"echo d"}', text: 'n3' },
+      { type: 'text', text: 'done — final answer' },
+    ]);
+
+    const run = await start(runConversation, [{ threadId: event.threadId }]);
+    await run.returnValue;
+    expect(await run.status).toBe('completed');
+
+    expect(firedAt).toEqual([
+      'n0\n[ran bash: echo a]',
+      'n1\n[ran bash: echo b]\nn2\n[ran bash: echo c]',
+    ]);
+    expect(ctx.gateway.texts()).toEqual(['u1', 'u2', 'done — final answer']);
+  });
+
+  it('text mode: delivers bubbles EXACTLY ONCE when a post-send step fails and the workflow replays', async () => {
+    ctx = await setupTestRuntime({ deliveryMode: 'text' });
+    const event = makeChannelEvent({ text: 'crash test' });
+    await ctx.store.appendInbound(event);
+    setTurnModel([{ type: 'text', text: 'bubble one\n\nbubble two' }]);
+
+    const real = ctx.store.markAnsweredForThread.bind(ctx.store);
+    let failed = false;
+    vi.spyOn(ctx.store, 'markAnsweredForThread').mockImplementation(async (threadId, ids) => {
+      if (!failed) {
+        failed = true;
+        throw new Error('boom: simulated crash after delivery');
+      }
+      return real(threadId, ids);
+    });
+
+    const run = await start(runConversation, [{ threadId: event.threadId }]);
+    await run.returnValue;
+    expect(await run.status).toBe('completed');
+
+    expect(failed).toBe(true);
+    expect(ctx.gateway.texts()).toEqual(['bubble one', 'bubble two']); // exactly once each
+  });
+
+  it('text mode: send_image rides the send step; send_message is not offered', async () => {
+    // translateOverride: the step-1 cadence trigger now always has notes (the tool-call
+    // log), so without the stub it would reach a live model.
+    ctx = await setupTestRuntime({ deliveryMode: 'text' }, { translateOverride: () => '' });
+    const event = makeChannelEvent({ text: 'send me the chart' });
+    await ctx.store.appendInbound(event);
+    setTurnModel([
+      {
+        type: 'tool-call',
+        toolName: 'send_image',
+        input: JSON.stringify({ pathOrUrl: '/home/tivona/work/chart.png', caption: 'this week' }),
+      },
+      { type: 'text', text: 'chart sent — red line is spend' },
+    ]);
+
+    const run = await start(runConversation, [{ threadId: event.threadId }]);
+    await run.returnValue;
+    expect(await run.status).toBe('completed');
+
+    const img = ctx.gateway.sent.find((s) => s.attachment);
+    expect(img?.attachment).toEqual({ pathOrUrl: '/home/tivona/work/chart.png' });
+    expect(img?.text).toBe('this week');
+    expect(ctx.gateway.texts()).toContain('chart sent — red line is spend');
+  });
+
+
   it('delivers EXACTLY ONCE when a post-send step fails and the workflow replays', async () => {
-    ctx = await setupTestRuntime();
+    ctx = await setupTestRuntime({ deliveryMode: 'tool' });
     const event = makeChannelEvent({ text: 'crash test' });
     await ctx.store.appendInbound(event);
     setTurnModel(sendOnce('delivered once'));

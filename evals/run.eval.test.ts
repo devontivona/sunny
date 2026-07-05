@@ -9,6 +9,7 @@ import {
   casePassed,
   cellSlug,
   diffScorecards,
+  silenceTierGate,
   summarizeDimensions,
   type CaseScore,
   type Scorecard,
@@ -56,10 +57,9 @@ function parseOptions(): Options {
   const cell: ScorecardConfig = {};
   if (runConfig.thinking) cell.thinking = runConfig.thinking;
   if (runConfig.effort) cell.effort = runConfig.effort;
-  if (runConfig.promptVariant) cell.promptVariant = runConfig.promptVariant;
-  if (runConfig.inboundEnvelope !== undefined) cell.inboundEnvelope = runConfig.inboundEnvelope;
-  if (runConfig.fewshot !== undefined) cell.fewshot = runConfig.fewshot;
-  if (runConfig.composerAlways !== undefined) cell.composerAlways = runConfig.composerAlways;
+  if (runConfig.deliveryMode) cell.deliveryMode = runConfig.deliveryMode;
+  if (runConfig.translatorHistory) cell.translatorHistory = runConfig.translatorHistory;
+  if (runConfig.translatorEveryNSteps) cell.translatorEveryNSteps = runConfig.translatorEveryNSteps;
 
   return {
     dimension: (process.env.EVAL_DIMENSION ?? 'all') as Dimension | 'all',
@@ -98,7 +98,14 @@ function withWatchdog<T>(p: Promise<T>, ms: number): Promise<T> {
     // live handle left — unref'd, the process drains and exits cleanly mid-loop
     // and vitest reports a PASS with a truncated scorecard (2026-07-04, twice).
     // The ref'd timer keeps the process alive until the watchdog can fire.
-    const timer = setTimeout(() => reject(new RunTimeoutError(ms)), ms);
+    const timer = setTimeout(() => {
+      // DEFUSE the abandoned promise: after its DB is torn down, the zombie run's
+      // steps fail and the promise REJECTS later — unhandled, vitest fails the
+      // whole scorecard test (2026-07-04 real-batches solo: one watchdogged run
+      // killed the card). The run is already counted as failed; swallow its tail.
+      p.catch(() => {});
+      reject(new RunTimeoutError(ms));
+    }, ms);
     p.then(
       (v) => {
         clearTimeout(timer);
@@ -235,6 +242,18 @@ describe('eval scorecard', () => {
     const scorecard = buildScorecard(opts, meter, stoppedOnBudget, caseScores, startedAt);
     reportDiff(scorecard);
     console.log(`\nCost: $${scorecard.costUsd.toFixed(4)}`);
+
+    // Silence-tier gate (the d487a98 over-talk risk): reported for every text-mode run
+    // (the default since 2026-07-05) — silence must hold at or above the committed baseline.
+    if ((opts.runConfig.deliveryMode ?? 'text') === 'text') {
+      const gate = silenceTierGate(readBaseline(), scorecard);
+      const pct = (v: number | null) => (v === null ? 'n/a' : `${(v * 100).toFixed(0)}%`);
+      console.log(`\nSilence-tier gate (text cell vs tool baseline): ${gate.pass ? 'PASS' : 'FAIL'}`);
+      for (const r of gate.rows) {
+        console.log(`  ${r.name}: baseline ${pct(r.baseline)} → ${pct(r.current)}`);
+      }
+      console.log(`  mean: ${pct(gate.baselineMean)} → ${pct(gate.currentMean)}`);
+    }
 
     // Only the DEFAULT cell (production model, no forced knobs) gates on the committed
     // baseline — a grid cell measured under different config would red-fail apples-to-oranges.

@@ -21,6 +21,13 @@ import { toolCatalog } from '../agent/tools/catalog.js';
 import { renderableMedia, type AttachmentKind } from '../gateway/media.js';
 import { getLiveBus, type LiveRun } from '../observability/live.js';
 import { defaultRedactor } from '../observability/redact.js';
+import {
+  extractFinalText,
+  extractInterimText,
+  extractTranslatorUpdates,
+  splitBubbles,
+  stripNoReply,
+} from '../agent/delivery.js';
 
 /**
  * Read-only data access for the dashboard (web-dashboard D-WD3/5). Reads the
@@ -690,15 +697,28 @@ function toConversationMessage(row: typeof messages.$inferSelect, senderRole: Ro
       parts: null,
     };
   }
-  // Assistant: delivered = each send_message; scratch = private text parts.
-  const delivered = parts
-    .filter((p) => p.type === 'tool-send_message' && p.input?.text)
-    .map((p) => p.input!.text as string);
-  const scratch = parts
-    .filter((p) => p.type === 'text' && p.text)
-    .map((p) => p.text as string)
-    .join('\n')
-    .trim();
+  // Assistant: delivered = each send_message (tool mode), or the relayed progress updates +
+  // final reply bubbles (text-delivery mode); scratch = the never-delivered text (all text
+  // parts in tool mode; the interim narration in text mode).
+  const uiParts = parts as unknown as Parameters<typeof extractFinalText>[0];
+  const textMode = meta.delivered === 'text';
+  const delivered = textMode
+    ? [
+        ...extractTranslatorUpdates(uiParts).map((u) => u.text),
+        // The <no-reply/> sentinel persists in the row but was never delivered.
+        ...splitBubbles(stripNoReply(extractFinalText(uiParts)).text),
+      ]
+    : parts
+        .filter((p) => p.type === 'tool-send_message' && p.input?.text)
+        .map((p) => p.input!.text as string);
+  const scratch = (
+    textMode
+      ? extractInterimText(uiParts)
+      : parts
+          .filter((p) => p.type === 'text' && p.text)
+          .map((p) => p.text as string)
+          .join('\n')
+  ).trim();
   return {
     id: row.id,
     role: 'assistant' as const,

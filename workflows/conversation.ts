@@ -6,7 +6,11 @@ import { buildTurnModel } from '../src/agent/turnModel.js';
 import { z } from 'zod';
 import { BASH_TOOL_SPECS } from '../src/agent/tools/bashSpecs.js';
 import { MEMORY_TOOL_SPECS } from '../src/agent/tools/memorySpecs.js';
-import { SEND_MESSAGE_SPEC, STAY_SILENT_SPEC } from '../src/agent/tools/sendMessageSpec.js';
+import {
+  SEND_IMAGE_SPEC,
+  SEND_MESSAGE_SPEC,
+  STAY_SILENT_SPEC,
+} from '../src/agent/tools/sendMessageSpec.js';
 import { MESSAGE_SPEC } from '../src/agent/tools/messageSpec.js';
 import { RUNS_TOOL_SPECS, scheduleToolSpecs } from '../src/agent/tools/scheduleSpecs.js';
 import { DELEGATE_TASK_SPEC, type ChildModelName } from '../src/agent/tools/delegationSpecs.js';
@@ -18,9 +22,15 @@ import {
   buildTurnRecord,
   calledStaySilent,
   classifyDelivery,
+  classifyTextDelivery,
+  extractFinalText,
+  extractInterimText,
   extractScratch,
   extractSends,
   sendMessagePart,
+  splitBubbles,
+  stripNoReply,
+  translatorPart,
   usageOf,
   type Delivery,
 } from '../src/agent/delivery.js';
@@ -55,9 +65,9 @@ interface TurnSetup {
   modelId: string;
   providerOptions: SharedV4ProviderOptions;
   deliveryMode: 'tool' | 'text';
-  /** Wrap inbound user messages (incl. mid-turn steers) in the relay envelope
-   *  (config.inboundEnvelope). Journaled here so the body never reads config. */
-  inboundEnvelope: boolean;
+  /** Progress-translator cadence (text mode; config.translatorEveryNSteps). Journaled
+   *  here so the body never reads config. */
+  translatorEveryNSteps: number;
   ownerName: string;
   /** The owner's configured timezone — used for `schedule_create` cron/timestamp evaluation
    *  and interpolated into the tool description (run-audiences Phase 1a). */
@@ -100,7 +110,10 @@ export async function runConversation(input: ConversationInput): Promise<void> {
   // from plus steers already folded — so only genuinely new arrivals come back. The telemetry-off
   // + writable + step-limit wiring lives in `streamAgent` (shared by every profile). `foldedIds`
   // (the steers this turn absorbed) and `usage` come back so we can mark + record exactly them.
-  const { result, usage, foldedIds } = await streamAgent({
+  // In text mode a translator relays interim progress on the cadence steps (Phase 3): compose
+  // (`translateStep`) and send are SEPARATE memoized steps, so a replay never re-relays.
+  const subject = setup.subjectName ?? ownerName;
+  const { result, usage, foldedIds, translatorUpdates } = await streamAgent({
     model: buildTurnModel(setup.modelId, setup.testModelResponses),
     instructions: setup.instructions,
     tools: buildTools({
@@ -110,6 +123,7 @@ export async function runConversation(input: ConversationInput): Promise<void> {
       ownerPresent: setup.ownerPresent,
       timezone: setup.timezone,
       subjectName: setup.subjectName,
+      deliveryMode: setup.deliveryMode,
     }),
     providerOptions: setup.providerOptions,
     messages: pending.messages,
@@ -117,8 +131,16 @@ export async function runConversation(input: ConversationInput): Promise<void> {
       inboxThreadId: threadId,
       isGroup,
       baseExcludeIds: pending.windowUserIds,
-      envelope: setup.inboundEnvelope,
     },
+    translator:
+      setup.deliveryMode === 'text'
+        ? {
+            everyNSteps: setup.translatorEveryNSteps,
+            compose: (interim, recentUpdates) =>
+              translateStep(threadId, subject, interim, recentUpdates),
+            send: (text) => sendStep(threadId, text),
+          }
+        : undefined,
   });
 
   await finalizeTurn({
@@ -141,14 +163,22 @@ export async function runConversation(input: ConversationInput): Promise<void> {
     steps: result.steps.length,
     usage,
     priorMessages: pending.messages,
+    translatorUpdates,
   });
   // Mark the window AND every steer folded this turn, so a folded message isn't re-answered
   // as a redundant next turn-run.
   await markAnswered(threadId, [...pending.windowUserIds, ...foldedIds]);
 }
 
-/** Classify delivery, run the recovery backstop on a miss, and persist one row per turn
- *  (D-MG8 / D-MG9). Mirrors the in-process loop; every side effect is a durable step. */
+/** Classify delivery, deliver (text mode), run the recovery backstop on a miss, and persist
+ *  one row per turn (D-MG8 / D-MG9). Mirrors the in-process loop; every side effect is a
+ *  durable step. Forks on the journaled `setup.deliveryMode`:
+ *  - `tool` — the untouched pre-migration path (send_message fired mid-stream; a scratch-only
+ *    turn takes the recovery backstop). The rollback path; byte-for-byte behavior preserved.
+ *  - `text` — text-as-reply (Phase 2): the FINAL text (after the last tool call) IS the reply,
+ *    delivered here as blank-line bubbles via the memoized send step; interim narration is the
+ *    translator's source material; an empty final with narration is the miss the backstop
+ *    composes from. Relayed translator updates persist as `data-translator` parts. */
 async function finalizeTurn(args: {
   threadId: string;
   ownerName: string;
@@ -158,6 +188,8 @@ async function finalizeTurn(args: {
   steps: number;
   usage: LanguageModelUsage | undefined;
   priorMessages: ModelMessage[];
+  /** The progress updates the translator relayed this turn (text mode; already delivered). */
+  translatorUpdates: { text: string; step: number }[];
 }): Promise<void> {
   const { threadId, ownerName, setup, priorMessages } = args;
   const assistant = assistantUIMessageFromResponse(args.messages);
@@ -168,31 +200,85 @@ async function finalizeTurn(args: {
   // `stripReasoning` in turn.ts), and shouldn't be stored or shown on the dashboard. Keeps
   // the durable turn record consistent with the in-process loop's.
   let parts = assistant.parts.filter((p) => p.type !== 'reasoning') as typeof assistant.parts;
-  const scratch = extractScratch(parts);
-  let delivered: Delivery = classifyDelivery(
-    extractSends(parts).length,
-    scratch,
-    calledStaySilent(parts),
-  );
+  // Frame recovered/relayed messages for the thread's subject (D-RA4/F6) — a family member
+  // when the owner is absent — not hardcoded to the owner.
+  const subject = setup.subjectName ?? ownerName;
+  let delivered: Delivery;
   let recovered = false;
+  let projection: string;
 
-  if (delivered === 'fallback_text') {
-    // Elicitation miss (D-MG8): the model wrote text but called neither send_message nor
-    // stay_silent. The miss took the backstop path, so mark it recovered regardless of the
-    // pass's outcome (the dashboard [R] / Activity "Backstop" signal).
-    recovered = true;
-    // Frame the recovered message for the thread's subject (D-RA4/F6) — a family member when the
-    // owner is absent — not hardcoded to the owner.
-    const subject = setup.subjectName ?? ownerName;
-    const recoveryText = await recoverDelivery(threadId, subject, priorMessages, scratch);
-    if (recoveryText) {
-      await sendStep(threadId, recoveryText);
-      parts = [...parts, sendMessagePart(recoveryText, 'recovery-0')];
-      delivered = 'send_message';
+  if (setup.deliveryMode === 'text') {
+    const interim = extractInterimText(parts);
+    // Silence is the <no-reply/> sentinel reply, parsed out here; the raw text (sentinel
+    // included) still persists in the row, so history carries the exact silence precedent.
+    // calledStaySilent covers rows replayed from the tool-mode era.
+    const parsed = stripNoReply(extractFinalText(parts));
+    let finalText = parsed.text;
+    delivered = classifyTextDelivery(finalText, interim, parsed.sentinel || calledStaySilent(parts));
+
+    if (delivered === 'text') {
+      // Each blank-line paragraph is its own bubble; each send is a separate memoized step,
+      // so a replay resumes mid-sequence without re-sending delivered bubbles.
+      for (const bubble of splitBubbles(finalText)) {
+        await sendStep(threadId, bubble);
+      }
+    } else if (delivered === 'fallback_text') {
+      // Empty-final miss: the turn narrated work but never wrote the reply. The recovery
+      // backstop composes it from the narration ('said' labeling — in this mode prior text
+      // WAS delivered speech). Marked recovered regardless of outcome (the [R] signal).
+      recovered = true;
+      const recoveryText = await recoverDelivery(threadId, subject, priorMessages, interim, 'text');
+      if (recoveryText) {
+        await sendStep(threadId, recoveryText);
+        // Recorded as a PLAIN TEXT part — never a synthetic tool part (tool_use id hygiene).
+        // Replayed as history it reads as the turn's final reply text, so the persisted
+        // precedent reinforces the correct shape (the PR #30 self-reinforcement argument).
+        parts = [...parts, { type: 'text', text: recoveryText } as (typeof parts)[number]];
+        finalText = recoveryText;
+        delivered = 'text';
+      }
     }
+
+    // Interleave the relayed updates after the last tool part — before the final reply text —
+    // so a replayed row reads: working notes → updates relayed → final reply.
+    if (args.translatorUpdates.length > 0) {
+      let insertAt = 0;
+      for (let i = parts.length - 1; i >= 0; i--) {
+        if (parts[i]!.type.startsWith('tool-')) {
+          insertAt = i + 1;
+          break;
+        }
+      }
+      parts = [
+        ...parts.slice(0, insertAt),
+        ...args.translatorUpdates.map((u) => translatorPart(u.text, u.step)),
+        ...parts.slice(insertAt),
+      ] as typeof parts;
+    }
+
+    projection = [interim, ...args.translatorUpdates.map((u) => u.text), finalText]
+      .filter(Boolean)
+      .join('\n');
+  } else {
+    const scratch = extractScratch(parts);
+    delivered = classifyDelivery(extractSends(parts).length, scratch, calledStaySilent(parts));
+
+    if (delivered === 'fallback_text') {
+      // Elicitation miss (D-MG8): the model wrote text but called neither send_message nor
+      // stay_silent. The miss took the backstop path, so mark it recovered regardless of the
+      // pass's outcome (the dashboard [R] / Activity "Backstop" signal).
+      recovered = true;
+      const recoveryText = await recoverDelivery(threadId, subject, priorMessages, scratch);
+      if (recoveryText) {
+        await sendStep(threadId, recoveryText);
+        parts = [...parts, sendMessagePart(recoveryText, 'recovery-0')];
+        delivered = 'send_message';
+      }
+    }
+
+    projection = [scratch, ...extractSends(parts)].filter(Boolean).join('\n');
   }
 
-  const projection = [scratch, ...extractSends(parts)].filter(Boolean).join('\n');
   if (parts.length > 0) {
     const usage = args.usage
       ? usageOf(args.usage)
@@ -220,26 +306,46 @@ function buildTools(ctx: {
   ownerPresent: boolean;
   timezone: string;
   subjectName?: string;
+  deliveryMode: 'tool' | 'text';
 }) {
-  const { threadId, ownerName, trustedDm, ownerPresent, timezone, subjectName } = ctx;
+  const { threadId, ownerName, trustedDm, ownerPresent, timezone, subjectName, deliveryMode } =
+    ctx;
   const scheduleSpecs = scheduleToolSpecs(timezone);
   return {
-    send_message: tool({
-      ...SEND_MESSAGE_SPEC,
-      execute: ({ text, image }) => sendStep(threadId, text, image),
-    }),
-    stay_silent: tool({
-      ...STAY_SILENT_SPEC,
-      // No side effect — the choice of silence is read back from the turn's parts.
-      execute: async () => 'ok: staying silent',
-    }),
+    // The mode's voice tooling: tool mode speaks via send_message and chooses silence via
+    // stay_silent; text mode's reply IS the final text (delivered in finalizeTurn), silence
+    // is the <no-reply/> sentinel reply (no tool — silence-by-text goes WITH the trained
+    // end-with-text prior; see NO_REPLY_SENTINEL), and send_image handles outbound media.
+    ...(deliveryMode === 'text'
+      ? {
+          send_image: tool({
+            ...SEND_IMAGE_SPEC,
+            execute: ({ pathOrUrl, caption }) => sendStep(threadId, caption ?? '', pathOrUrl),
+          }),
+        }
+      : {
+          send_message: tool({
+            ...SEND_MESSAGE_SPEC,
+            execute: ({ text, image }) => sendStep(threadId, text, image),
+          }),
+          stay_silent: tool({
+            ...STAY_SILENT_SPEC,
+            // No side effect — the choice of silence is read back from the turn's parts.
+            execute: async () => 'ok: staying silent',
+          }),
+        }),
     start_job: tool({
       description:
         'Promote a long-running or asynchronous task to a durable background job. Use this ' +
         "for work that takes a while (research, building something, multi-step tasks you can't " +
         'finish in one quick reply). The job runs to completion even across restarts and ' +
-        'messages the user with the result when done. Tell the user you are on it (via ' +
-        'send_message) first, then call this.',
+        'messages the user with the result when done. ' +
+        (deliveryMode === 'text'
+          ? 'Use this INSTEAD of working through a long task inline — the chat is blocked ' +
+            'while you work, so promote anything beyond a few quick tool calls (do not grind ' +
+            'through research with dozens of calls in the conversation). After calling this, ' +
+            'your reply just tells the user you are on it; the job reports back separately.'
+          : 'Tell the user you are on it (via send_message) first, then call this.'),
       inputSchema: z.object({
         task: z
           .string()
@@ -331,10 +437,7 @@ async function setupTurn(threadId: string, isGroup: boolean): Promise<TurnSetup>
   const { personId, ensureAndLoadPeople } = await import('../src/memory/index.js');
   const { rosterMatch } = await import('../src/agent/audience.js');
   const { config, store } = await getRuntime();
-  // Composer-always (architectural reference arm): the text-mode prompt makes the model
-  // reply in plain text; finalizeTurn's recovery pass then composes + delivers it every
-  // substantive turn — the two-pass design measured end to end with existing machinery.
-  const deliveryMode = config.composerAlways ? 'text' : config.deliveryMode;
+  const deliveryMode = config.deliveryMode;
 
   // Resolve the thread's trusted participants from persisted history (multiplayer-family D3).
   // Owner presence comes from the persisted `isOwner` tag (also correct for the loopback test
@@ -362,7 +465,7 @@ async function setupTurn(threadId: string, isGroup: boolean): Promise<TurnSetup>
     modelId: config.modelId,
     providerOptions: anthropicProviderOptions(config),
     deliveryMode,
-    inboundEnvelope: config.inboundEnvelope,
+    translatorEveryNSteps: config.translatorEveryNSteps,
     ownerName: config.owner.name,
     timezone: config.timezone,
     ownerPresent,
@@ -396,35 +499,18 @@ async function loadPending(threadId: string, isGroup: boolean): Promise<PendingT
   const { toModelMessages, trimTrailingNonUser } = await import('../src/agent/turn.js');
   const { store, config } = await getRuntime();
   const window = await store.recentWindow(threadId);
-  const real = trimTrailingNonUser(
-    await toModelMessages(window, isGroup, { envelope: config.inboundEnvelope }),
+  const messages = trimTrailingNonUser(
+    await toModelMessages(window, isGroup, {
+      // Read-time rendering of persisted translator updates (text-delivery Phase 3):
+      // 'attributed' shows the model what the user already heard; 'excluded' strips them.
+      translatorHistory: config.translatorHistory,
+      translatorSubject: config.owner.name,
+    }),
   );
   const [windowUserIds, hasUnanswered] = await Promise.all([
     store.windowUserIds(threadId),
     store.hasUnansweredInbound(threadId),
   ]);
-
-  // Canned few-shot block (config.fewshot): prepended INSIDE this step so the
-  // workflow body stays config-free and the block rides the journaled return.
-  // Static per config → it extends the cached prefix; the breakpoint on its last
-  // message makes system+fewshot one stable cache unit (2 of 4 breakpoints used).
-  let messages = real;
-  if (config.fewshot && real.length > 0) {
-    const { convertToModelMessages } = await import('ai');
-    const { fewshotUIMessages } = await import('../src/agent/fewshot.js');
-    const block = await convertToModelMessages(
-      fewshotUIMessages(config.owner.name, config.promptVariant, config.inboundEnvelope),
-      { ignoreIncompleteToolCalls: true },
-    );
-    const last = block[block.length - 1];
-    if (last) {
-      last.providerOptions = {
-        ...last.providerOptions,
-        anthropic: { cacheControl: { type: 'ephemeral' } },
-      };
-    }
-    messages = [...block, ...real];
-  }
   return { messages, windowUserIds, hasUnanswered };
 }
 
@@ -448,25 +534,70 @@ async function sendStep(
 }
 
 /** Delivery-recovery backstop (D-MG8) as a step: a cheap model rewrites the private notes
- *  into a clean iMessage. Returns '' if there is nothing to compose. */
+ *  into a clean iMessage. Returns '' if there is nothing to compose. In text mode prior
+ *  assistant text WAS delivered speech, so the transcript labels it 'said', not
+ *  'private note' (see RecoveryOptions.assistantTextLabel). */
 async function recoverDelivery(
   threadId: string,
   ownerName: string,
   messages: ModelMessage[],
   scratch: string,
+  deliveryMode: 'tool' | 'text' = 'tool',
 ): Promise<string> {
   'use step';
 
   const { getRuntime } = await import('../src/runtime.js');
+  const rt = (await getRuntime()) as Awaited<
+    ReturnType<typeof import('../src/runtime.js').getRuntime>
+  > & { recoverOverride?: (scratch: string) => string };
+  // Test seam (mirrors translateOverride/stubJobs): workflow tests stub the composed
+  // text so the backstop path is exercised hermetically, without a live model call.
+  if (rt.recoverOverride) return rt.recoverOverride(scratch);
   const { getRecoveryModel } = await import('../src/agent/model.js');
   const { runRecoveryPass } = await import('../src/agent/recovery.js');
-  const { config } = await getRuntime();
   try {
     return await runRecoveryPass({
-      model: getRecoveryModel(config),
+      model: getRecoveryModel(rt.config),
       ownerName,
       messages,
       scratch,
+      threadId,
+      assistantTextLabel: deliveryMode === 'text' ? 'said' : 'private note',
+    });
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Compose one interim progress update (text-delivery Phase 3) as a step: the cheap
+ * recovery-tier model summarizes the turn's narration since the last update, or declines
+ * ('' — silence is the translator's default). Journaled, so a replay reuses the composed
+ * text; the SEND is a separate memoized step (never re-relays). Best-effort by design: a
+ * translator failure must never fail the turn, so errors collapse to silence.
+ * `translateOverride` on the runtime is the test seam (mirrors `stubJobs`).
+ */
+async function translateStep(
+  threadId: string,
+  subject: string,
+  interim: string,
+  recentUpdates: string[],
+): Promise<string> {
+  'use step';
+
+  const { getRuntime } = await import('../src/runtime.js');
+  const rt = (await getRuntime()) as Awaited<
+    ReturnType<typeof import('../src/runtime.js').getRuntime>
+  > & { translateOverride?: (interim: string, recentUpdates: string[]) => string };
+  if (rt.translateOverride) return rt.translateOverride(interim, recentUpdates);
+  const { getRecoveryModel } = await import('../src/agent/model.js');
+  const { runTranslatorPass } = await import('../src/agent/translator.js');
+  try {
+    return await runTranslatorPass({
+      model: getRecoveryModel(rt.config),
+      subject,
+      interim,
+      recentUpdates,
       threadId,
     });
   } catch {
@@ -575,8 +706,8 @@ async function delegateStep(
   }
   return (
     `Delegated to subagent "${args.label ?? 'subagent'}" (id ${res.childThreadId}). It is working ` +
-    `in its own context and will report back here when done; you can keep going or steer it with ` +
-    `the message tool (pass its id).`
+    `in its own context and will report back here when done — the task is HANDLED, so do not ` +
+    `also work on it yourself. Move on (or steer it with the message tool, passing its id).`
   );
 }
 
