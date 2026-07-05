@@ -132,6 +132,19 @@ export class LiveBus {
     if (entry) this.emit(entry, { type: 'status', run: entry.run });
   }
 
+  /** Publish a chunk to whatever turn is currently RUNNING on a thread (no-op when none).
+   *  The side-channel seam for parts that never ride the model stream — e.g. relayed
+   *  translator updates (delivered via the send step, invisible to the run's own chunk
+   *  stream) — so the dashboard's live pane shows them as they happen. */
+  publishThreadChunk(threadId: string, chunk: UIMessageChunk): void {
+    for (const entry of this.turns.values()) {
+      if (entry.run.threadId === threadId && entry.run.status === 'running') {
+        this.publishTurnChunk(entry.run.runId, chunk);
+        return;
+      }
+    }
+  }
+
   /** Forward one `UIMessageChunk` for a turn: redact, buffer (bounded), advance the
    *  step counter, and emit to subscribers. No-op if the run is unknown. */
   publishTurnChunk(runId: string, chunk: UIMessageChunk): void {

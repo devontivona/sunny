@@ -63,15 +63,13 @@ function Bubble({ m }: { m: ConversationMessage }) {
         {isSunny && m.recovered && (
           <span
             className="text-error"
-            title="This turn required the delivery-recovery backstop — the model wrote a reply but didn't call send_message, so the backstop composed + delivered it (de-poisoning)."
+            title="This turn ended abnormally (step limit / error) without reply text — the backstop composed an honest status from its working notes and delivered that."
           >
             [R]
           </span>
         )}
         <span>{formatTime(m.timestamp)}</span>
-        {m.delivery && m.delivery !== 'send_message' && (
-          <span className="text-warning">[{m.delivery}]</span>
-        )}
+        {m.delivery === 'fallback_text' && <span className="text-warning">[{m.delivery}]</span>}
         {isSunny && m.steps != null && (
           <span>
             · {m.steps} step{m.steps === 1 ? '' : 's'}
