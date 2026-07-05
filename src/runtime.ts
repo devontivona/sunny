@@ -130,6 +130,7 @@ async function start(): Promise<Runtime> {
     durableRouter = new DurableTurnRouter(gateway, store, {
       modelId: config.modelId,
       effort: config.thinking === 'off' ? null : config.effort,
+      turnWatchdogMs: config.turnWatchdogMs,
     });
     gateway.onInbound(async (event: ChannelEvent) => durableRouter!.route(event));
   }
