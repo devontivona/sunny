@@ -231,17 +231,6 @@ export function extractTranslatorUpdates(
     .filter((d): d is { text: string; step: number } => typeof d?.text === 'string');
 }
 
-/**
- * Split a reply into iMessage bubbles on blank lines (text delivery mode). A reply
- * with no blank line is one bubble; empty/whitespace yields no bubbles.
- */
-export function splitBubbles(text: string): string[] {
-  return text
-    .split(/\n\s*\n/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
-
 /** LEGACY-ROW helper: the delivered bubbles of a pre-text-migration turn (each
  *  `send_message` call's text input). Read paths only — no live turn produces these. */
 export function extractSends(parts: UIMessage['parts']): string[] {

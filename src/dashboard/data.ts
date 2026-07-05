@@ -25,7 +25,6 @@ import {
   extractFinalText,
   extractInterimText,
   extractTranslatorUpdates,
-  splitBubbles,
   stripNoReply,
 } from '../agent/delivery.js';
 
@@ -706,7 +705,7 @@ function toConversationMessage(row: typeof messages.$inferSelect, senderRole: Ro
     ? [
         ...extractTranslatorUpdates(uiParts).map((u) => u.text),
         // The <no-reply/> sentinel persists in the row but was never delivered.
-        ...splitBubbles(stripNoReply(extractFinalText(uiParts)).text),
+        ...[stripNoReply(extractFinalText(uiParts)).text].filter(Boolean),
       ]
     : parts
         .filter((p) => p.type === 'tool-send_message' && p.input?.text)

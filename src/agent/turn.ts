@@ -32,7 +32,6 @@ export {
   extractSends,
   extractTranslatorUpdates,
   groupSpeakerPrefix,
-  splitBubbles,
   steerMessageText,
   stripNoReply,
   translatorPart,

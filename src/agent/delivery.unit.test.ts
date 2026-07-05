@@ -8,7 +8,6 @@ import {
   extractInterimText,
   extractReportBlocks,
   extractTranslatorUpdates,
-  splitBubbles,
   stripNoReply,
   stripNoReport,
   translatorPart,
@@ -116,13 +115,6 @@ describe('text-as-reply extraction (text delivery mode)', () => {
     expect(extractReportBlocks('<report>  </report>rest')).toEqual({ reports: [], rest: 'rest' });
   });
 
-  it('splitBubbles: blank-line paragraphs become separate bubbles', () => {
-    expect(splitBubbles('first bubble\n\nsecond bubble\nsame bubble')).toEqual([
-      'first bubble',
-      'second bubble\nsame bubble',
-    ]);
-    expect(splitBubbles('  \n \n')).toEqual([]);
-  });
 });
 
 describe('calledStaySilent', () => {
