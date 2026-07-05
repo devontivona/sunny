@@ -296,7 +296,7 @@ export function buildSubagentPrompt(config: SunnyConfig, core: MemoryCore, label
  * Text delivery (the text-as-reply architecture, 2026-07): the model's reply text IS the
  * message — the trained "final text answers the user" prior becomes the correct behavior,
  * so history reinforces instead of poisons (the PR #30 finding). The text a turn ENDS on is
- * delivered as bubbles; text written between tool calls is interim narration that a cheap
+ * delivered as one message; text written between tool calls is interim narration that a cheap
  * translator relays as progress updates on long turns. The ack framing in the silence bullet
  * is kept VERBATIM from the PR #30 composer arm (it held silence 5/6 there — don't reword it).
  */
@@ -304,10 +304,8 @@ function howYouSpeakText(owner: string): string[] {
   return [
     `How you speak — read carefully:`,
     `- Your reply IS the message: the text you end your turn with is delivered to ${owner} as`,
-    `  iMessages, exactly as written. Write it the way a person texting back would — concise,`,
-    `  warm, plain text, no markdown. Each blank-line-separated paragraph is delivered as its`,
-    `  own message bubble, so you can send a couple of short bubbles by separating them with a`,
-    `  blank line.`,
+    `  one iMessage, exactly as written. Write it the way a person texting back would —`,
+    `  concise, warm, plain text, no markdown.`,
     `- While you're working with tools, brief working notes as you go are fine — they're the`,
     `  source material for short progress updates relayed to ${owner} during long tasks; the`,
     `  notes themselves aren't delivered. Jot what you're doing and what you found as you go.`,

@@ -373,7 +373,7 @@ describe('runConversation (workflow integration — real Local World)', () => {
     expect(offRoster).toHaveLength(0);
   });
 
-  it('text mode: delivers the final text as blank-line bubbles, persists delivered=text', async () => {
+  it('text mode: delivers the final text as ONE message (blank lines preserved), persists delivered=text', async () => {
     ctx = await setupTestRuntime();
     const event = makeChannelEvent({ text: 'two tips please' });
     await ctx.store.appendInbound(event);
@@ -383,7 +383,8 @@ describe('runConversation (workflow integration — real Local World)', () => {
     await run.returnValue;
     expect(await run.status).toBe('completed');
 
-    expect(ctx.gateway.texts()).toEqual(['tip one: sleep early', 'tip two: less coffee']);
+    // One message, paragraphs intact (bubble-splitting removed 2026-07-05 — too noisy).
+    expect(ctx.gateway.texts()).toEqual(['tip one: sleep early\n\ntip two: less coffee']);
     const window = await ctx.store.recentWindow(event.threadId);
     const turn = window.find((m) => m.role === 'assistant')!;
     const meta = (turn.payload as UIMessage).metadata as { delivered?: string; recovered?: boolean };
@@ -597,7 +598,7 @@ describe('runConversation (workflow integration — real Local World)', () => {
     expect(ctx.gateway.texts()).toEqual(['u1', 'u2', 'done — final answer']);
   });
 
-  it('text mode: delivers bubbles EXACTLY ONCE when a post-send step fails and the workflow replays', async () => {
+  it('text mode: delivers the reply EXACTLY ONCE when a post-send step fails and the workflow replays', async () => {
     ctx = await setupTestRuntime();
     const event = makeChannelEvent({ text: 'crash test' });
     await ctx.store.appendInbound(event);
@@ -618,7 +619,7 @@ describe('runConversation (workflow integration — real Local World)', () => {
     expect(await run.status).toBe('completed');
 
     expect(failed).toBe(true);
-    expect(ctx.gateway.texts()).toEqual(['bubble one', 'bubble two']); // exactly once each
+    expect(ctx.gateway.texts()).toEqual(['bubble one\n\nbubble two']); // exactly once
   });
 
   it('text mode: send_image rides the send step; send_message is not offered', async () => {

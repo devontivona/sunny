@@ -20,7 +20,6 @@ import {
   classifyTextDelivery,
   extractFinalText,
   extractInterimText,
-  splitBubbles,
   stripNoReply,
   translatorPart,
   usageOf,
@@ -204,11 +203,9 @@ async function finalizeTurn(args: {
   let delivered: Delivery = classifyTextDelivery(finalText, interim, parsed.sentinel);
 
   if (delivered === 'text') {
-    // Each blank-line paragraph is its own bubble; each send is a separate memoized step,
-    // so a replay resumes mid-sequence without re-sending delivered bubbles.
-    for (const bubble of splitBubbles(finalText)) {
-      await sendStep(threadId, bubble);
-    }
+    // One message per reply (2026-07-05: bubble-splitting on blank lines was too noisy —
+    // a multi-paragraph reply arrives as a single text).
+    await sendStep(threadId, finalText);
   } else if (delivered === 'fallback_text') {
     // Abnormal turn end: the turn narrated work but never wrote the reply (step limit,
     // length cap, or an error finish — a deliberate turn always ends on reply text or the

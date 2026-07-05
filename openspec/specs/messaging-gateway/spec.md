@@ -4,13 +4,13 @@
 TBD - created by archiving change bootstrap-sunny. Update Purpose after archive.
 ## Requirements
 ### Requirement: Text-as-reply delivery model
-Sunny's reply SHALL be the model's FINAL text: the text a conversational turn ends on (after its last tool call) SHALL be delivered to the user as iMessage bubbles, split on blank lines. Interim text written between tool calls (working notes) SHALL NOT be delivered raw; it is source material for relayed progress updates. The model SHALL choose silence by making the `<no-reply/>` sentinel its entire reply — the sentinel is parsed out before delivery, and a reply that is only the sentinel delivers nothing. Real content alongside a stray sentinel SHALL be delivered with the token stripped (content is never swallowed). The model's private reasoning SHALL NOT be delivered. Outbound images SHALL be sent via an explicit `send_image` tool (path or URL, never raw bytes).
+Sunny's reply SHALL be the model's FINAL text: the text a conversational turn ends on (after its last tool call) SHALL be delivered to the user as one iMessage, blank lines preserved (bubble-splitting was removed 2026-07-05 as too noisy). Interim text written between tool calls (working notes) SHALL NOT be delivered raw; it is source material for relayed progress updates. The model SHALL choose silence by making the `<no-reply/>` sentinel its entire reply — the sentinel is parsed out before delivery, and a reply that is only the sentinel delivers nothing. Real content alongside a stray sentinel SHALL be delivered with the token stripped (content is never swallowed). The model's private reasoning SHALL NOT be delivered. Outbound images SHALL be sent via an explicit `send_image` tool (path or URL, never raw bytes).
 
 Rationale (PR #30/#31, 2026-07): a tool-mediated voice (`send_message`-only) fights the trained prior that final text answers the user, and in a rolling-window chat it is self-poisoning via history imitation (clean-history delivery ~100% vs ~28% under poisoned precedent). Text-as-reply makes the trained prior the correct behavior, so persisted history is self-reinforcing; measured 100% delivery across the migration gates, including all poisoned-history probes.
 
 #### Scenario: The final text is the reply
 - **WHEN** a turn ends on plain text after completing its tool work
-- **THEN** that text is delivered to the user as one or more bubbles (blank-line separated)
+- **THEN** that text is delivered to the user as one message, formatting preserved
 - **AND** interim narration written between tool calls is not delivered raw
 
 #### Scenario: Silence by sentinel
@@ -43,7 +43,7 @@ A deliberate turn always ends on reply text or the silence sentinel; if a turn i
 
 #### Scenario: Sends are not duplicated on resume
 - **WHEN** a durable run resumes after interruption
-- **THEN** a bubble already delivered before the interruption is not delivered again
+- **THEN** a message already delivered before the interruption is not delivered again
 
 ### Requirement: Turn-grained transcript with retained working context
 Sunny SHALL persist its conversation transcript as one stored record per turn, using the AI SDK `UIMessage` as the unit of record (one row = one `UIMessage` = one turn). Each stored record SHALL preserve the turn's structured content — text/scratchpad parts and tool calls with their results — sufficient to reconstruct the model prompt without fabricating tool calls, and SHALL also retain a flattened text projection for keyword recall. Sunny SHALL retain the assistant turn's private working-context (scratchpad) text across turns so a follow-up message can draw on reasoning the agent chose not to deliver. The model prompt SHALL be derived from stored `UIMessage` records (converted to model messages at request time); native provider reasoning blocks are NOT required to be stored.
