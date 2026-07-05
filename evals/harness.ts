@@ -8,6 +8,7 @@ import {
   extractFinalText,
   extractInterimText,
   extractTranslatorUpdates,
+  stripNoReply,
 } from '../src/agent/turn.js';
 import type { UIMessage } from 'ai';
 import { initMemory, memoryPaths } from '../src/memory/index.js';
@@ -296,11 +297,14 @@ async function buildTrajectory(
         .map((p) => p.text ?? '')
         .join('\n')
         .trim();
-  const finalText = textMode ? extractFinalText(uiParts) : gateway.texts().join('\n');
+  const parsedFinal = textMode
+    ? stripNoReply(extractFinalText(uiParts))
+    : { text: gateway.texts().join('\n'), sentinel: false };
+  const finalText = parsedFinal.text;
   const translatorUpdates = extractTranslatorUpdates(uiParts).map((u) => u.text);
 
   const sends = gateway.texts();
-  const staySilent = toolCalls.some((tc) => tc.name === 'stay_silent');
+  const staySilent = parsedFinal.sentinel || toolCalls.some((tc) => tc.name === 'stay_silent');
   const delivered =
     payload.metadata?.delivered ??
     (textMode

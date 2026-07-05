@@ -29,6 +29,7 @@ import {
   extractSends,
   sendMessagePart,
   splitBubbles,
+  stripNoReply,
   translatorPart,
   usageOf,
   type Delivery,
@@ -144,9 +145,6 @@ export async function runConversation(input: ConversationInput): Promise<void> {
             send: (text) => sendStep(threadId, text),
           }
         : undefined,
-    // stay_silent is structurally TERMINAL in text mode: the turn ends at the call, so the
-    // trained end-with-text prior can never append a delivered "(silent)" placeholder step.
-    stopOnTools: setup.deliveryMode === 'text' ? ['stay_silent'] : undefined,
   });
 
   await finalizeTurn({
@@ -214,10 +212,13 @@ async function finalizeTurn(args: {
   let projection: string;
 
   if (setup.deliveryMode === 'text') {
-    const staySilent = calledStaySilent(parts);
     const interim = extractInterimText(parts);
-    let finalText = extractFinalText(parts);
-    delivered = classifyTextDelivery(finalText, interim, staySilent);
+    // Silence is the <no-reply/> sentinel reply, parsed out here; the raw text (sentinel
+    // included) still persists in the row, so history carries the exact silence precedent.
+    // calledStaySilent covers rows replayed from the tool-mode era.
+    const parsed = stripNoReply(extractFinalText(parts));
+    let finalText = parsed.text;
+    delivered = classifyTextDelivery(finalText, interim, parsed.sentinel || calledStaySilent(parts));
 
     if (delivered === 'text') {
       // Each blank-line paragraph is its own bubble; each send is a separate memoized step,
@@ -315,8 +316,10 @@ function buildTools(ctx: {
     ctx;
   const scheduleSpecs = scheduleToolSpecs(timezone);
   return {
-    // The mode's voice tooling: tool mode speaks via send_message; text mode's reply IS the
-    // final text (delivered in finalizeTurn), so it gets send_image for outbound media instead.
+    // The mode's voice tooling: tool mode speaks via send_message and chooses silence via
+    // stay_silent; text mode's reply IS the final text (delivered in finalizeTurn), silence
+    // is the <no-reply/> sentinel reply (no tool — silence-by-text goes WITH the trained
+    // end-with-text prior; see NO_REPLY_SENTINEL), and send_image handles outbound media.
     ...(deliveryMode === 'text'
       ? {
           send_image: tool({
@@ -329,20 +332,12 @@ function buildTools(ctx: {
             ...SEND_MESSAGE_SPEC,
             execute: ({ text, image }) => sendStep(threadId, text, image),
           }),
+          stay_silent: tool({
+            ...STAY_SILENT_SPEC,
+            // No side effect — the choice of silence is read back from the turn's parts.
+            execute: async () => 'ok: staying silent',
+          }),
         }),
-    stay_silent: tool({
-      ...STAY_SILENT_SPEC,
-      // No side effect — the choice of silence is read back from the turn's parts. In text
-      // mode the RESULT tells the model to stop: the trained "end the turn with text" prior
-      // otherwise appends a "(silent)"-style placeholder, which final-text-wins classification
-      // would deliver (observed 6/6 in the 2026-07-04 text-cell smoke). Recency-positioned
-      // reinforcement — the one intervention class PR #30 found effective.
-      execute: async () =>
-        deliveryMode === 'text'
-          ? 'ok: staying silent — end your turn NOW with no further text. Anything you write ' +
-            'after this would be delivered to the user as a message.'
-          : 'ok: staying silent',
-    }),
     start_job: tool({
       description:
         'Promote a long-running or asynchronous task to a durable background job. Use this ' +

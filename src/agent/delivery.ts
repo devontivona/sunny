@@ -165,13 +165,35 @@ function lastToolIndex(parts: UIMessage['parts']): number {
 }
 
 /**
- * Classify a TEXT-mode turn from its extracted signals. Final text wins FIRST — by
- * design: the stay_silent-spam pathology (PR #30 transcripts) showed the model can
- * write a real reply and ALSO spray stray `stay_silent` calls; when final text
- * exists it is the reply and must be delivered, never swallowed as silence.
+ * Text-mode silence sentinel: the model chooses silence by making this token its ENTIRE
+ * reply. Silence-by-sentinel goes WITH the trained "end the turn with text" prior instead
+ * of fighting it — the 2026-07-04 grid showed the model inventing its own sentinels
+ * ("(silent)", "(no reply needed)") 9/9 when told to end with nothing, and the translator's
+ * NO_UPDATE sentinel has been reliable on the same job. A weird verbatim token (not a
+ * natural-language sentence) so it never drifts into paraphrase the parser would miss.
+ */
+export const NO_REPLY_SENTINEL = '<no-reply/>';
+
+/**
+ * Parse the sentinel out of a text-mode final. `sentinel` reports whether it appeared;
+ * `text` is what remains. A reply that is ONLY the sentinel parses to silence; real
+ * content alongside a (stray) sentinel is delivered with the token stripped — nothing
+ * genuinely written for the user is ever swallowed.
+ */
+export function stripNoReply(finalText: string): { text: string; sentinel: boolean } {
+  if (!finalText.includes(NO_REPLY_SENTINEL)) return { text: finalText, sentinel: false };
+  return { text: finalText.split(NO_REPLY_SENTINEL).join('').trim(), sentinel: true };
+}
+
+/**
+ * Classify a TEXT-mode turn from its extracted signals. Callers pass the final text
+ * AFTER `stripNoReply` (a sentinel-only reply arrives here as empty + silent=true).
+ * Final text wins FIRST — by design: the stay_silent-spam pathology (PR #30
+ * transcripts) showed the model can write a real reply and ALSO signal silence; when
+ * final text exists it is the reply and must be delivered, never swallowed.
  *
  * - final text present → `text` (delivered directly as bubbles)
- * - no final, stay_silent called → `silence` (deliberate)
+ * - no final, silence signaled (sentinel; or a legacy row's stay_silent call) → `silence`
  * - no final, interim narration only → `fallback_text` (the empty-final miss; the
  *   recovery backstop composes the reply from the narration)
  * - nothing at all → `silence`

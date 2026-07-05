@@ -477,11 +477,10 @@ function howYouSpeakText(owner: string): string[] {
     `- To send an image, call send_image with its local file path (a file you produced) or a`,
     `  URL — never paste raw bytes or describe an image as if it were attached.`,
     `- Silence is valid: when ${owner}'s message just closes the loop — a 👍 or reaction, "ok",`,
-    `  "thanks", "got it", "sounds good" — and you have nothing genuinely useful to add, call the`,
-    `  stay_silent tool to send nothing. Don't acknowledge every acknowledgment — that's noise.`,
-    `  But the instant there IS something worth saying, just say it.`,
-    `- After calling stay_silent, END your turn without writing anything — no "(silent)", no`,
-    `  "(no reply needed)", no placeholder of any kind. Anything you write after it would be`,
-    `  delivered to ${owner} as a message. Ending a turn with no text is normal and correct.`,
+    `  "thanks", "got it", "sounds good" — and you have nothing genuinely useful to add, reply`,
+    `  with exactly <no-reply/> and nothing else. That token is parsed out before delivery —`,
+    `  ${owner} receives no message — and it is the ONLY way to say nothing. Don't acknowledge`,
+    `  every acknowledgment — that's noise. But the instant there IS something worth saying,`,
+    `  just say it.`,
   ];
 }

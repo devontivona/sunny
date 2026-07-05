@@ -430,14 +430,14 @@ describe('runConversation (workflow integration — real Local World)', () => {
     expect(await ctx.store.hasUnansweredInbound(event.threadId)).toBe(false);
   });
 
-  it('text mode: stay_silent means nothing is sent (delivered=silence)', async () => {
+  it('text mode: a <no-reply/> sentinel reply means nothing is sent (delivered=silence)', async () => {
+    // Silence-by-sentinel (2026-07-05 redesign): the model chooses silence by making the
+    // sentinel its ENTIRE reply — WITH the trained end-with-text prior, not against it.
+    // The raw sentinel still persists in the row (self-reinforcing precedent).
     ctx = await setupTestRuntime({ deliveryMode: 'text' });
     const event = makeChannelEvent({ text: '👍' });
     await ctx.store.appendInbound(event);
-    setTurnModel([
-      { type: 'tool-call', toolName: 'stay_silent', input: '{}' },
-      { type: 'text', text: '' },
-    ]);
+    setTurnModel([{ type: 'text', text: '<no-reply/>' }]);
 
     const run = await start(runConversation, [{ threadId: event.threadId }]);
     await run.returnValue;
@@ -445,36 +445,31 @@ describe('runConversation (workflow integration — real Local World)', () => {
 
     expect(ctx.gateway.sendCount).toBe(0);
     const window = await ctx.store.recentWindow(event.threadId);
-    const meta = (window.find((m) => m.role === 'assistant')!.payload as UIMessage)
-      .metadata as { delivered?: string };
-    expect(meta.delivered).toBe('silence');
+    const payload = window.find((m) => m.role === 'assistant')!.payload as UIMessage;
+    expect((payload.metadata as { delivered?: string }).delivered).toBe('silence');
+    // The sentinel persists verbatim in the row's text part.
+    expect(
+      payload.parts.some((p) => p.type === 'text' && (p as { text?: string }).text === '<no-reply/>'),
+    ).toBe(true);
   });
 
-  it('text mode: stay_silent is structurally TERMINAL — the placeholder step is never generated', async () => {
-    // The "(silent)" placeholder pathology (2026-07-04 smoke, 9/9): after stay_silent the
-    // trained end-with-text prior appends a stage-direction final, which final-text-wins
-    // classification would deliver. Prompt + tool-result guidance measured 0/9, so the loop
-    // now STOPS at the stay_silent call — the follow-up step (scripted here as a would-be
-    // placeholder) must never run. classifyTextDelivery keeps final-text-wins as
-    // defense-in-depth for persisted rows (delivery.unit.test.ts).
+  it('text mode: real content alongside a stray sentinel is delivered with the token stripped', async () => {
+    // The safety property the terminal-stay_silent design lacked: a genuine reply is
+    // never swallowed just because a silence signal also appeared.
     ctx = await setupTestRuntime({ deliveryMode: 'text' });
-    const event = makeChannelEvent({ text: '👍' });
+    const event = makeChannelEvent({ text: 'so what should I do?' });
     await ctx.store.appendInbound(event);
-    setTurnModel([
-      { type: 'tool-call', toolName: 'stay_silent', input: '{}' },
-      { type: 'text', text: '(silent)' },
-    ]);
+    setTurnModel([{ type: 'text', text: '<no-reply/> actually — take the earlier flight.' }]);
 
     const run = await start(runConversation, [{ threadId: event.threadId }]);
     await run.returnValue;
     expect(await run.status).toBe('completed');
 
-    expect(ctx.gateway.sendCount).toBe(0); // nothing delivered — no placeholder bubble
+    expect(ctx.gateway.texts()).toEqual(['actually — take the earlier flight.']);
     const window = await ctx.store.recentWindow(event.threadId);
-    const payload = window.find((m) => m.role === 'assistant')!.payload as UIMessage;
-    expect((payload.metadata as { delivered?: string }).delivered).toBe('silence');
-    // The would-be placeholder step never ran: no text part exists at all.
-    expect(payload.parts.filter((p) => p.type === 'text')).toHaveLength(0);
+    const meta = (window.find((m) => m.role === 'assistant')!.payload as UIMessage)
+      .metadata as { delivered?: string };
+    expect(meta.delivered).toBe('text');
   });
 
   it('text mode: empty final with interim narration takes the recovery backstop (recovered=true)', async () => {

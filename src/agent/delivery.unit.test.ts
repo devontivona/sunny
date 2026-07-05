@@ -8,6 +8,7 @@ import {
   extractInterimText,
   extractTranslatorUpdates,
   splitBubbles,
+  stripNoReply,
   translatorPart,
 } from './delivery.js';
 import { makeAssistantTurnPayload } from '../../tests/factories.js';
@@ -36,29 +37,39 @@ describe('text-as-reply extraction (text delivery mode)', () => {
     expect(extractInterimText(parts)).toBe('working');
   });
 
-  it('classifies: final text → text; stay_silent → silence; interim only → fallback; nothing → silence', () => {
+  it('classifies: final text → text; silence signaled → silence; interim only → fallback; nothing → silence', () => {
     expect(classifyTextDelivery('answer', '', false)).toBe('text');
     expect(classifyTextDelivery('', '', true)).toBe('silence');
     expect(classifyTextDelivery('', 'notes only', false)).toBe('fallback_text');
     expect(classifyTextDelivery('', '', false)).toBe('silence');
   });
 
-  it('final text WINS over a stray stay_silent call (the stay_silent-spam pathology)', () => {
-    // PR #30 transcripts: the model can write a real reply and also spray stay_silent.
-    // The reply must be delivered — never swallowed as silence.
+  it('stripNoReply: a sentinel-only reply is silence; nothing else is touched', () => {
+    expect(stripNoReply('<no-reply/>')).toEqual({ text: '', sentinel: true });
+    expect(stripNoReply('  <no-reply/>  ')).toEqual({ text: '', sentinel: true });
+    expect(stripNoReply('here is your answer')).toEqual({
+      text: 'here is your answer',
+      sentinel: false,
+    });
+  });
+
+  it('stripNoReply: real content alongside a stray sentinel is DELIVERED, token stripped', () => {
+    // Nothing genuinely written for the user is ever swallowed — the safety property
+    // the terminal-stay_silent design lacked.
+    const parsed = stripNoReply('<no-reply/> actually — take the earlier flight.');
+    expect(parsed).toEqual({ text: 'actually — take the earlier flight.', sentinel: true });
+    expect(classifyTextDelivery(parsed.text, '', parsed.sentinel)).toBe('text');
+  });
+
+  it('final text WINS over a legacy stay_silent tool part (the spam pathology, replayed rows)', () => {
+    // Tool-mode-era rows can carry stay_silent parts; a real reply after one must
+    // still classify as delivered, never swallowed as silence.
     const parts = [tool('stay_silent', 's1'), text('actually, here is your answer')];
     const final = extractFinalText(parts);
     expect(final).toBe('actually, here is your answer');
     expect(classifyTextDelivery(final, extractInterimText(parts), calledStaySilent(parts))).toBe(
       'text',
     );
-  });
-
-  it('text before a trailing stay_silent is interim → deliberate silence stands', () => {
-    const parts = [text('nothing to add here'), tool('stay_silent', 's1')];
-    expect(
-      classifyTextDelivery(extractFinalText(parts), extractInterimText(parts), true),
-    ).toBe('silence');
   });
 
   it('round-trips translator updates through data-translator parts', () => {

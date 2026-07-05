@@ -95,13 +95,15 @@ describe('buildSystemPrompt', () => {
     // Outbound images go through send_image; send_message does not exist in this mode.
     expect(p).toContain('send_image');
     expect(p).not.toContain('send_message');
-    // The stay_silent ack framing is kept verbatim (held 5/6 in the composer arm).
-    expect(p).toContain("Don't acknowledge every acknowledgment — that's noise.");
-    expect(p).toContain('call the');
-    expect(p).toContain('stay_silent tool to send nothing');
-    // The placeholder-final guard (2026-07-04 smoke: "(silent)"-style finals delivered 6/6).
-    expect(p).toContain('END your turn without writing anything');
-    expect(p).toContain('no placeholder of any kind');
+    // Silence is the <no-reply/> sentinel reply (no stay_silent tool in this mode —
+    // silence-by-text goes WITH the end-with-text prior; 2026-07-05 redesign). The ack
+    // framing is kept (held 5/6 in the composer arm).
+    expect(p.replace(/\n\s+/g, ' ')).toContain(
+      "Don't acknowledge every acknowledgment — that's noise.",
+    );
+    expect(p).toContain('exactly <no-reply/> and nothing else');
+    expect(p).toContain('the ONLY way to say nothing');
+    expect(p).not.toContain('stay_silent');
   });
 
   it('tool mode keeps the pre-migration copy anchors (byte-stability of the production prompt)', () => {

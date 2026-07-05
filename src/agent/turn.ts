@@ -36,6 +36,7 @@ export {
   sendMessagePart,
   splitBubbles,
   steerMessageText,
+  stripNoReply,
   translatorPart,
   trimTrailingNonUser,
   usageOf,
