@@ -344,7 +344,7 @@ export class DashboardData {
   }
 
   // --- Durable jobs (WDK runs) ---------------------------------------------
-  // Observe-only view of the Workflow DevKit world: background jobs (start_job →
+  // Observe-only view of the Workflow DevKit world: background runs (scheduled jobs →
   // runJob) and scheduled runs (runScheduledJob) are durable workflow runs recorded
   // in the `workflow.*` schema. The dashboard surfaces them so a job that hangs or
   // fails is visible (previously there was no signal anywhere). Read-only; the WDK

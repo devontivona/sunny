@@ -81,26 +81,22 @@ export function toolNotCalled(name: string): Grader {
   return (t) => pass(`tool-not-called:${name}`, countTool(t, name) === 0);
 }
 
-/** The model elected to start a durable job (recorded by the fake start). */
-export const startedJob: Grader = (t) =>
-  pass('started-job', t.startJobs.length > 0, `startJobs=${t.startJobs.length}`);
-
 /**
- * A long task was BACKGROUNDED — promoted to a durable job OR delegated to a subagent
- * (both durable, both report back to the thread) — and NOT ground through inline. The
- * policy this grades is thread responsiveness: a turn that grinds through research with
- * dozens of tool calls blocks the chat for minutes (observed: 23 curl steps, 5+ min, in
- * the 2026-07-04 text cell) even if it eventually answers well. The bash allowance
+ * A long task was BACKGROUNDED — delegated to a subagent (durable; reports back to the
+ * thread, where a turn mediates it) — and NOT ground through inline. The policy this
+ * grades is thread responsiveness: a turn that grinds through research with dozens of
+ * tool calls blocks the chat for minutes (observed: 23 curl steps, 5+ min, in the
+ * 2026-07-04 text cell) even if it eventually answers well. Since unify-background-work,
+ * delegation is the ONLY backgrounding primitive (start_job retired). The bash allowance
  * covers a quick probe before deciding; the grind threshold is deliberately loose.
  */
 export const backgroundedLongTask: Grader = (t) => {
   const delegated = t.toolCalls.some((c) => c.name === 'delegate_task');
-  const started = t.startJobs.length > 0;
   const bashCalls = t.toolCalls.filter((c) => c.name === 'bash').length;
   return pass(
     'backgrounded-long-task',
-    (started || delegated) && bashCalls < 5,
-    `start_job=${t.startJobs.length} delegate_task=${delegated} bash=${bashCalls}`,
+    delegated && bashCalls < 5,
+    `delegate_task=${delegated} bash=${bashCalls}`,
   );
 };
 

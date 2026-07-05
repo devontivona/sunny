@@ -7,7 +7,6 @@ import { z } from 'zod';
 import { BASH_TOOL_SPECS } from '../src/agent/tools/bashSpecs.js';
 import { MEMORY_TOOL_SPECS } from '../src/agent/tools/memorySpecs.js';
 import { SEND_IMAGE_SPEC } from '../src/agent/tools/sendImageSpec.js';
-import { START_JOB_SPEC } from '../src/agent/tools/startJobSpec.js';
 import { MESSAGE_SPEC } from '../src/agent/tools/messageSpec.js';
 import { RUNS_TOOL_SPECS, scheduleToolSpecs } from '../src/agent/tools/scheduleSpecs.js';
 import { DELEGATE_TASK_SPEC, type ChildModelName } from '../src/agent/tools/delegationSpecs.js';
@@ -282,10 +281,6 @@ function buildTools(ctx: {
     send_image: tool({
       ...SEND_IMAGE_SPEC,
       execute: ({ pathOrUrl, caption }) => sendStep(threadId, caption ?? '', pathOrUrl),
-    }),
-    start_job: tool({
-      ...START_JOB_SPEC,
-      execute: ({ task }) => startJobStep(threadId, task, ownerName, subjectName),
     }),
     memory_write: tool({
       ...MEMORY_TOOL_SPECS.memory_write,
@@ -617,28 +612,6 @@ async function markAnswered(threadId: string, messageIds: string[]): Promise<voi
   await store.markAnsweredForThread(threadId, messageIds);
 }
 
-async function startJobStep(
-  threadId: string,
-  task: string,
-  ownerName: string,
-  subjectName?: string,
-): Promise<string> {
-  'use step';
-
-  const { getRuntime } = await import('../src/runtime.js');
-  const rt = (await getRuntime()) as { stubJobs?: boolean };
-  // Eval/test runtimes set `stubJobs`: the graded fact is that the model CHOSE
-  // start_job — actually running the job would do real research with the real
-  // model in the eval world (and its zombie run blocks PGlite teardown). Same
-  // pattern as delegation, which is inert when the runtime omits `spawnChild`.
-  if (rt.stubJobs) {
-    return 'Started durable background job (stubbed); it will message the user on completion.';
-  }
-  const { start } = await import('workflow/api');
-  const { runJob } = await import('./job.js');
-  const run = await start(runJob, [{ threadId, task, ownerName, subjectName }]);
-  return `Started durable background job ${run.runId}; it will message the user on completion.`;
-}
 
 /**
  * Delegate a subtask to an isolated child (durable-subagents D-DS2): hand the brief to the

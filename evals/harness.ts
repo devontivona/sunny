@@ -91,9 +91,9 @@ export async function runEvalCase(
   const store = new ConversationStore(tdb.db, config.recentWindowSize);
   const gateway = new FakeGateway();
   // Inject the runtime the workflow's `'use step'` units read via `getRuntime()` (same seam the
-  // production memo + the workflow test harness use). `stubJobs`: a start_job choice is graded,
-  // but the job itself must not run (real model + a zombie run that blocks teardown).
-  g[RUNTIME_KEY] = Promise.resolve({ config, gateway, store, db: tdb.db, stubJobs: true });
+  // production memo + the workflow test harness use). Delegation stays inert (no `spawnChild`
+  // on this runtime), so a graded delegate_task choice never actually spawns a child.
+  g[RUNTIME_KEY] = Promise.resolve({ config, gateway, store, db: tdb.db });
 
   try {
     // Seed prior conversation through the real store (so format drift is caught).
@@ -181,7 +181,6 @@ export async function runEvalCase(
       gateway: new FakeGateway(),
       store,
       db: tdb.db,
-      stubJobs: true,
     });
     // Best-effort: a leaked background run holding the PGlite connection can make
     // close() hang; an abandoned world is cheaper than a stuck scorecard. The
@@ -292,9 +291,6 @@ async function buildTrajectory(
     sends,
     delivered,
     recovered: payload.metadata?.recovered === true,
-    // The model's `start_job` choices, from the persisted turn parts (the durable `startJobStep`
-    // launches the real job; graders only need that the model *chose* it).
-    startJobs: toolCalls.filter((tc) => tc.name === 'start_job'),
     finalText,
     scratch,
     translatorUpdates,

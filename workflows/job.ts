@@ -8,13 +8,14 @@ import { bashStep, deliver, fileReadStep, finalAssistantText, streamAgent } from
  * D-DS11/D-DS14). Runs the shared `streamAgent` loop, so each LLM call AND each tool call is a
  * durable step — the job survives crashes/reboots and resumes from its last completed step. On
  * completion it reports to its configured `output_target` (D-DS1) via the shared `emitStep` — the
- * same outward primitive `send_message` uses; the old bespoke `deliver` is gone. Promoted from a
- * conversational turn via `start_job`.
+ * same outward primitive every profile uses; the old bespoke `deliver` is gone.
  *
  * The job has the real host tools (`bash`, `file_read`) so a backgrounded task can actually DO
  * work — build files, run CLIs (devbox, curl), read a skill's SKILL.md and follow it. No
  * `send_message`/`schedule`/`start_job` (no mid-run chatter, no nested jobs, no self-scheduling):
  * the agent's final text IS the deliverable, emitted terminally (`recoverOnMiss: 'rawtext'`).
+ * Since unify-background-work (2026-07-05) this engine serves SCHEDULED runs only —
+ * conversation-promoted work runs as a delegated subagent (mediated report), never a job.
  */
 /** Default model for a background job; overridable per run (D-DS9, configurable model). */
 const DEFAULT_JOB_MODEL = 'claude-opus-4-8';

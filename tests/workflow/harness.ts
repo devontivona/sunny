@@ -42,7 +42,7 @@ export interface TestRuntimeCtx {
 
 /** Stand up a PGlite-backed test runtime and inject it for the workflow's steps.
  *  `runtimeExtras` merges extra seam fields onto the injected runtime — e.g.
- *  `translateOverride` (the translator test seam) or `stubJobs`. */
+ *  `translateOverride` (the translator test seam) or `recoverOverride`. */
 export async function setupTestRuntime(
   configOverrides: Partial<SunnyConfig> = {},
   runtimeExtras: Record<string, unknown> = {},

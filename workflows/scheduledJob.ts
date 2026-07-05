@@ -11,7 +11,7 @@ import { deliver, finalAssistantText, streamAgent } from './runShell.js';
  * (D-DE1/2): each LLM call and tool call is a durable workflow step, so a crash mid-run resumes
  * from the last completed step instead of re-running the whole agent.
  *
- * MEMORY tools only — no send_message, no schedule tools, no start_job — which enforces the
+ * MEMORY tools only — no messaging, schedule, or delegation tools — which enforces the
  * anti-recursion guard (D-SC4: a scheduled run cannot create schedules) and least privilege by
  * construction. Tool `execute` is step-wrapped so a replay never re-applies a non-idempotent
  * `memory_write` (add appends). The outcome is always recorded (`recordRun`); the reply is
