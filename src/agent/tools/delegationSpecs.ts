@@ -4,7 +4,7 @@ import { z } from 'zod';
  * The `delegate_task` / `message_subagent` tool DEFINITIONS (description + schema), separated
  * from execution so the conversational workflow binds the prompt-shaping text + schema while the
  * side-effecting `execute` (a memoized `'use step'` reaching the in-process supervisor) is wired
- * per-tier. Node-free (zod only), matching `sendMessageSpec`/`bashSpecs`. The descriptions encode
+ * per-tier. Node-free (zod only), matching `sendImageSpec`/`bashSpecs`. The descriptions encode
  * the delegation skill's when-to-delegate guidance (durable-subagents §1/§2/§5) so the model
  * delegates well without re-reading the skill each turn.
  */

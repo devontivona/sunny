@@ -139,15 +139,52 @@ function lastToolIndex(parts: UIMessage['parts']): number {
  */
 export const NO_REPLY_SENTINEL = '<no-reply/>';
 
+/** The delegated child's silence sentinel: a final text of exactly this delivers nothing
+ *  to the parent ("your orchestrator needs nothing from this"). Distinct from
+ *  NO_REPLY_SENTINEL so telemetry and prompt language stay unambiguous. */
+export const NO_REPORT_SENTINEL = '<no-report/>';
+
 /**
- * Parse the sentinel out of a text-mode final. `sentinel` reports whether it appeared;
- * `text` is what remains. A reply that is ONLY the sentinel parses to silence; real
+ * Parse a silence sentinel out of a final text. `sentinel` reports whether it appeared;
+ * `text` is what remains. A final that is ONLY the sentinel parses to silence; real
  * content alongside a (stray) sentinel is delivered with the token stripped — nothing
- * genuinely written for the user is ever swallowed.
+ * genuinely written is ever swallowed.
  */
+export function stripSentinel(
+  finalText: string,
+  token: string,
+): { text: string; sentinel: boolean } {
+  if (!finalText.includes(token)) return { text: finalText, sentinel: false };
+  return { text: finalText.split(token).join('').trim(), sentinel: true };
+}
+
+/** The conversation turn's silence parse (see NO_REPLY_SENTINEL). */
 export function stripNoReply(finalText: string): { text: string; sentinel: boolean } {
-  if (!finalText.includes(NO_REPLY_SENTINEL)) return { text: finalText, sentinel: false };
-  return { text: finalText.split(NO_REPLY_SENTINEL).join('').trim(), sentinel: true };
+  return stripSentinel(finalText, NO_REPLY_SENTINEL);
+}
+
+/** The delegated child's silence parse (see NO_REPORT_SENTINEL). */
+export function stripNoReport(finalText: string): { text: string; sentinel: boolean } {
+  return stripSentinel(finalText, NO_REPORT_SENTINEL);
+}
+
+/**
+ * Extract complete `<report>…</report>` blocks from a child's text (subagent
+ * text-unification): mid-task progress a child deliberately writes for its orchestrator.
+ * Returns each block's trimmed content plus the text with those blocks removed. Only
+ * COMPLETE pairs count — an unterminated `<report>` stays in the text as-is, so a
+ * half-written block is never partially delivered.
+ */
+export function extractReportBlocks(text: string): { reports: string[]; rest: string } {
+  const reports: string[] = [];
+  const rest = text
+    .replace(/<report>([\s\S]*?)<\/report>/g, (_, inner: string) => {
+      const trimmed = inner.trim();
+      if (trimmed) reports.push(trimmed);
+      return '';
+    })
+    .trim();
+  return { reports, rest };
 }
 
 /**

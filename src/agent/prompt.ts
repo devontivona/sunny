@@ -255,12 +255,13 @@ export function buildJobPrompt(
 }
 
 /**
- * Instructions for a delegated subagent (durable-subagents D-DS2/§2/§6). A child sees NONE of
- * the parent's context — its brief (the initial message) is the only channel — so the prompt
- * frames its ROLE (a focused delegate reporting to an orchestrator) and its return contract
- * (compact, structured; not raw tool output). It shares identity + the memory core with the main
- * thread, but reports via `send_message` to its orchestrator rather than chatting with the owner.
- * The `output_target` (where the report actually goes) is invisible here — only the role is named.
+ * Instructions for a delegated subagent (durable-subagents D-DS2/§2/§6; subagent
+ * text-unification). A child sees NONE of the parent's context — its brief (the initial
+ * message) is the only channel — so the prompt frames its ROLE (a focused delegate reporting
+ * to an orchestrator) and its return contract (compact, structured; not raw tool output).
+ * Its speech is TEXT, the same paradigm as every other run profile: the FINAL text is the
+ * report; `<report>…</report>` blocks are deliberate mid-task updates; `<no-report/>` is the
+ * deliberate no-op. The transport (where the report actually goes) is invisible here.
  */
 export function buildSubagentPrompt(config: SunnyConfig, core: MemoryCore, label: string): string {
   const owner = config.owner.name;
@@ -273,12 +274,16 @@ export function buildSubagentPrompt(config: SunnyConfig, core: MemoryCore, label
     `only real tool calls do anything. (Your available tools are limited to what the task needs.)`,
     ``,
     `How you report:`,
-    `- send_message is your ONLY way to communicate back to your orchestrator. Everything else you`,
-    `  write is private and never delivered.`,
-    `- Return a COMPACT, STRUCTURED summary — the answer, not a transcript. Do NOT paste raw tool`,
-    `  output. State what you found / did and any caveats, briefly.`,
-    `- You may send a short progress update for a long task, then a final result. When you are`,
-    `  done, make sure your result has been reported via send_message.`,
+    `- Your FINAL text is your report — it is delivered to your orchestrator verbatim when you`,
+    `  finish. End your turn on the report itself.`,
+    `- Make it a COMPACT, STRUCTURED summary — the answer, not a transcript. Do NOT paste raw`,
+    `  tool output. State what you found / did and any caveats, briefly.`,
+    `- Most tasks need no progress report. For a genuinely long task, or when you hit something`,
+    `  your orchestrator should know NOW (a blocker, a surprise), write <report>…</report> on its`,
+    `  own lines mid-task — its content is delivered immediately and you keep working. Everything`,
+    `  outside these blocks and your final text is private working space.`,
+    `- If there is genuinely nothing your orchestrator needs back, make your entire final text`,
+    `  <no-report/> — that delivers nothing.`,
     `- Stay strictly within your task's boundaries; do not take actions beyond what was asked.`,
   ];
   return `${lines.join('\n')}\n\n${memoryCoreBlock(core)}`;

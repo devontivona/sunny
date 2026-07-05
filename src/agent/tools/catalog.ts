@@ -2,7 +2,7 @@ import { asSchema } from '@ai-sdk/provider-utils';
 import type { Db } from '../../db/client.js';
 import type { ConversationStore } from '../../gateway/store.js';
 import type { SunnyConfig } from '../../config/index.js';
-import { SEND_IMAGE_SPEC } from './sendMessageSpec.js';
+import { SEND_IMAGE_SPEC } from './sendImageSpec.js';
 import { START_JOB_SPEC } from './startJobSpec.js';
 import { createScheduleTools } from './schedule.js';
 import { RUNS_TOOL_SPECS } from './scheduleSpecs.js';

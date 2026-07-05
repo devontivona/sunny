@@ -6,9 +6,11 @@ import {
   classifyTextDelivery,
   extractFinalText,
   extractInterimText,
+  extractReportBlocks,
   extractTranslatorUpdates,
   splitBubbles,
   stripNoReply,
+  stripNoReport,
   translatorPart,
 } from './delivery.js';
 import { makeAssistantTurnPayload } from '../../tests/factories.js';
@@ -78,6 +80,40 @@ describe('text-as-reply extraction (text delivery mode)', () => {
       { text: 'on it — checking flights', step: 1 },
       { text: 'narrowing options', step: 4 },
     ]);
+  });
+
+  it('stripNoReport: the child sentinel mirrors stripNoReply mechanics', () => {
+    expect(stripNoReport('<no-report/>')).toEqual({ text: '', sentinel: true });
+    expect(stripNoReport('<no-report/> but actually: found it')).toEqual({
+      text: 'but actually: found it',
+      sentinel: true,
+    });
+    expect(stripNoReport('normal report')).toEqual({ text: 'normal report', sentinel: false });
+    // The two sentinels are distinct: one never triggers the other.
+    expect(stripNoReport('<no-reply/>')).toEqual({ text: '<no-reply/>', sentinel: false });
+  });
+
+  it('extractReportBlocks: zero, one, and many complete blocks', () => {
+    expect(extractReportBlocks('no blocks here')).toEqual({ reports: [], rest: 'no blocks here' });
+    expect(extractReportBlocks('pre <report>update one</report> post')).toEqual({
+      reports: ['update one'],
+      rest: 'pre  post',
+    });
+    const many = extractReportBlocks(
+      '<report>first</report>\nworking...\n<report>second\nspans lines</report>\ndone',
+    );
+    expect(many.reports).toEqual(['first', 'second\nspans lines']);
+    expect(many.rest).toBe('working...\n\ndone');
+  });
+
+  it('extractReportBlocks: an unterminated block is left as plain text, never partially delivered', () => {
+    const out = extractReportBlocks('working\n<report>half-written and cut off');
+    expect(out.reports).toEqual([]);
+    expect(out.rest).toContain('<report>half-written and cut off');
+  });
+
+  it('extractReportBlocks: an empty block delivers nothing', () => {
+    expect(extractReportBlocks('<report>  </report>rest')).toEqual({ reports: [], rest: 'rest' });
   });
 
   it('splitBubbles: blank-line paragraphs become separate bubbles', () => {
