@@ -28,7 +28,13 @@ function fakeStore(seq: boolean[]) {
   } as unknown as ConstructorParameters<typeof DurableTurnRouter>[1];
 }
 
-const META = { modelId: 'claude-opus-4-8', effort: 'high' as string | null };
+const META = {
+  modelId: 'claude-opus-4-8',
+  effort: 'high' as string | null,
+  // Generous: these tests exercise the serial worker, never the watchdog (see
+  // tests/durableRouterWatchdog.integration.test.ts for the abandon path).
+  turnWatchdogMs: 600_000,
+};
 
 describe('DurableTurnRouter (serial worker)', () => {
   let gateway: FakeGateway;

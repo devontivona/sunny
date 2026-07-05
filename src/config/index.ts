@@ -33,6 +33,17 @@ export const ConfigSchema = z.object({
    * this toggle is read-time only, so flipping it needs no migration.
    */
   translatorHistory: z.enum(['attributed', 'excluded']).default('attributed'),
+  /**
+   * Watchdog for a hung conversational turn-run, in ms. A stalled Anthropic stream has no
+   * client-side timeout (SSE keep-alive pings defeat undici's bodyTimeout), and the router
+   * serializes turns per thread — so one hung run silently blocks the whole conversation
+   * (observed 73+ min in evals, 2026-07-03). If a turn-run hasn't completed within this
+   * budget the router abandons + cancels it, retires the inbound it was answering (never a
+   * silent re-run — a fresh run re-answers from scratch and would re-send anything the hung
+   * run already delivered, the PR #29 duplicate-reply class), and tells the user on-thread.
+   * Generous by design: legitimate tool-heavy turns run 5–8 minutes.
+   */
+  turnWatchdogMs: z.number().int().positive().default(600_000),
   /** Devon's timezone (used by scheduling later). */
   timezone: z.string().default('America/New_York'),
   /** Owner identity allowlist — phone numbers / emails (messaging-gateway D-MG6, task 2.4). */
