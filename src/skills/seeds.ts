@@ -447,7 +447,7 @@ references/per-site-skills.md.
 // NB: JS template literal — no backticks in the body (use 4-space indented code blocks).
 const DELEGATION_SKILL = `---
 name: delegation
-description: Spawn work as a durable run — a subagent (now, reports to you), a background job (now, async, replies in this thread), or a schedule (later / recurring, for a person). Covers how to CHOOSE among them, when NOT to delegate, how to brief a child, least-authority endowment, inspecting/cancelling runs (list_runs / cancel_run), and the delegate_task / start_job / schedule_create / message tools.
+description: Spawn work as a durable run — a subagent (now; its report returns to this conversation for you to summarize) or a schedule (later / recurring, for a person). Covers how to CHOOSE between them, when NOT to delegate, how to brief a child, least-authority endowment, inspecting/cancelling runs (list_runs / cancel_run), and the delegate_task / schedule_create / message tools.
 ---
 
 # Delegation & scheduling — spawning durable runs
@@ -461,8 +461,6 @@ grant a child more than you hold), does its work, and delivers through the one m
 - **delegate_task** — run NOW, in an isolated context, and REPORT BACK TO YOU. For work that
   would blow out your context or fan out in parallel (research, digests), or that must be
   contained (untrusted content). The report arrives later like a new message; you synthesize.
-- **start_job** — run NOW in the background, async; it REPLIES IN THIS THREAD when done. For a
-  long/multi-step task the user is waiting on (build a site, a multi-step chore). Tell the user
   you're on it (send_message) first.
 - **schedule_create** — run LATER or on a recurring basis, for a person. For reminders and
   recurring maintenance ("every morning at 8…"). It fires on its own and delivers to whoever the
@@ -470,7 +468,7 @@ grant a child more than you hold), does its work, and delivers through the one m
 - **list_runs / cancel_run** — see and cancel your active schedules and this conversation's
   working subagents. The owner can see/cancel everyone's; a family member only their own.
 
-The rest of this skill is about delegate_task specifically (the richest case); start_job and
+The rest of this skill is about delegate_task specifically (the richest case);
 schedule_create share the same "brief completely, endow least authority" discipline.
 
 ## 1. When to delegate — and when NOT to (the one rule that matters)

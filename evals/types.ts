@@ -25,8 +25,6 @@ export interface Trajectory {
   delivered: Delivery;
   /** Whether the delivery-recovery backstop fired to rescue a missed send (D-MG8). */
   recovered: boolean;
-  /** The `start_job` tool calls the model elected to make (from the persisted turn parts). */
-  startJobs: ToolCallRecord[];
   /** The user-facing reply text — the judge's `output`. Tool mode: the sends joined.
    *  Text mode: the turn's FINAL text (the delivered bubbles' source). */
   finalText: string;

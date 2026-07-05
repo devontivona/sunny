@@ -11,16 +11,18 @@ import { z } from 'zod';
 export const DELEGATE_TASK_SPEC = {
   description:
     'Delegate a focused, self-contained subtask to a child subagent that runs in its OWN ' +
-    'isolated context and reports back to you when done — keeping its noisy intermediate work ' +
-    '(large reads, dead ends) OUT of your context. Best for bounded, parallelizable, ' +
-    'read/explore/contain work: research, multi-source digest, summarizing a long thread, ' +
-    'untrusted-content triage, an adversarial verify of a finding. NOT for coupled work where ' +
-    'the child would need your evolving state (most code edits) — keep that on this thread. ' +
-    'Write a COMPLETE brief: the child sees NONE of this conversation, so state (1) the ' +
-    'objective, (2) the output format you want back, (3) which tools/sources to use, and (4) ' +
-    'clear boundaries. You do NOT block — the report arrives later like a new message, and you ' +
-    'can run a few children at once and synthesize. If it will take a while, tell the user you ' +
-    'are on it (via send_message) first.',
+    'isolated context and reports back to this conversation when done — keeping its noisy ' +
+    'intermediate work (large reads, dead ends) OUT of your context. This is ALSO how you ' +
+    'background long or asynchronous work: use it INSTEAD of grinding through a long task ' +
+    'inline (the chat is blocked while you work — promote anything beyond a few quick tool ' +
+    'calls). Best for bounded or long-running work: research, building something, multi-source ' +
+    'digest, summarizing a long thread, untrusted-content triage, an adversarial verify. NOT ' +
+    'for coupled work where the child would need your evolving state (most code edits) — keep ' +
+    'that on this thread. Write a COMPLETE brief: the child sees NONE of this conversation, so ' +
+    'state (1) the objective, (2) the output format you want back, (3) which tools/sources to ' +
+    'use, and (4) clear boundaries. You do NOT block — your reply just tells the user you are ' +
+    'on it; the report arrives later like a new message, and you summarize it for the user ' +
+    'then. You can run a few children at once and synthesize.',
   inputSchema: z.object({
     task: z
       .string()

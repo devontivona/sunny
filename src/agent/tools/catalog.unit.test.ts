@@ -11,10 +11,11 @@ describe('toolCatalog', () => {
     expect(new Set(names)).toEqual(
       new Set([
         'send_image',
-        'start_job',
         'memory_write',
         'read_topic',
         'recall_history',
+        'delegate_task',
+        'message',
         'schedule_create',
         'list_runs',
         'cancel_run',
@@ -29,10 +30,10 @@ describe('toolCatalog', () => {
 
   it('flags host/registry/scheduling tools as owner-only and the rest as broad', () => {
     const byName = new Map(toolCatalog(makeConfig()).map((e) => [e.name, e]));
-    for (const n of ['bash', 'file_read', 'credential_manage', 'mcp_manage', 'schedule_create']) {
+    for (const n of ['bash', 'file_read', 'credential_manage', 'mcp_manage', 'schedule_create', 'delegate_task', 'message']) {
       expect(byName.get(n)?.ownerOnly, n).toBe(true);
     }
-    for (const n of ['send_image', 'start_job', 'memory_write']) {
+    for (const n of ['send_image', 'memory_write']) {
       expect(byName.get(n)?.ownerOnly, n).toBe(false);
     }
   });
