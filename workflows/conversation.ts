@@ -6,7 +6,7 @@ import { buildTurnModel } from '../src/agent/turnModel.js';
 import { z } from 'zod';
 import { BASH_TOOL_SPECS } from '../src/agent/tools/bashSpecs.js';
 import { MEMORY_TOOL_SPECS } from '../src/agent/tools/memorySpecs.js';
-import { SEND_IMAGE_SPEC } from '../src/agent/tools/sendMessageSpec.js';
+import { SEND_IMAGE_SPEC } from '../src/agent/tools/sendImageSpec.js';
 import { START_JOB_SPEC } from '../src/agent/tools/startJobSpec.js';
 import { MESSAGE_SPEC } from '../src/agent/tools/messageSpec.js';
 import { RUNS_TOOL_SPECS, scheduleToolSpecs } from '../src/agent/tools/scheduleSpecs.js';

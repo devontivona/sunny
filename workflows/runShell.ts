@@ -59,6 +59,16 @@ export interface StreamAgentOpts {
   steering?: SteeringConfig;
   /** Present for the text-mode conversational turn; omit everywhere else. */
   translator?: TranslatorConfig;
+  /**
+   * Mid-task `<report>…</report>` block delivery (subagent text-unification): present for
+   * the delegated-child profile only. Each step's freshly generated text is scanned for
+   * COMPLETE blocks at the step boundary (the same journaled-cursor pattern as the
+   * translator fold) and each block's content is delivered via `send` (a memoized step —
+   * replays never re-send) while the child keeps working. Blocks are child-authored and
+   * deliberate, so they deliver regardless of folded steers. Blocks in the FINAL step's
+   * text never reach a prepareStep — the caller handles those terminally.
+   */
+  reportBlocks?: { send: (text: string) => Promise<unknown> };
 }
 
 /**
@@ -76,6 +86,8 @@ export async function streamAgent(opts: StreamAgentOpts): Promise<{
   foldedIds: string[];
   /** The progress updates the translator relayed this turn (text mode; else empty). */
   translatorUpdates: { text: string; step: number }[];
+  /** Mid-task report blocks delivered to the parent (child profile; else empty). */
+  reportsSent: string[];
 }> {
   let usage: LanguageModelUsage | undefined;
   const agent = new WorkflowAgent({
@@ -101,6 +113,11 @@ export async function streamAgent(opts: StreamAgentOpts): Promise<{
   // `steps[].content` (see @ai-sdk/workflow dist, conversationPrompt assembly).
   const translatorUpdates: { text: string; step: number }[] = [];
   let translatorCursor = 0;
+
+  // Report-block fold state (child profile). Same determinism argument as the translator
+  // cursor: derives purely from journaled step results; `send` is a memoized step.
+  const reportsSent: string[] = [];
+  let reportCursor = 0;
 
   // `prepareStep` is always present so its params infer from `agent.stream` (contextual typing); a
   // run with no `steering`/`translator` (a one-shot job) just no-ops it. For a steerable run it
@@ -141,6 +158,18 @@ export async function streamAgent(opts: StreamAgentOpts): Promise<{
       // progress, and the model is about to react to it anyway. The cursor advances whenever
       // the trigger fires (even on empty narration or a declined update), so each pass sees
       // only genuinely new notes.
+      // Mid-task report blocks (child profile): scan the steps completed since the last
+      // boundary for complete <report> blocks and deliver each immediately.
+      if (opts.reportBlocks) {
+        const { extractReportBlocks } = await import('../src/agent/delivery.js');
+        const newText = stepNarrationText(steps.slice(reportCursor));
+        reportCursor = steps.length;
+        for (const report of extractReportBlocks(newText).reports) {
+          await opts.reportBlocks.send(report);
+          reportsSent.push(report);
+        }
+      }
+
       const tr = opts.translator;
       if (tr && !folded && (stepNumber - 1) % tr.everyNSteps === 0) {
         const interim = stepNarration(steps.slice(translatorCursor));
@@ -159,7 +188,21 @@ export async function streamAgent(opts: StreamAgentOpts): Promise<{
     },
   });
 
-  return { result, usage, foldedIds, translatorUpdates };
+  return { result, usage, foldedIds, translatorUpdates, reportsSent };
+}
+
+/** The plain narration TEXT of a run of steps (no tool-call log lines) — the report-block
+ *  scan source. */
+function stepNarrationText(
+  steps: ReadonlyArray<{ content: ReadonlyArray<{ type: string; text?: string }> }>,
+): string {
+  const texts: string[] = [];
+  for (const s of steps) {
+    for (const p of s.content) {
+      if (p.type === 'text' && p.text?.trim()) texts.push(p.text);
+    }
+  }
+  return texts.join('\n');
 }
 
 /**
