@@ -15,6 +15,13 @@ export default defineNitroConfig({
   serverDir: './server',
   modules: viteMode ? [] : ['workflow/nitro'],
   plugins: ['plugins/startup.ts'],
+  // Production build (`vite build --config vite.config.unified.ts` + `node .output/...`,
+  // the devbox serve mode as of 2026-07-05): the 1Password SDK must be file-traced, not
+  // inlined — `@1password/sdk-core` resolves a sibling `core_bg.wasm` via `__dirname`,
+  // which does not exist in the bundled ESM output (boot crashloop when inlined).
+  externals: {
+    external: ['@1password/sdk', '@1password/sdk-core'],
+  },
   // The workflow/SWC compilation rewrites the `.swc/` cache (incl. `.swc/.gitignore`)
   // on every build. The dev watcher would otherwise see that as a source change and
   // rebuild → which rewrites `.swc/` → an infinite rebuild loop. Ignore build caches.
@@ -31,6 +38,10 @@ export default defineNitroConfig({
       /[\\/]\.output[\\/]/,
       /[\\/]\.nitro[\\/]/,
       /[\\/]app[\\/]/,
+      // Claude Code worktrees/scratch: a git worktree checked out under .claude/ put
+      // thousands of "source" files in the dev watcher's view and wedged it into a
+      // permanent rebuild loop (2026-07-05 — incl. one mid-turn production crash).
+      /[\\/]\.claude[\\/]/,
     ],
   },
 });

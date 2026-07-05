@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { createClient, type Client } from '@1password/sdk';
+import type { Client } from '@1password/sdk';
 import { stateDir } from '../config/index.js';
 import { commitState } from '../state/index.js';
 import { logger } from '../logger.js';
@@ -78,11 +78,22 @@ export class OnePasswordResolver implements CredentialResolver {
   constructor(private readonly token: string) {}
 
   private client(): Promise<Client> {
-    this.clientPromise ??= createClient({
-      auth: this.token,
-      integrationName: INTEGRATION_NAME,
-      integrationVersion: INTEGRATION_VERSION,
-    });
+    // Runtime-resolved import (never bundled): `@1password/sdk-core` loads a sibling
+    // `core_bg.wasm` via `__dirname`, which no bundled ESM output has — inlining it
+    // crashlooped the 2026-07-05 production build. The specifier is deliberately a
+    // VARIABLE: a literal dynamic import still gets chunked by the nitro/rollup pass
+    // (verified — @vite-ignore alone did not stop it). The SDK is host-only (a Node
+    // app with real node_modules), so resolving it at runtime is always safe here.
+    const specifier = '@1password/sdk';
+    this.clientPromise ??= (
+      import(/* @vite-ignore */ specifier) as Promise<typeof import('@1password/sdk')>
+    ).then((sdk) =>
+      sdk.createClient({
+        auth: this.token,
+        integrationName: INTEGRATION_NAME,
+        integrationVersion: INTEGRATION_VERSION,
+      }),
+    );
     return this.clientPromise;
   }
 

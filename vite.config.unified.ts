@@ -29,7 +29,17 @@ export default defineConfig({
   // standalone gateway (which uses the default node_modules/.nitro) from the SAME
   // project dir without corrupting each other's build output (devbox hazard:
   // two services must not share a build dir). The workflow build lives under it too.
-  nitro: { buildDir: 'node_modules/.nitro-unified' },
+  nitro: {
+    buildDir: 'node_modules/.nitro-unified',
+    // Production build (devbox build-and-serve, 2026-07-05): the 1Password SDK must be
+    // file-traced into .output/server/node_modules, not inlined — `@1password/sdk-core`
+    // resolves a sibling `core_bg.wasm` via `__dirname`, which doesn't exist in bundled
+    // ESM output (boot crashloop when inlined). Mirrored in nitro.config.ts for the
+    // standalone build; in Vite mode THIS block is the one that's read.
+    externals: {
+      external: ['@1password/sdk', '@1password/sdk-core'],
+    },
+  },
   // No `build.outDir` override: the Nitro-Vite plugin serves the client build
   // dir as public assets, and pointing it at the pre-existing `app/dist` (the
   // standalone prod build) would shadow Vite's dev SPA with a stale bundle. In
@@ -39,5 +49,10 @@ export default defineConfig({
     host: true,
     allowedHosts: ['.waywardlane.com', 'localhost'],
     ...(tunnelHmr ? { hmr: { protocol: 'wss', clientPort: 443 } } : {}),
+  },
+  // Belt for the nitro.externals suspenders: the Vite server build must also treat the
+  // 1Password SDK as external (see the nitro block above).
+  ssr: {
+    external: ['@1password/sdk', '@1password/sdk-core'],
   },
 });
