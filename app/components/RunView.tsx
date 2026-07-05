@@ -191,34 +191,68 @@ function ToolPart({ part }: { part: ToolPartShape }) {
   );
 }
 
+const NO_REPLY = '<no-reply/>';
+
 /** Render a list of `UIMessagePart`s as a trajectory, in chronological order.
- *  Shared by the live stream (`RunView`) and persisted turns (`Bubble`). */
+ *  Shared by the live stream (`RunView`) and persisted turns (`Bubble`).
+ *
+ *  Text-as-reply prominence: the text a turn ends on IS the delivered reply, so text
+ *  parts AFTER the last tool part render at full color; text between tool calls is
+ *  interim working notes (dimmed). While streaming, the trailing text is the
+ *  reply-in-progress — it renders full-color as it streams and re-dims if another
+ *  tool call follows (the "currently speaking" effect, correct on both counts). */
 export function MessageParts({ parts }: { parts: readonly AnyPart[] }) {
+  let lastToolIdx = -1;
+  parts.forEach((p, i) => {
+    if (p.type === 'dynamic-tool' || p.type.startsWith('tool-')) lastToolIdx = i;
+  });
   return (
     <>
       {parts.map((part, i) => (
-        <Part key={i} part={part} />
+        <Part key={i} part={part} delivered={i > lastToolIdx} />
       ))}
     </>
   );
 }
 
-function Part({ part }: { part: AnyPart }) {
-  // Regular model output (scratch) and reasoning are Sunny's private working text,
-  // not the delivered message — dim them so the delivered `send_message` (rendered
-  // at full prominence by ToolPart) clearly stands out. Opacity dims regardless of
-  // the markdown renderer's own element colors.
+function Part({ part, delivered }: { part: AnyPart; delivered: boolean }) {
   if (part.type === 'text') {
-    return part.text.trim() ? (
-      <div className="my-xs opacity-60">
-        <Markdown>{part.text}</Markdown>
+    const text = part.text.trim();
+    if (!text) return null;
+    // The bare silence sentinel: a deliberate no-reply, shown as such (never as prose).
+    if (delivered && text.replaceAll(NO_REPLY, '').trim() === '') {
+      return <div className="my-xs text-fg-dim italic">(chose silence — no reply sent)</div>;
+    }
+    // Delivered reply text at full prominence; interim notes dimmed.
+    return delivered ? (
+      <div className="my-xs text-fg">
+        <Markdown>{text.replaceAll(NO_REPLY, '').trim()}</Markdown>
       </div>
-    ) : null;
+    ) : (
+      <div className="my-xs opacity-60">
+        <Markdown>{text}</Markdown>
+      </div>
+    );
   }
   if (part.type === 'reasoning') {
     return part.text.trim() ? (
       <div className="my-xs italic opacity-50">
         <Markdown>{part.text}</Markdown>
+      </div>
+    ) : null;
+  }
+  // Relayed translator update: DELIVERED to the user mid-task — full prominence,
+  // labeled so it's distinguishable from the final reply.
+  if (part.type === 'data-translator') {
+    const text = (part as { data?: { text?: string } }).data?.text;
+    return text ? (
+      <div className="my-xs text-fg">
+        <span className="mr-sm text-secondary" title="Interim progress update relayed to the user by the translator while Sunny kept working.">
+          [update]
+        </span>
+        <span className="inline-block align-top [&>*]:inline">
+          <Markdown>{text}</Markdown>
+        </span>
       </div>
     ) : null;
   }

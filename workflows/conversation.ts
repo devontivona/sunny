@@ -126,7 +126,13 @@ export async function runConversation(input: ConversationInput): Promise<void> {
       everyNSteps: setup.translatorEveryNSteps,
       compose: (interim, recentUpdates, stepNumber, stepsSinceUpdate) =>
         translateStep(threadId, subject, interim, recentUpdates, stepNumber, stepsSinceUpdate),
-      send: (text) => sendStep(threadId, text),
+      // Two journaled steps per relayed update: the real delivery, then a best-effort
+      // live-pane publish (translator sends never ride the model stream, so without
+      // this the dashboard's live view can't show them).
+      send: async (text) => {
+        await sendStep(threadId, text);
+        await publishTranslatorLiveStep(threadId, text);
+      },
     },
   });
 
@@ -491,6 +497,23 @@ async function recoverDelivery(
     });
   } catch {
     return '';
+  }
+}
+
+/** Best-effort live-pane publish of a relayed translator update (a `data-translator`
+ *  chunk onto the thread's running turn). Journaled, so a replay never re-publishes;
+ *  display-only — failures never affect the turn. */
+async function publishTranslatorLiveStep(threadId: string, text: string): Promise<void> {
+  'use step';
+
+  try {
+    const { getLiveBus } = await import('../src/observability/live.js');
+    getLiveBus().publishThreadChunk(threadId, {
+      type: 'data-translator',
+      data: { text },
+    } as Parameters<ReturnType<typeof getLiveBus>['publishThreadChunk']>[1]);
+  } catch {
+    // display-only
   }
 }
 
