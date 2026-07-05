@@ -596,6 +596,22 @@ describe('runConversation (workflow integration — real Local World)', () => {
       'n1\n[ran bash: echo b]\nn2\n[ran bash: echo c]',
     ]);
     expect(ctx.gateway.texts()).toEqual(['u1', 'u2', 'done — final answer']);
+
+    // Persisted CHRONOLOGY (2026-07-05): each update's data-translator part sits at its
+    // true position — u1 (triggered at step 1) before step 1's narration, u2 (step 3)
+    // before step 3's — never lumped after the tool calls.
+    const window = await ctx.store.recentWindow(event.threadId);
+    const payload = window.find((m) => m.role === 'assistant')!.payload as UIMessage;
+    const seq = payload.parts
+      .map((p) =>
+        p.type === 'data-translator'
+          ? `U:${(p as { data?: { text?: string } }).data?.text}`
+          : p.type === 'text' && (p as { text?: string }).text?.trim()
+            ? `T:${(p as { text?: string }).text}`
+            : null,
+      )
+      .filter(Boolean);
+    expect(seq).toEqual(['T:n0', 'U:u1', 'T:n1', 'T:n2', 'U:u2', 'T:n3', 'T:done — final answer']);
   });
 
   it('text mode: delivers the reply EXACTLY ONCE when a post-send step fails and the workflow replays', async () => {
