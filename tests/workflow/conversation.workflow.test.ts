@@ -529,6 +529,42 @@ describe('runConversation (workflow integration — real Local World)', () => {
     expect(payload.parts.filter((p) => p.type === 'data-translator')).toHaveLength(0);
   });
 
+  it('translator: notes ACCUMULATE across declined beats; step context reaches the composer', async () => {
+    // 2026-07-05 production finding: the cursor advanced even on a declined update, so
+    // every beat saw a ~3-step window and Haiku's "quick work" rule matched all of them —
+    // 9/9 declines on a 15-step turn. Now: decline → the next beat sees EVERYTHING since
+    // the last SENT update, plus the step counters the prompt needs.
+    const beats: Array<{ interim: string; step?: number; since?: number }> = [];
+    ctx = await setupTestRuntime({ translatorEveryNSteps: 2 }, {
+      translateOverride: (interim: string, _r: string[], step?: number, since?: number) => {
+        beats.push({ interim, step, since });
+        return beats.length < 2 ? '' : `update after ${since} silent steps`; // decline first beat
+      },
+    });
+    const event = makeChannelEvent({ text: 'long research task' });
+    await ctx.store.appendInbound(event);
+    setTurnModel([
+      { type: 'tool-call', toolName: 'bash', input: '{"command":"echo a"}', text: 'n0' },
+      { type: 'tool-call', toolName: 'bash', input: '{"command":"echo b"}', text: 'n1' },
+      { type: 'tool-call', toolName: 'bash', input: '{"command":"echo c"}', text: 'n2' },
+      { type: 'text', text: 'final answer' },
+    ]);
+
+    const run = await start(runConversation, [{ threadId: event.threadId }]);
+    await run.returnValue;
+    expect(await run.status).toBe('completed');
+
+    // Beat 1 (step 1): sees step 0's notes, declines. Beat 2 (step 3): sees the
+    // ACCUMULATED notes (n0 still there — the cursor did not advance on decline).
+    expect(beats).toHaveLength(2);
+    expect(beats[0]).toMatchObject({ step: 1, since: 1 });
+    expect(beats[0]!.interim).toContain('n0');
+    expect(beats[1]).toMatchObject({ step: 3, since: 3 });
+    for (const n of ['n0', 'n1', 'n2']) expect(beats[1]!.interim).toContain(n);
+
+    expect(ctx.gateway.texts()).toEqual(['update after 3 silent steps', 'final answer']);
+  });
+
   it('text mode: translator cadence — fires at steps 1 and 1+N, not in between', async () => {
     const firedAt: string[] = [];
     ctx = await setupTestRuntime({ translatorEveryNSteps: 2 }, {
