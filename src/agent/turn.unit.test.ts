@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import type { ModelMessage, UIMessage } from 'ai';
 import {
   buildTurnRecord,
-  classifyDelivery,
   extractScratch,
   extractSends,
   groupSpeakerPrefix,
@@ -13,27 +12,6 @@ import {
   usageOf,
 } from './turn.js';
 import { makeAssistantTurnPayload, makeStoredMessage } from '../../tests/factories.js';
-
-describe('classifyDelivery', () => {
-  it('send_message when at least one send happened', () => {
-    expect(classifyDelivery(1, '')).toBe('send_message');
-    expect(classifyDelivery(3, 'some scratch')).toBe('send_message');
-  });
-
-  it('silence when stay_silent was called — even if scratch exists', () => {
-    expect(classifyDelivery(0, '', true)).toBe('silence');
-    expect(classifyDelivery(0, 'a private note', true)).toBe('silence');
-  });
-
-  it('fallback_text (a miss) when scratch exists but neither tool was called', () => {
-    expect(classifyDelivery(0, 'private reply leaked into scratch')).toBe('fallback_text');
-    expect(classifyDelivery(0, 'private reply', false)).toBe('fallback_text');
-  });
-
-  it('silence when nothing was sent, no scratch, no stay_silent', () => {
-    expect(classifyDelivery(0, '')).toBe('silence');
-  });
-});
 
 describe('trimTrailingNonUser', () => {
   const user = (t: string): ModelMessage => ({ role: 'user', content: t });

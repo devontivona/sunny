@@ -3,39 +3,47 @@
 ## Purpose
 TBD - created by archiving change bootstrap-sunny. Update Purpose after archive.
 ## Requirements
-### Requirement: Explicit send-message output model
-Sunny SHALL deliver user-facing messages only by an explicit `send_message` action; the model's raw text output SHALL NOT be auto-delivered to the channel. The agent MAY call `send_message` multiple times within a turn, and calling it SHALL NOT end the turn. A turn that calls `send_message` zero times SHALL result in no message to the user (silence). The model's in-step reasoning and any scratchpad/notes SHALL NOT be delivered to the user.
+### Requirement: Text-as-reply delivery model
+Sunny's reply SHALL be the model's FINAL text: the text a conversational turn ends on (after its last tool call) SHALL be delivered to the user as iMessage bubbles, split on blank lines. Interim text written between tool calls (working notes) SHALL NOT be delivered raw; it is source material for relayed progress updates. The model SHALL choose silence by making the `<no-reply/>` sentinel its entire reply — the sentinel is parsed out before delivery, and a reply that is only the sentinel delivers nothing. Real content alongside a stray sentinel SHALL be delivered with the token stripped (content is never swallowed). The model's private reasoning SHALL NOT be delivered. Outbound images SHALL be sent via an explicit `send_image` tool (path or URL, never raw bytes).
 
-#### Scenario: Only explicit sends reach the user
-- **WHEN** the agent produces internal reasoning or scratchpad text during a turn
-- **THEN** none of it is delivered to the user
-- **AND** the user receives only the content of `send_message` calls
+Rationale (PR #30/#31, 2026-07): a tool-mediated voice (`send_message`-only) fights the trained prior that final text answers the user, and in a rolling-window chat it is self-poisoning via history imitation (clean-history delivery ~100% vs ~28% under poisoned precedent). Text-as-reply makes the trained prior the correct behavior, so persisted history is self-reinforcing; measured 100% delivery across the migration gates, including all poisoned-history probes.
 
-#### Scenario: Multiple sends in one turn
-- **WHEN** the agent calls `send_message` more than once in a turn
-- **THEN** each call delivers a separate message and the turn continues
+#### Scenario: The final text is the reply
+- **WHEN** a turn ends on plain text after completing its tool work
+- **THEN** that text is delivered to the user as one or more bubbles (blank-line separated)
+- **AND** interim narration written between tool calls is not delivered raw
 
-#### Scenario: Silence is allowed
-- **WHEN** the agent ends a turn without calling `send_message` and there is nothing useful to say
+#### Scenario: Silence by sentinel
+- **WHEN** the model replies with exactly `<no-reply/>`
 - **THEN** no message is delivered to the user
+- **AND** the sentinel persists in the turn record as same-modality silence precedent
 
-### Requirement: Guard against unintended silence
-The system SHALL reinforce the explicit-send model so a turn does not end silently by accident, and SHALL provide a safety net if it does. Reinforcement SHALL include representing Sunny's prior replies in the model's own history as `send_message` tool calls (not plain assistant text), so the agent's track record demonstrates that speaking means calling `send_message`. As a fallback, if a turn ends having produced user-facing text but with no `send_message` call and no `stay_silent` call (an elicitation miss), the system SHALL run a delivery-recovery pass: a cheap model rewrites the turn's private notes into a clean message and returns it as plain text (no forced tool call), which the system delivers and then records in history as a `send_message` tool call — so a recovered miss is indistinguishable from a clean send and reinforces the positive pattern rather than poisoning future turns. The recovery pass SHALL NOT have a silence option (choosing silence is the main turn's job via `stay_silent`); an empty result means there is nothing to send. The occurrence SHALL be recorded (telemetered, surfaced in the dashboard) and is expected to trend toward zero.
+#### Scenario: A stray sentinel never swallows content
+- **WHEN** the final text contains the `<no-reply/>` sentinel alongside real content
+- **THEN** the content is delivered with the sentinel stripped
 
-#### Scenario: History reinforces the send action
-- **WHEN** the model prompt is built from prior turns
-- **THEN** Sunny's earlier replies appear as `send_message` tool calls with their results, not as plain assistant text
-- **AND** a recovered miss appears the same way (its composed message recorded as a `send_message` tool call), not as an undelivered plain-text reply
+#### Scenario: Interim progress on long turns
+- **WHEN** a turn runs multiple tool steps
+- **THEN** a cheap utility model MAY relay short progress updates composed from the turn's working notes and tool-call log (first on the first non-terminal step, then on a configured cadence)
+- **AND** the relay declines (silence) when there is no user-relevant news
+- **AND** relayed updates persist on the turn record and render attributed (or excluded, per config) when the turn replays as history
 
-#### Scenario: Fallback delivery on missed send
-- **WHEN** a turn ends with no `send_message` call and no `stay_silent` call but produced user-facing text
-- **THEN** the recovery pass composes a clean message from the private notes and delivers it
-- **AND** that message is recorded in history as a `send_message` tool call
+### Requirement: Abnormal-turn-end backstop
+A deliberate turn always ends on reply text or the silence sentinel; if a turn instead ends ABNORMALLY — cut off by the step limit, a length cap, or an error finish — with working notes but no reply, the system SHALL NOT ghost the user: a cheap utility model SHALL compose an honest status message from the turn's notes ("here's where things stand"), returned as plain text (never a forced tool call), which the system delivers and persists as the turn's final reply text (a plain text part — never a synthetic tool call). The backstop SHALL NOT claim or imply the task completed when the notes show it didn't, and SHALL NOT have a silence option. Each firing SHALL be recorded (telemetered as `turn-backstop`, surfaced in the dashboard as recovered) and is expected to be rare.
+
+#### Scenario: Backstop on a cut-off turn
+- **WHEN** a turn ends with working notes but no final reply text and no silence sentinel
+- **THEN** the backstop composes an honest status message from the notes and delivers it
+- **AND** the composed text persists as the turn's final reply text
 - **AND** the occurrence is recorded (telemetered) for monitoring
+
+#### Scenario: Unfinished work is reported honestly
+- **WHEN** the cut-off turn's notes show the task did not complete
+- **THEN** the backstop message says what got done and what didn't, without implying completion
 
 #### Scenario: Sends are not duplicated on resume
 - **WHEN** a durable run resumes after interruption
-- **THEN** a `send_message` already delivered before the interruption is not delivered again
+- **THEN** a bubble already delivered before the interruption is not delivered again
 
 ### Requirement: Turn-grained transcript with retained working context
 Sunny SHALL persist its conversation transcript as one stored record per turn, using the AI SDK `UIMessage` as the unit of record (one row = one `UIMessage` = one turn). Each stored record SHALL preserve the turn's structured content — text/scratchpad parts and tool calls with their results — sufficient to reconstruct the model prompt without fabricating tool calls, and SHALL also retain a flattened text projection for keyword recall. Sunny SHALL retain the assistant turn's private working-context (scratchpad) text across turns so a follow-up message can draw on reasoning the agent chose not to deliver. The model prompt SHALL be derived from stored `UIMessage` records (converted to model messages at request time); native provider reasoning blocks are NOT required to be stored.
@@ -47,7 +55,7 @@ Sunny SHALL persist its conversation transcript as one stored record per turn, u
 #### Scenario: Prompt reconstructed from stored turns
 - **WHEN** Sunny assembles context for a response
 - **THEN** the prompt is built by converting stored `UIMessage` records to model messages
-- **AND** no `send_message` tool calls are synthesized at prompt-build time
+- **AND** no tool calls are synthesized at prompt-build time (delivered replies replay as the turn's final text)
 
 #### Scenario: Working context survives into a follow-up
 - **WHEN** Sunny gives a terse reply but retains additional working-context text for that turn

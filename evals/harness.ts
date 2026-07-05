@@ -3,7 +3,6 @@ import { start } from 'workflow/api';
 import { runConversation } from '../workflows/conversation.js';
 import { ConversationStore } from '../src/gateway/store.js';
 import {
-  classifyDelivery,
   classifyTextDelivery,
   extractFinalText,
   extractInterimText,
@@ -41,11 +40,10 @@ export function envRunConfig(env: NodeJS.ProcessEnv = process.env): Partial<Sunn
   const rc: Partial<SunnyConfig> = {};
   if (env.EVAL_THINKING) rc.thinking = env.EVAL_THINKING as SunnyConfig['thinking'];
   if (env.EVAL_EFFORT) rc.effort = env.EVAL_EFFORT as SunnyConfig['effort'];
-  // The recovery/translator model defaults to Haiku; override to measure a stronger one.
-  if (env.EVAL_RECOVERY_MODEL) rc.recoveryModelId = env.EVAL_RECOVERY_MODEL;
-  // The delivery-mode axis ('tool' = the legacy rollback cell), the translator-history
-  // mini-axis, and the translator cadence.
-  if (env.EVAL_DELIVERY) rc.deliveryMode = env.EVAL_DELIVERY as SunnyConfig['deliveryMode'];
+  // The utility (translator/backstop) model defaults to Haiku; override to measure a
+  // stronger one.
+  if (env.EVAL_UTILITY_MODEL) rc.utilityModelId = env.EVAL_UTILITY_MODEL;
+  // The translator-history mini-axis and the translator cadence.
   if (env.EVAL_TRANSLATOR_HISTORY)
     rc.translatorHistory = env.EVAL_TRANSLATOR_HISTORY as SunnyConfig['translatorHistory'];
   if (env.EVAL_TRANSLATOR_N) rc.translatorEveryNSteps = Number(env.EVAL_TRANSLATOR_N);
@@ -69,7 +67,7 @@ export function envRunConfig(env: NodeJS.ProcessEnv = process.env): Partial<Sunn
 export async function runEvalCase(
   c: EvalCase,
   modelId = DEFAULT_MODEL_ID,
-  // Run-level knobs (thinking/effort/promptVariant/fewshot/…) win over case config:
+  // Run-level knobs (thinking/effort/translator/…) win over case config:
   // case `setup.config` encodes case semantics (e.g. a tiny recentWindowSize); the
   // comparison grid must be able to force one configuration uniformly.
   runConfig: Partial<SunnyConfig> = {},
@@ -164,8 +162,7 @@ export async function runEvalCase(
       await run.returnValue;
     }
 
-    // Mode-aware trajectory (text-delivery Phase 5).
-    const trajectory = await buildTrajectory(store, gateway, config.deliveryMode);
+    const trajectory = await buildTrajectory(store, gateway);
     // EVAL_DUMP_DIR: write a human-readable transcript per case run (hand sanity-checks).
     if (process.env.EVAL_DUMP_DIR) {
       await dumpTranscript(process.env.EVAL_DUMP_DIR, c.name, store, trajectory);
@@ -256,12 +253,11 @@ async function dumpTranscript(
 }
 
 /** Reconstruct the trajectory from the last persisted turn (D-MG9) + the fake gateway.
- *  Mode-aware (text-delivery Phase 5): in text mode the reply is the turn's FINAL text,
- *  the "scratch" is the interim narration, and relayed translator updates are surfaced. */
+ *  Text-as-reply: the reply is the turn's FINAL text (sentinel-stripped), the "scratch"
+ *  is the interim narration, and relayed translator updates are surfaced. */
 async function buildTrajectory(
   store: ConversationStore,
   gateway: FakeGateway,
-  deliveryMode: 'tool' | 'text' = 'tool',
 ): Promise<Trajectory> {
   const window = await store.recentWindow(OWNER_THREAD);
   const lastTurn = [...window].reverse().find((m) => m.role === 'assistant');
@@ -279,28 +275,16 @@ async function buildTrajectory(
     .filter((p) => p.type.startsWith('tool-'))
     .map((p) => ({ name: p.type.slice('tool-'.length), input: p.input }));
 
-  const textMode = deliveryMode === 'text';
-  const interimText = textMode ? extractInterimText(uiParts) : '';
-  const scratch = textMode
-    ? interimText
-    : payload.parts
-        .filter((p) => p.type === 'text')
-        .map((p) => p.text ?? '')
-        .join('\n')
-        .trim();
-  const parsedFinal = textMode
-    ? stripNoReply(extractFinalText(uiParts))
-    : { text: gateway.texts().join('\n'), sentinel: false };
+  const interimText = extractInterimText(uiParts);
+  const scratch = interimText;
+  const parsedFinal = stripNoReply(extractFinalText(uiParts));
   const finalText = parsedFinal.text;
   const translatorUpdates = extractTranslatorUpdates(uiParts).map((u) => u.text);
 
   const sends = gateway.texts();
-  const staySilent = parsedFinal.sentinel || toolCalls.some((tc) => tc.name === 'stay_silent');
   const delivered =
     payload.metadata?.delivered ??
-    (textMode
-      ? classifyTextDelivery(finalText, interimText, staySilent)
-      : classifyDelivery(gateway.sendCount, scratch));
+    classifyTextDelivery(finalText, interimText, parsedFinal.sentinel);
   const u = payload.metadata?.usage;
 
   return {

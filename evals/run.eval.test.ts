@@ -57,7 +57,6 @@ function parseOptions(): Options {
   const cell: ScorecardConfig = {};
   if (runConfig.thinking) cell.thinking = runConfig.thinking;
   if (runConfig.effort) cell.effort = runConfig.effort;
-  if (runConfig.deliveryMode) cell.deliveryMode = runConfig.deliveryMode;
   if (runConfig.translatorHistory) cell.translatorHistory = runConfig.translatorHistory;
   if (runConfig.translatorEveryNSteps) cell.translatorEveryNSteps = runConfig.translatorEveryNSteps;
 
@@ -243,12 +242,12 @@ describe('eval scorecard', () => {
     reportDiff(scorecard);
     console.log(`\nCost: $${scorecard.costUsd.toFixed(4)}`);
 
-    // Silence-tier gate (the d487a98 over-talk risk): reported for every text-mode run
-    // (the default since 2026-07-05) — silence must hold at or above the committed baseline.
-    if ((opts.runConfig.deliveryMode ?? 'text') === 'text') {
+    // Silence-tier gate (the d487a98 over-talk risk): silence must hold at or above the
+    // committed baseline.
+    {
       const gate = silenceTierGate(readBaseline(), scorecard);
       const pct = (v: number | null) => (v === null ? 'n/a' : `${(v * 100).toFixed(0)}%`);
-      console.log(`\nSilence-tier gate (text cell vs tool baseline): ${gate.pass ? 'PASS' : 'FAIL'}`);
+      console.log(`\nSilence-tier gate (vs committed baseline): ${gate.pass ? 'PASS' : 'FAIL'}`);
       for (const r of gate.rows) {
         console.log(`  ${r.name}: baseline ${pct(r.baseline)} → ${pct(r.current)}`);
       }

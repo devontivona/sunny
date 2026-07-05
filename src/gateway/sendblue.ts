@@ -337,7 +337,7 @@ export class SendblueGateway implements Gateway {
     // pattern fires `onNewMessage` for any message in an UNSUBSCRIBED thread, so Sunny sees a family
     // group's first message even when not mentioned. We bootstrap-subscribe and dispatch (which
     // authorizes the all-trusted roster); afterwards `onSubscribedMessage` carries every message and
-    // the agent uses per-turn discretion (send_message / stay_silent). DMs are handled by
+    // the agent uses per-turn discretion (reply text vs the no-reply sentinel). DMs are handled by
     // `onDirectMessage`, so this guards to groups only (and the store dedups any overlap anyway).
     this.chat.onNewMessage(/[\s\S]*/, async (thread, message) => {
       if (!isGroupThreadId(thread.id)) return;

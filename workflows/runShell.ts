@@ -186,7 +186,7 @@ function stepNarration(
     for (const p of s.content) {
       if (p.type === 'text' && p.text?.trim()) {
         lines.push(p.text.trim());
-      } else if (p.type === 'tool-call' && p.toolName && p.toolName !== 'stay_silent') {
+      } else if (p.type === 'tool-call' && p.toolName) {
         const input = p.input as Record<string, unknown> | undefined;
         lines.push(`[ran ${p.toolName}: ${brief(input?.command ?? input)}]`);
       }
@@ -197,8 +197,8 @@ function stepNarration(
 
 /**
  * The single delivery bus (run-audiences D-RA15). Resolve an `Audience` to a Thread and dispatch on
- * its binding — the ONE outward seam every profile uses (the `send_message`/`message` tool executes
- * AND a run's terminal report). Memoized as a `'use step'`, so a replayed run never re-emits.
+ * its binding — the ONE outward seam every profile uses (the conversation's reply bubbles, the
+ * `message` tool, a child's report, AND a run's terminal deliver). Memoized as a `'use step'`, so a replayed run never re-emits.
  *  - household → nothing (no single recipient; the run fans out via the `message` tool). A household
  *                run with no messaging grant is thus structurally silent.
  *  - parent    → append to the parent run's inbox + wake its run-supply (attributed via from*),

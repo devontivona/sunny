@@ -16,22 +16,10 @@ function countTool(t: Trajectory, name: string): number {
   return t.toolCalls.filter((c) => c.name === name).length;
 }
 
-/** The reply was delivered via `send_message` (never leaked as private scratch). */
-export const deliveredViaSendMessage: Grader = (t) =>
-  pass('delivered-via-send_message', t.delivered === 'send_message', `delivered=${t.delivered}`);
-
-/**
- * The reply reached the user by the active mode's intended path — `send_message`
- * (tool mode) OR direct final text (text mode). The mode-agnostic delivery grader
- * every substantive case wires (text-delivery migration, Phase 5), so the same
- * dataset gates both cells of the EVAL_DELIVERY grid.
- */
+/** The reply reached the user as delivered final text — the delivery grader every
+ *  substantive case wires. */
 export const deliveredReply: Grader = (t) =>
-  pass(
-    'delivered-reply',
-    t.delivered === 'send_message' || t.delivered === 'text',
-    `delivered=${t.delivered}`,
-  );
+  pass('delivered-reply', t.delivered === 'text', `delivered=${t.delivered}`);
 
 /**
  * No message reached the user — the silence outcome. Asserts on the user-facing
@@ -70,7 +58,7 @@ export const noRecovery: Grader = (t) =>
 export const elicitedWithoutRecovery: Grader = (t) =>
   pass(
     'elicited-without-recovery',
-    (t.delivered === 'send_message' || t.delivered === 'text') && !t.recovered,
+    t.delivered === 'text' && !t.recovered,
     `delivered=${t.delivered} recovered=${t.recovered}`,
   );
 

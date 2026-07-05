@@ -550,7 +550,7 @@ function jobKind(name: string): string {
   if (name.endsWith('runJob')) return 'Background job';
   if (name.endsWith('runScheduledJob')) return 'Scheduled job';
   // Durable Tier-1 conversational runs (durable-main-loop) surface here as WDK runs
-  // when SUNNY_DURABLE_TURNS=1; label them as conversations rather than jobs.
+  // label them as conversations rather than jobs.
   if (name.endsWith('runConversation')) return 'Conversation';
   return name.split('//').filter(Boolean).pop() ?? name;
 }

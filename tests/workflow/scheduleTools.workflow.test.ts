@@ -29,7 +29,7 @@ describe('self-scheduling on a trusted-DM turn (run-audiences Phase 1a)', () => 
   });
 
   it('a trusted-DM turn creates a schedule via schedule_create and confirms it', async () => {
-    ctx = await setupTestRuntime({ deliveryMode: 'tool' });
+    ctx = await setupTestRuntime();
     const event = makeChannelEvent({ text: 'remind me to check on Leo every morning at 8' });
     await ctx.store.appendInbound(event);
     setTurnModel([
@@ -43,12 +43,7 @@ describe('self-scheduling on a trusted-DM turn (run-audiences Phase 1a)', () => 
           label: 'leo-check',
         }),
       },
-      {
-        type: 'tool-call',
-        toolName: 'send_message',
-        input: JSON.stringify({ text: "Done — I'll check every morning at 8." }),
-      },
-      { type: 'text', text: '' },
+      { type: 'text', text: "Done — I'll check every morning at 8." },
     ]);
 
     const run = await start(runConversation, [{ threadId: event.threadId }]);
@@ -69,7 +64,7 @@ describe('self-scheduling on a trusted-DM turn (run-audiences Phase 1a)', () => 
 
   it('a non-owner family member can also schedule (gate is trusted-DM, not owner-only)', async () => {
     const KATE = '+17195550000';
-    ctx = await setupTestRuntime({ deliveryMode: 'tool', family: [{ name: 'Kate', identities: [KATE] }] });
+    ctx = await setupTestRuntime({ family: [{ name: 'Kate', identities: [KATE] }] });
     const event = makeChannelEvent({
       threadId: 'sendblue:owner:kate',
       senderId: KATE,
@@ -88,12 +83,7 @@ describe('self-scheduling on a trusted-DM turn (run-audiences Phase 1a)', () => 
           prompt: 'Remind Kate to call the pediatrician.',
         }),
       },
-      {
-        type: 'tool-call',
-        toolName: 'send_message',
-        input: JSON.stringify({ text: 'Got it — reminder set.' }),
-      },
-      { type: 'text', text: '' },
+      { type: 'text', text: 'Got it — reminder set.' },
     ]);
 
     const run = await start(runConversation, [{ threadId: event.threadId }]);
@@ -107,7 +97,7 @@ describe('self-scheduling on a trusted-DM turn (run-audiences Phase 1a)', () => 
   });
 
   it('cancel_run on a trusted-DM turn cancels an existing schedule', async () => {
-    ctx = await setupTestRuntime({ deliveryMode: 'tool' });
+    ctx = await setupTestRuntime();
     // Seed a schedule directly, then drive a turn that cancels it by id.
     const { createSchedule } = await import('../../src/scheduler/index.js');
     const seeded = await createSchedule(ctx.db.db, {
@@ -125,8 +115,7 @@ describe('self-scheduling on a trusted-DM turn (run-audiences Phase 1a)', () => 
         toolName: 'cancel_run',
         input: JSON.stringify({ id: seeded.id }),
       },
-      { type: 'tool-call', toolName: 'send_message', input: JSON.stringify({ text: 'Cancelled.' }) },
-      { type: 'text', text: '' },
+      { type: 'text', text: 'Cancelled.' },
     ]);
 
     const run = await start(runConversation, [{ threadId: event.threadId }]);
@@ -137,7 +126,6 @@ describe('self-scheduling on a trusted-DM turn (run-audiences Phase 1a)', () => 
 
   it('cross-person (#4): the owner can schedule FOR a family member via `for`', async () => {
     ctx = await setupTestRuntime({
-    deliveryMode: 'tool',
       owner: { name: 'Devon', identities: ['+15551230000'] },
       family: [{ name: 'Kate', identities: ['+17193146820'] }],
     });
@@ -154,8 +142,7 @@ describe('self-scheduling on a trusted-DM turn (run-audiences Phase 1a)', () => 
           for: 'Kate',
         }),
       },
-      { type: 'tool-call', toolName: 'send_message', input: JSON.stringify({ text: "Set for Kate." }) },
-      { type: 'text', text: '' },
+      { type: 'text', text: "Set for Kate." },
     ]);
 
     const run = await start(runConversation, [{ threadId: devon.threadId }]);
@@ -170,7 +157,7 @@ describe('self-scheduling on a trusted-DM turn (run-audiences Phase 1a)', () => 
   });
 
   it('cross-person: scheduling for a NON-roster name is refused', async () => {
-    ctx = await setupTestRuntime({ deliveryMode: 'tool', owner: { name: 'Devon', identities: ['+15551230000'] } });
+    ctx = await setupTestRuntime({ owner: { name: 'Devon', identities: ['+15551230000'] } });
     const devon = makeChannelEvent({ text: 'remind Stranger tomorrow' });
     await ctx.store.appendInbound(devon);
     setTurnModel([
@@ -179,8 +166,7 @@ describe('self-scheduling on a trusted-DM turn (run-audiences Phase 1a)', () => 
         toolName: 'schedule_create',
         input: JSON.stringify({ kind: 'once', spec: '2027-01-01T09:00:00.000Z', prompt: 'x', for: 'Stranger' }),
       },
-      { type: 'tool-call', toolName: 'send_message', input: JSON.stringify({ text: 'ok' }) },
-      { type: 'text', text: '' },
+      { type: 'text', text: 'ok' },
     ]);
 
     const run = await start(runConversation, [{ threadId: devon.threadId }]);
@@ -189,7 +175,7 @@ describe('self-scheduling on a trusted-DM turn (run-audiences Phase 1a)', () => 
   });
 
   it('list_runs shows the owner all schedules', async () => {
-    ctx = await setupTestRuntime({ deliveryMode: 'tool' });
+    ctx = await setupTestRuntime();
     const { createSchedule } = await import('../../src/scheduler/index.js');
     await createSchedule(ctx.db.db, {
       kind: 'cron',
@@ -203,8 +189,7 @@ describe('self-scheduling on a trusted-DM turn (run-audiences Phase 1a)', () => 
     await ctx.store.appendInbound(event);
     setTurnModel([
       { type: 'tool-call', toolName: 'list_runs', input: JSON.stringify({}) },
-      { type: 'tool-call', toolName: 'send_message', input: JSON.stringify({ text: 'Here they are.' }) },
-      { type: 'text', text: '' },
+      { type: 'text', text: 'Here they are.' },
     ]);
 
     const run = await start(runConversation, [{ threadId: event.threadId }]);
