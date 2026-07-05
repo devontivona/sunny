@@ -223,10 +223,19 @@ function Part({ part, delivered }: { part: AnyPart; delivered: boolean }) {
     if (delivered && text.replaceAll(NO_REPLY, '').trim() === '') {
       return <div className="my-xs text-fg-dim italic">(chose silence — no reply sent)</div>;
     }
-    // Delivered reply text at full prominence; interim notes dimmed.
+    // Delivered reply text at full prominence with its own label (mirrors [update]);
+    // interim notes dimmed.
     return delivered ? (
-      <div className="my-xs text-fg">
-        <Markdown>{text.replaceAll(NO_REPLY, '').trim()}</Markdown>
+      <div className="my-xs flex items-baseline gap-sm">
+        <span
+          className="shrink-0 text-primary"
+          title="The turn's final text — delivered to the user as the reply."
+        >
+          [reply]
+        </span>
+        <div className="min-w-0 flex-1 text-fg">
+          <Markdown>{text.replaceAll(NO_REPLY, '').trim()}</Markdown>
+        </div>
       </div>
     ) : (
       <div className="my-xs opacity-60">
@@ -242,17 +251,20 @@ function Part({ part, delivered }: { part: AnyPart; delivered: boolean }) {
     ) : null;
   }
   // Relayed translator update: DELIVERED to the user mid-task — full prominence,
-  // labeled so it's distinguishable from the final reply.
+  // labeled so it's distinguishable from the final reply (same layout as [reply]).
   if (part.type === 'data-translator') {
     const text = (part as { data?: { text?: string } }).data?.text;
     return text ? (
-      <div className="my-xs text-fg">
-        <span className="mr-sm text-secondary" title="Interim progress update relayed to the user by the translator while Sunny kept working.">
+      <div className="my-xs flex items-baseline gap-sm">
+        <span
+          className="shrink-0 text-secondary"
+          title="Interim progress update relayed to the user while Sunny kept working."
+        >
           [update]
         </span>
-        <span className="inline-block align-top [&>*]:inline">
+        <div className="min-w-0 flex-1 text-fg">
           <Markdown>{text}</Markdown>
-        </span>
+        </div>
       </div>
     ) : null;
   }
