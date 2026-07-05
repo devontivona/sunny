@@ -35,9 +35,26 @@ export interface TranslatorOptions {
   threadId: string;
 }
 
-/** The exact output that means "send nothing". A sentinel, not the empty string —
- *  instructing a model to output literally nothing is far less reliable. */
-const SILENCE = 'NO_UPDATE';
+/** The output that means "send nothing" — the same sentinel format as `<no-reply/>` /
+ *  `<no-report/>`. A sentinel, not the empty string: instructing a model to output
+ *  literally nothing is far less reliable. */
+const SILENCE = '<no-update/>';
+
+/** Fuzzy decline detection: `<no-update/>`, `<no-update>`, `no_update`, the legacy bare
+ *  `NO_UPDATE`, any casing/spacing. Deliberately the OPPOSITE semantics of stripNoReply:
+ *  a final reply is never swallowed (content survives a stray sentinel), but an interim
+ *  update is DISPOSABLE — if any part of the output signals "no update", the model meant
+ *  to decline, so the whole output is dropped (2026-07-05: Haiku emitted update text PLUS
+ *  the sentinel, and the sentinel-prefix check let the combined blob reach the user). */
+const NO_UPDATE_FUZZY = /<\s*no[-_\s]?update\s*\/?\s*>|\bNO_UPDATE\b/i;
+
+/** Parse the translator's raw output into "the update to send" ('' = silence). Exported
+ *  for unit tests. */
+export function parseTranslatorUpdate(raw: string): string {
+  const text = raw.trim();
+  if (!text || NO_UPDATE_FUZZY.test(text)) return '';
+  return text;
+}
 
 /** Compose one short progress update, or '' for silence (the default). */
 export async function runTranslatorPass(opts: TranslatorOptions): Promise<string> {
@@ -72,9 +89,7 @@ export async function runTranslatorPass(opts: TranslatorOptions): Promise<string
       includeRuntimeContext: { translator: true, trigger: true, langfuseSessionId: true },
     },
   });
-  const text = result.text.trim();
-  if (!text || text === SILENCE || text.startsWith(SILENCE)) return '';
-  return text;
+  return parseTranslatorUpdate(result.text);
 }
 
 function translatorSystem(subject: string): string {
@@ -111,6 +126,8 @@ function translatorSystem(subject: string): string {
     `- One voice across the turn: never re-acknowledge after the opener — no second "on it",`,
     `  no "working on it", no re-introducing the task. ${subject} already heard that. Every`,
     `  later update leads with what is NEW since the last one.`,
-    `- Output ONLY the update text (or ${SILENCE}) — no preamble, no quotes, nothing else.`,
+    `- Your ENTIRE output is one of exactly two things: the update text, or ${SILENCE} alone.`,
+    `  NEVER combine them — an output that contains ${SILENCE} anywhere is treated as`,
+    `  declining, and none of it is sent. No preamble, no quotes, no explanation.`,
   ].join('\n');
 }
