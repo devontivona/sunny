@@ -312,6 +312,16 @@ export class DurableTurnRouter {
         await this.gateway.stopTyping?.(threadId).catch(() => {});
         let status: 'finished' | 'errored' = 'finished';
         try {
+          // The chunk stream closes when the AGENT LOOP ends, but the run keeps working —
+          // backstop, sends, the persisted turn row. Settling at stream close made the
+          // dashboard's settle-refetch reliably miss the new turn row (the "user message
+          // out of order" bug, 2026-07-05). `.status` is a point-in-time read, so AWAIT the
+          // run's completion first — `done` must mean "persisted and queryable". Bounded a
+          // hair past the watchdog so an abandoned run can never wedge this bridge.
+          await Promise.race([
+            getRun<unknown>(runId).returnValue.catch(() => {}),
+            new Promise((resolve) => setTimeout(resolve, this.meta.turnWatchdogMs + 15_000).unref()),
+          ]);
           status = (await getRun<unknown>(runId).status) === 'failed' ? 'errored' : 'finished';
         } catch {
           /* keep optimistic 'finished' */
