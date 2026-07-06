@@ -162,6 +162,10 @@ export interface LiveThreadState {
   /** Increments on every streamed chunk — a stable signal for "content grew", used to
    *  keep the view scrolled to the bottom while streaming. */
   version: number;
+  /** Increments when a new INBOUND message lands on the thread (e.g. a mid-turn user
+   *  reply that folds into the running turn — it never rides the chunk stream). The
+   *  page refetches the persisted thread on this signal so the reply renders live. */
+  inboundVersion: number;
 }
 
 /**
@@ -176,6 +180,7 @@ export function useLiveThread(threadId: string | null): LiveThreadState {
   const [lastDoneRunId, setLastDoneRunId] = useState<string | null>(null);
   const [error, setError] = useState(false);
   const [version, setVersion] = useState(0);
+  const [inboundVersion, setInboundVersion] = useState(0);
 
   useEffect(() => {
     setMessage(null);
@@ -240,6 +245,9 @@ export function useLiveThread(threadId: string | null): LiveThreadState {
         /* ignore a malformed frame */
       }
     });
+    es.addEventListener('inbound', () => {
+      if (!cancelled) setInboundVersion((v) => v + 1);
+    });
     es.addEventListener('done', (e) => {
       try {
         if (!cancelled) setRun(JSON.parse((e as MessageEvent).data) as LiveRun);
@@ -276,7 +284,7 @@ export function useLiveThread(threadId: string | null): LiveThreadState {
     };
   }, [threadId]);
 
-  return { message, run, lastDoneRunId, error, version };
+  return { message, run, lastDoneRunId, error, version, inboundVersion };
 }
 
 /** Re-render every second while `running` so elapsed-time labels tick. The value

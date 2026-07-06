@@ -10,6 +10,10 @@ import { MEMORY_TOOL_SPECS } from '../src/agent/tools/memorySpecs.js';
 import { SEND_IMAGE_SPEC } from '../src/agent/tools/sendImageSpec.js';
 import { MESSAGE_SPEC } from '../src/agent/tools/messageSpec.js';
 import { RUNS_TOOL_SPECS, scheduleToolSpecs } from '../src/agent/tools/scheduleSpecs.js';
+import {
+  CREDENTIAL_MANAGE_SPEC,
+  type CredentialManageInput,
+} from '../src/agent/tools/credentialManageSpecs.js';
 import { DELEGATE_TASK_SPEC, type ChildModelName } from '../src/agent/tools/delegationSpecs.js';
 import { TRUSTED_DM_AUTHORITY } from '../src/agent/audience.js';
 import type { ChildToolset } from './subagent.js';
@@ -373,6 +377,21 @@ function buildTools(ctx: {
             ...RUNS_TOOL_SPECS.cancel_run,
             execute: ({ id }) =>
               cancelRunStep(id, threadId, ownerPresent, subjectName ?? ownerName),
+          }),
+        }
+      : {}),
+    // Credential registry (credentials D-CR5) — owner-DM only (credentials are owner-facing,
+    // stricter than the trusted-DM gate: family must not enumerate the vault or rewire
+    // name→reference mappings). The in-process loop registered this on owner DMs; the
+    // durable-main-loop migration dropped it (2026-07-06 regression: Sunny couldn't
+    // discover/register vault items even though bash `credentials` injection — which
+    // resolves the names this tool registers — kept working). `'use step'`-wrapped like
+    // every side-effecting execute, so a replay never re-registers.
+    ...(trustedDm && ownerPresent
+      ? {
+          credential_manage: tool({
+            ...CREDENTIAL_MANAGE_SPEC,
+            execute: (args) => credentialManageStep(args),
           }),
         }
       : {}),
@@ -841,6 +860,20 @@ async function readTopicStep(name: string): Promise<string> {
   const { execReadTopic } = await import('../src/agent/tools/memory.js');
   const { config } = await getRuntime();
   return execReadTopic(config, name);
+}
+
+/** Credential-registry actions (list/discover/register) as a durable step. The resolver comes
+ *  from env exactly like `bashStep`'s injection path, so "register" verifies against the SAME
+ *  1Password client the bash `credentials` argument resolves through. Journaled — a replayed
+ *  turn never re-registers. */
+async function credentialManageStep(args: CredentialManageInput): Promise<string> {
+  'use step';
+
+  const { getRuntime } = await import('../src/runtime.js');
+  const { execCredentialManage } = await import('../src/agent/tools/credentialManage.js');
+  const { resolverFromEnv } = await import('../src/credentials/index.js');
+  const { config } = await getRuntime();
+  return execCredentialManage(config, resolverFromEnv() ?? undefined, args);
 }
 
 /**

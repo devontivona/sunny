@@ -454,9 +454,10 @@ function startTurnStream(stream: LiveStream, runId: string): void {
     if (ev.type === 'chunk') void stream.push({ event: 'chunk', data: JSON.stringify(ev.chunk) });
     else if (ev.type === 'status')
       void stream.push({ event: 'status', data: JSON.stringify(ev.run) });
-    else {
+    else if (ev.type === 'done') {
       void stream.push({ event: 'done', data: JSON.stringify(ev.run) }).then(() => stream.close());
     }
+    // `inbound` is thread-scoped and never reaches a per-run subscription.
   });
   stream.onClosed(() => {
     closed = true;
@@ -481,6 +482,10 @@ function startThreadStream(stream: LiveStream, threadId: string): void {
     if (ev.type === 'chunk') void stream.push({ event: 'chunk', data: JSON.stringify(ev.chunk) });
     else if (ev.type === 'status')
       void stream.push({ event: 'status', data: JSON.stringify(ev.run) });
+    else if (ev.type === 'inbound')
+      // A new message landed on the thread (e.g. a mid-turn reply that folds into the
+      // running turn) — the client refetches the persisted list on this signal.
+      void stream.push({ event: 'inbound', data: ev.threadId });
     else void stream.push({ event: 'done', data: JSON.stringify(ev.run) });
   });
   stream.onClosed(() => {

@@ -56,11 +56,15 @@ export interface LiveRun {
   traceUrl: string | null;
 }
 
-/** An event delivered to a turn subscriber. */
+/** An event delivered to a turn subscriber. `inbound` goes to THREAD subscribers only:
+ *  a new message landed on the thread's inbox (a mid-turn user reply that will fold into
+ *  the running turn, or a child's report) — the Conversation page refetches the persisted
+ *  list so the message renders immediately instead of after the turn settles. */
 export type LiveEvent =
   | { type: 'status'; run: LiveRun }
   | { type: 'chunk'; chunk: UIMessageChunk }
-  | { type: 'done'; run: LiveRun };
+  | { type: 'done'; run: LiveRun }
+  | { type: 'inbound'; threadId: string };
 
 type Subscriber = (event: LiveEvent) => void;
 
@@ -130,6 +134,24 @@ export class LiveBus {
     // open on this thread begins streaming immediately).
     const entry = this.turns.get(init.runId);
     if (entry) this.emit(entry, { type: 'status', run: entry.run });
+  }
+
+  /** Notify a thread's subscribers that a new INBOUND message was persisted on it
+   *  (live-steer visibility): while a turn is streaming, a user reply that folds into
+   *  the run never rides the model-chunk stream, so without this the open Conversation
+   *  page doesn't show it until the turn settles. Carries no payload — the client
+   *  refetches the persisted thread (the source of truth), so the message renders in
+   *  its true chronological position. No-op with no subscribers. */
+  publishThreadInbound(threadId: string): void {
+    const set = this.threadSubs.get(threadId);
+    if (!set) return;
+    for (const fn of set) {
+      try {
+        fn({ type: 'inbound', threadId });
+      } catch {
+        // isolate subscriber failures
+      }
+    }
   }
 
   /** Publish a chunk to whatever turn is currently RUNNING on a thread (no-op when none).

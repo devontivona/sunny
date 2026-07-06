@@ -96,8 +96,12 @@ export class DurableTurnRouter {
   ) {}
 
   /** Route one inbound (already persisted + deduped by the gateway): ensure this thread's
-   *  serial worker is draining its unanswered inbound as durable turn-runs. */
+   *  serial worker is draining its unanswered inbound as durable turn-runs. Also tells the
+   *  live bus a message landed, so an open Conversation page shows a MID-TURN reply (one
+   *  that will fold into the running turn, invisible to the model-chunk stream) immediately
+   *  instead of after the turn settles. */
   route(event: ChannelEvent): void {
+    getLiveBus().publishThreadInbound(event.threadId);
     this.ensureWorker(event.threadId);
   }
 
@@ -108,6 +112,9 @@ export class DurableTurnRouter {
    * normal conversation thread this router already drives), or the watchdog delivering a failure.
    */
   wake(threadId: string): void {
+    // Every wake caller has just appended to the thread's inbox out-of-band (a child's
+    // report, a watchdog note) — surface it to an open Conversation page like `route`.
+    getLiveBus().publishThreadInbound(threadId);
     this.ensureWorker(threadId);
   }
 
