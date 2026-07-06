@@ -55,6 +55,6 @@
       recovery), reads it back windowed; dashboard tool catalog lists the new tools
 - [x] 4.3 Install `jq` and `fd` on the host (`apt install jq fd-find`) and add a setup note to
       the README host-deps section
-- [ ] 4.4 Deploy: merge → restart the `sunny` devbox service → commit the updated delegation
+- [x] 4.4 Deploy: merge → restart the `sunny` devbox service → commit the updated delegation
       SKILL.md to the live canonical authored-skills repo (edited seeds don't propagate;
       the new coding skill seeds itself on restart)
