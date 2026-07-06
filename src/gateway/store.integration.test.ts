@@ -168,5 +168,16 @@ describe('ConversationStore (integration, PGlite)', () => {
       expect(payload.parts[0]?.type).toBe('tool-send_message');
       expect(payload.parts[0]?.input?.text).toBe('your job finished');
     });
+
+    it('R10: is idempotent on a durable-step retry — same (channel, messageId) does not throw, one row', async () => {
+      // A durable step that re-runs on replay can re-insert the same outbound row; like
+      // appendInbound, that must be a no-op, not a unique-constraint violation.
+      await store.appendOutbound(OWNER_THREAD, 'out-dup', 'retried delivery');
+      await expect(
+        store.appendOutbound(OWNER_THREAD, 'out-dup', 'retried delivery'),
+      ).resolves.toBeUndefined();
+      const win = await store.recentWindow(OWNER_THREAD);
+      expect(win.filter((m) => m.role === 'assistant')).toHaveLength(1);
+    });
   });
 });

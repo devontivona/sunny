@@ -1,9 +1,12 @@
+import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { describe, it, expect } from 'vitest';
 import { makeConfig } from '../../tests/factories.js';
 import { FakeResolver } from '../../tests/fakes/credentials.js';
 import { execCredentialManage } from '../agent/tools/credentialManage.js';
 import {
   buildReference,
+  credentialsPath,
   isOpReference,
   listCredentials,
   loadRegistry,
@@ -67,6 +70,35 @@ describe('credential registry (D-CR5)', () => {
     const { runtimeDir } = makeConfig();
     const resolver = new FakeResolver({});
     await expect(resolveByName(resolver, runtimeDir, 'missing')).rejects.toThrow(/ask the owner/);
+  });
+});
+
+describe('credential registry corruption safety (D-CR5)', () => {
+  it('quarantines a corrupt credentials.json and refuses to overwrite it to empty', async () => {
+    const { runtimeDir } = makeConfig();
+    // A real mapping, then the file corrupted on disk (torn write / bad hand-edit).
+    await registerCredential(runtimeDir, 'gmail', 'op://Sunny/gmail/password');
+    const file = credentialsPath(runtimeDir);
+    writeFileSync(file, '{ this is not valid json', 'utf8');
+
+    // The next registration must NOT silently treat the corrupt file as empty and
+    // then persist that empty view (erasing every mapping).
+    await expect(registerCredential(runtimeDir, 'other', 'op://Sunny/other/token')).rejects.toThrow(
+      /corrupt/,
+    );
+
+    // The corrupt bytes are preserved in a quarantine sibling, not lost.
+    const dir = dirname(file);
+    const backup = readdirSync(dir).find((f) => f.startsWith('credentials.json.corrupt-'));
+    expect(backup).toBeDefined();
+    expect(readFileSync(join(dir, backup!), 'utf8')).toContain('this is not valid json');
+  });
+
+  it('writes atomically — no torn temp file is left behind', async () => {
+    const { runtimeDir } = makeConfig();
+    await registerCredential(runtimeDir, 'gmail', 'op://Sunny/gmail/password');
+    const dir = dirname(credentialsPath(runtimeDir));
+    expect(readdirSync(dir).filter((f) => f.includes('credentials.json.tmp-'))).toEqual([]);
   });
 });
 

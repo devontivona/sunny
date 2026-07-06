@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import type { SunnyConfig } from '../config/index.js';
 import { logger } from '../logger.js';
+import { sanitizeSlug } from '../slug.js';
 import { SEED_SKILLS } from './seeds.js';
 
 const log = logger('skills');
@@ -126,15 +127,10 @@ function skillRoots(
   return roots;
 }
 
-/** Restrict skill names to a safe slug — prevents path traversal. */
+/** Restrict skill names to a safe slug — prevents path traversal (shares the one `sanitizeSlug`
+ *  canonicalizer with the MCP/credential/memory normalizers). */
 export function sanitizeSkillName(name: string): string {
-  const slug = name
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-  if (!slug) throw new Error(`invalid skill name: ${name}`);
-  return slug;
+  return sanitizeSlug(name, 'skill name');
 }
 
 // --- parsing / validation --------------------------------------------------

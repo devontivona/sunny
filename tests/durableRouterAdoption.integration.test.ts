@@ -39,7 +39,11 @@ describe('DurableTurnRouter orphan adoption (restart safety)', () => {
     await tdb.teardown();
   });
 
-  const meta = { modelId: 'claude-sonnet-5', effort: 'high' as string | null, turnWatchdogMs: 5000 };
+  const meta = {
+    modelId: 'claude-sonnet-5',
+    effort: 'high' as string | null,
+    turnWatchdogMs: 5000,
+  };
 
   it('recovery queues BEHIND a healthy adopted orphan — never a duplicate run', async () => {
     // The restart shape: an inbound is persisted but unanswered, and the run answering it
@@ -100,6 +104,40 @@ describe('DurableTurnRouter orphan adoption (restart safety)', () => {
     await sleep(200);
     expect(runsStarted).toHaveLength(1);
     expect(await store.hasUnansweredInbound(event.threadId)).toBe(false);
+  });
+
+  it('adopting THREE running runs for the same thread tracks and drives ALL (no last-wins drop)', async () => {
+    // A thread can have 3+ runs RUNNING at restart (e.g. mid-turn steers spawned extra runs).
+    // adoptRun is called in a synchronous loop: the first adopt starts the worker (which
+    // synchronously consumes orphan #1 and suspends on its drive), so #2 and #3 land while the
+    // worker is BUSY — a last-wins `.set` overwrites #2 with #3, and #2 is never
+    // driven/watchdogged/cancelled. Track every same-thread orphan instead.
+    const event = makeChannelEvent({ text: 'three orphans from before the restart' });
+    await store.appendInbound(event);
+
+    const cancelled = [false, false, false];
+    const orphans: TurnRunHandle[] = cancelled.map((_, i) => ({
+      runId: `orphan-${i}`,
+      returnValue: new Promise<void>(() => {}), // hangs → watchdog abandons → cancel()
+      cancel: async () => {
+        cancelled[i] = true;
+      },
+    }));
+
+    const router = new DurableTurnRouter(
+      gateway,
+      store,
+      { ...meta, turnWatchdogMs: 50 },
+      async () => {
+        throw new Error('no fresh runs expected — every orphan should be driven');
+      },
+    );
+
+    for (const o of orphans) router.adoptRun(event.threadId, o);
+
+    // EVERY orphan is driven through the full machinery and watchdog-abandoned; the last-wins
+    // bug would leave the middle one (overwritten while the worker was busy) never cancelled.
+    await vi.waitFor(() => expect(cancelled).toEqual([true, true, true]), { timeout: 4000 });
   });
 
   it('an adopted orphan gets the watchdog: a hung orphan is abandoned, not eternal', async () => {

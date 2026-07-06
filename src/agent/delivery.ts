@@ -207,16 +207,27 @@ export function extractReportBlocks(text: string): { reports: string[]; rest: st
  * - no final, silence signaled (sentinel; or a legacy row's stay_silent call) → `silence`
  * - no final, interim narration only → `fallback_text` (the empty-final miss; the
  *   recovery backstop composes the reply from the narration)
- * - nothing at all → `silence`
+ * - no final/interim but an ABNORMAL finish (step-limit / length / error) → `fallback_text`:
+ *   a thinking turn can do real tool work while writing nothing (reasoning is dropped and
+ *   tool-call parts aren't interim text), so an abnormal end with nothing delivered is the
+ *   empty-final miss too — it must route to the backstop, NOT be swallowed as a no-reply.
+ * - nothing at all, finished normally → `silence`
+ *
+ * `finishReason` is the last step's finish reason (`result.finishReason`); undefined is
+ * treated as a normal finish so legacy 3-arg callers keep their prior behavior.
  */
 export function classifyTextDelivery(
   finalText: string,
   interimText: string,
   staySilent: boolean,
+  finishReason?: string,
 ): Delivery {
   if (finalText) return 'text';
   if (staySilent) return 'silence';
   if (interimText) return 'fallback_text';
+  // A deliberate turn ends on `stop` (reply text or the silence sentinel). Any other finish
+  // with nothing delivered is abnormal — treat it as the empty-final miss, not silence.
+  if (finishReason && finishReason !== 'stop') return 'fallback_text';
   return 'silence';
 }
 

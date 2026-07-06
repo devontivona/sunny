@@ -87,12 +87,13 @@ export class SendblueGateway implements Gateway {
     const apiSecret = process.env.SENDBLUE_API_SECRET;
     const fromNumber = process.env.SENDBLUE_FROM_NUMBER;
     const webhookSecret = process.env.SENDBLUE_WEBHOOK_SECRET;
-    if (!apiKey || !apiSecret || !fromNumber) {
+    if (!apiKey || !apiSecret || !fromNumber || !webhookSecret) {
       throw new Error(
-        'Sendblue needs SENDBLUE_API_KEY, SENDBLUE_API_SECRET, and SENDBLUE_FROM_NUMBER ' +
-          'in the environment (Sendblue dashboard → API keys + your Sendblue number). ' +
-          'SENDBLUE_WEBHOOK_SECRET is recommended to verify inbound deliveries. ' +
-          'See README → "Live setup".',
+        'Sendblue needs SENDBLUE_API_KEY, SENDBLUE_API_SECRET, SENDBLUE_FROM_NUMBER, and ' +
+          'SENDBLUE_WEBHOOK_SECRET in the environment (Sendblue dashboard → API keys + your ' +
+          'Sendblue number). SENDBLUE_WEBHOOK_SECRET is REQUIRED so inbound webhooks are always ' +
+          'signature-verified: without it the adapter skips verification and anyone who finds the ' +
+          'webhook URL could POST a spoofed inbound as the owner. See README → "Live setup".',
       );
     }
 
@@ -232,7 +233,21 @@ export class SendblueGateway implements Gateway {
     // The conversational loop persists its own per-turn record (D-MG9), so it
     // opts out here; proactive/Tier-2 sends persist a standalone outbound row.
     if (opts?.persist ?? true) {
-      await this.store.appendOutbound(threadId, sentId, text, 'imessage', media);
+      // The transport send has ALREADY happened. On the persist:true proactive/relay/scheduled
+      // paths this runs inside a retried WDK step, so a thrown persist error would retry the whole
+      // step and text the user twice (R10-send). Swallow it: losing an outbound history row is
+      // acceptable; re-sending the message is not. `sentId` is the stable provider-returned id, so
+      // the idempotent appendOutbound (onConflictDoNothing on channel+messageId) dedups if the step
+      // does retry for another reason.
+      try {
+        await this.store.appendOutbound(threadId, sentId, text, 'imessage', media);
+      } catch (err) {
+        log.error('appendOutbound failed after a successful send; outbound history row lost', {
+          threadId,
+          messageId: sentId,
+          err: String(err),
+        });
+      }
     }
     log.info('sent message', {
       threadId,
@@ -399,7 +414,7 @@ export class SendblueGateway implements Gateway {
           url: a.url,
         };
       }),
-      timestamp: message.metadata?.dateSent ?? new Date(),
+      timestamp: normalizeDateSent(message.metadata?.dateSent),
       isGroup,
       isOwner: auth.isOwner,
       isTrusted: auth.isTrusted,
@@ -491,6 +506,19 @@ export class SendblueGateway implements Gateway {
     }
     return refs;
   }
+}
+
+/**
+ * Normalize an inbound `dateSent` to a valid Date. The adapter builds it as
+ * `new Date(raw.date_sent)`, so a missing/malformed `date_sent` yields a non-nullish
+ * Invalid Date — which `?? new Date()` does NOT catch. An Invalid Date flows into the
+ * stored userPayload where `.toISOString()` throws a RangeError BEFORE the inbound row
+ * is persisted; because the webhook 200 was already acked (fire-and-forget), the message
+ * would be silently dropped. Guard the invalid case and fall back to now.
+ */
+export function normalizeDateSent(dateSent: Date | undefined): Date {
+  if (dateSent && !Number.isNaN(dateSent.getTime())) return dateSent;
+  return new Date();
 }
 
 /**

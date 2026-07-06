@@ -168,9 +168,7 @@ async function scheduledMessageStep(
   'use step';
 
   const { getRuntime } = await import('../src/runtime.js');
-  const { normalize } = await import('../src/gateway/auth.js');
-  const { sendblueDmThreadId } = await import('../src/gateway/threadId.js');
-  const { resolveRosterMember } = await import('../src/agent/audience.js');
+  const { resolveRosterMember, resolveMemberThread } = await import('../src/agent/audience.js');
   const { config, store, gateway } = await getRuntime();
 
   const member = resolveRosterMember(recipient, config);
@@ -182,13 +180,10 @@ async function scheduledMessageStep(
   if (member.name === subjectName(audience, config)) {
     return `${member.name} already receives this run's result — put it in your final reply instead of messaging them.`;
   }
-  const identity = normalize(member.identity);
-  let threadId = await store.findDmThreadForSender(identity);
-  if (!threadId) {
-    const from = process.env.SENDBLUE_FROM_NUMBER;
-    if (!from) return `I don't have a conversation with ${member.name} yet and can't start one.`;
-    threadId = sendblueDmThreadId(from, identity);
-  }
+  // Existing DM if we have one, else a constructed Sendblue DM id (shared resolve tail). Null ⟺
+  // no thread AND no from-number.
+  const threadId = await resolveMemberThread(store, member.identity);
+  if (!threadId) return `I don't have a conversation with ${member.name} yet and can't start one.`;
   await gateway.send(threadId, { text }, { persist: true });
   return `Sent to ${member.name}.`;
 }

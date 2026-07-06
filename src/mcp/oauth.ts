@@ -1,5 +1,12 @@
 import { randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import type {
   OAuthClientInformation,
@@ -108,9 +115,16 @@ export class SunnyOAuthProvider implements OAuthClientProvider {
     }
   }
 
-  private write(patch: Partial<OAuthStore>): void {
-    const next = { ...this.read(), ...patch };
-    writeFileSync(this.file, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
+  /** Serialized, atomic read-modify-write of the token store. A fresh provider is
+   *  created per connection, so — unlike every other store here — the lock must be
+   *  MODULE-level ({@link serializeOAuthWrite}) to serialize concurrent refreshes
+   *  writing the same file. Without it, two refreshes could interleave their
+   *  read-spread-write and clobber a just-rotated refresh token → `invalid_grant`. */
+  private write(patch: Partial<OAuthStore>): Promise<void> {
+    return serializeOAuthWrite(() => {
+      const next = { ...this.read(), ...patch };
+      atomicWriteStore(this.file, `${JSON.stringify(next, null, 2)}\n`);
+    });
   }
 
   get redirectUrl(): string {
@@ -131,20 +145,20 @@ export class SunnyOAuthProvider implements OAuthClientProvider {
     return this.read().clientInformation;
   }
 
-  saveClientInformation(info: OAuthClientInformation): void {
-    this.write({ clientInformation: info });
+  saveClientInformation(info: OAuthClientInformation): Promise<void> {
+    return this.write({ clientInformation: info });
   }
 
   tokens(): OAuthTokens | undefined {
     return this.read().tokens;
   }
 
-  saveTokens(tokens: OAuthTokens): void {
-    this.write({ tokens });
+  saveTokens(tokens: OAuthTokens): Promise<void> {
+    return this.write({ tokens });
   }
 
-  saveCodeVerifier(codeVerifier: string): void {
-    this.write({ codeVerifier });
+  saveCodeVerifier(codeVerifier: string): Promise<void> {
+    return this.write({ codeVerifier });
   }
 
   codeVerifier(): string {
@@ -153,17 +167,17 @@ export class SunnyOAuthProvider implements OAuthClientProvider {
     return v;
   }
 
-  saveState(state: string): void {
-    this.write({ state });
+  saveState(state: string): Promise<void> {
+    return this.write({ state });
   }
 
   /** Mint a FRESH CSRF state for a new authorization request and persist it so the
    *  callback can validate it (`storedState`). This is generate-and-save, NOT a read
    *  of prior state — reading the stored value is `storedState()`. (The earlier
    *  read-and-throw here was the "no OAuth state stored" connect failure.) */
-  state(): string {
+  async state(): Promise<string> {
     const s = randomBytes(16).toString('base64url');
-    this.write({ state: s });
+    await this.write({ state: s });
     return s;
   }
 
@@ -171,16 +185,18 @@ export class SunnyOAuthProvider implements OAuthClientProvider {
     return this.read().state;
   }
 
-  invalidateCredentials(scope: 'all' | 'client' | 'tokens' | 'verifier'): void {
-    const store = this.read();
-    if (scope === 'all') {
-      writeFileSync(this.file, '{}\n', { mode: 0o600 });
-      return;
-    }
-    if (scope === 'client') delete store.clientInformation;
-    if (scope === 'tokens') delete store.tokens;
-    if (scope === 'verifier') delete store.codeVerifier;
-    writeFileSync(this.file, `${JSON.stringify(store, null, 2)}\n`, { mode: 0o600 });
+  invalidateCredentials(scope: 'all' | 'client' | 'tokens' | 'verifier'): Promise<void> {
+    return serializeOAuthWrite(() => {
+      if (scope === 'all') {
+        atomicWriteStore(this.file, '{}\n');
+        return;
+      }
+      const store = this.read();
+      if (scope === 'client') delete store.clientInformation;
+      if (scope === 'tokens') delete store.tokens;
+      if (scope === 'verifier') delete store.codeVerifier;
+      atomicWriteStore(this.file, `${JSON.stringify(store, null, 2)}\n`);
+    });
   }
 
   // --- policy seams ---------------------------------------------------------
@@ -219,6 +235,30 @@ function originOf(url: string | URL): string {
   } catch {
     return String(url);
   }
+}
+
+// Serialized OAuth-store writes (mirrors the credential/registry/memory stores'
+// R7 write chains). MODULE-level on purpose: a fresh provider is created per
+// connection, so an instance lock wouldn't serialize two concurrent refreshes of
+// the same server. The read-modify-write runs inside the critical section so a
+// second refresh always sees the first's rotated tokens instead of clobbering them.
+let oauthWriteChain: Promise<unknown> = Promise.resolve();
+function serializeOAuthWrite(fn: () => void): Promise<void> {
+  const next = oauthWriteChain.then(fn, fn);
+  oauthWriteChain = next.then(
+    () => undefined,
+    () => undefined,
+  );
+  return next;
+}
+
+/** Atomic store write: temp file + rename, so a crash or concurrent reader never
+ *  sees a torn/half-written JSON (which `read()` would swallow as empty and then
+ *  clobber on the next write). */
+function atomicWriteStore(file: string, data: string): void {
+  const tmp = `${file}.tmp-${process.pid}-${randomBytes(6).toString('hex')}`;
+  writeFileSync(tmp, data, { mode: 0o600 });
+  renameSync(tmp, file);
 }
 
 // --- store helpers (used by the loop guard + the OAuth callback route) ------

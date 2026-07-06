@@ -36,6 +36,11 @@ export function sanitizePgJson<T>(value: T): T {
   if (typeof value === 'string') return sanitizePgText(value) as unknown as T;
   if (Array.isArray(value)) return value.map((v) => sanitizePgJson(v)) as unknown as T;
   if (value && typeof value === 'object') {
+    // Respect `toJSON` first (Date, Buffer, …) so a class instance serializes the way the
+    // JSONB writer (JSON.stringify) would — e.g. a Date -> its ISO string — instead of being
+    // flattened to `{}` by the Object.entries walk below and silently lost on read/replay.
+    const maybe = value as { toJSON?: (key?: unknown) => unknown };
+    if (typeof maybe.toJSON === 'function') return sanitizePgJson(maybe.toJSON()) as unknown as T;
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
       out[k] = sanitizePgJson(v);

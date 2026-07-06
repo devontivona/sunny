@@ -1,4 +1,5 @@
 import type { SunnyConfig } from '../config/index.js';
+import { normalize } from '../gateway/auth.js';
 
 /**
  * Audience — the logical recipient of a durable run (run-audiences D-RA2). Pure addressing: it
@@ -126,7 +127,7 @@ export function resolveRosterMember(
   const wanted = person.trim();
   const match =
     roster.find((p) => p.name.toLowerCase() === wanted.toLowerCase()) ??
-    roster.find((p) => p.identities.some((id) => normalizeLoose(id) === normalizeLoose(wanted)));
+    roster.find((p) => p.identities.some((id) => normalize(id) === normalize(wanted)));
   if (!match || match.identities.length === 0) return null;
   return { name: match.name, identity: match.identities[0]! };
 }
@@ -150,11 +151,24 @@ function subjectOfThread(threadId: string, config: SunnyConfig): string | null {
   return rosterMatch(contact, config);
 }
 
-/** Loose identity normalization for matching (mirrors gateway/auth `normalize` without importing
- *  it — keeps this module free of the auth module's deps): E.164-ish digits, lowercased email. */
-function normalizeLoose(identity: string): string {
-  const t = identity.trim();
-  if (t.includes('@')) return t.toLowerCase();
-  const digits = t.replace(/[^\d+]/g, '');
-  return digits.startsWith('+') ? digits : `+${digits}`;
+/**
+ * Resolve a roster member's identity to their BOUND DM thread: their existing DM if we have one,
+ * else a Sendblue DM id constructed deterministically from `SENDBLUE_FROM_NUMBER`. Returns null
+ * only when no thread exists AND no from-number is configured to construct one. The identity is
+ * canonicalized through the gateway `normalize` (the same encoding the adapter uses for thread
+ * ids), so a resolved member addresses the thread the adapter would. The shared tail of every
+ * cross-person send (`personRelayStepBody`, `scheduledMessageStep`) — behavior-identical to the
+ * copies they replace. Node-free at module scope (runtime deps are dynamic-imported), so workflow
+ * code can import it without pulling Node into the module graph.
+ */
+export async function resolveMemberThread(
+  store: { findDmThreadForSender(identity: string): Promise<string | null> },
+  rawIdentity: string,
+): Promise<string | null> {
+  const { sendblueDmThreadId } = await import('../gateway/threadId.js');
+  const identity = normalize(rawIdentity);
+  const existing = await store.findDmThreadForSender(identity);
+  if (existing) return existing;
+  const from = process.env.SENDBLUE_FROM_NUMBER;
+  return from ? sendblueDmThreadId(from, identity) : null;
 }

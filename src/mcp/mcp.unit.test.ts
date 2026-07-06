@@ -1,3 +1,5 @@
+import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { makeConfig } from '../../tests/factories.js';
 import { FakeResolver } from '../../tests/fakes/credentials.js';
@@ -10,6 +12,7 @@ import {
   listEnabledMcpServers,
   listMcpServers,
   loadMcpRegistry,
+  mcpRegistryPath,
   normalizeMcpName,
   registerMcpServer,
   removeMcpServer,
@@ -76,6 +79,35 @@ describe('mcp registry (D-MCP2)', () => {
   it('normalizes names and extracts the host (not the full URL)', () => {
     expect(normalizeMcpName('Craft DO')).toBe('craft-do');
     expect(serverHost(CRAFT_URL)).toBe('mcp.craft.do');
+  });
+});
+
+describe('mcp registry corruption safety (D-MCP2)', () => {
+  it('quarantines a corrupt mcp.json and refuses to overwrite it to empty', async () => {
+    const { runtimeDir } = makeConfig();
+    // A real registered server, then the file corrupted on disk (torn write / bad edit).
+    await registerMcpServer(runtimeDir, 'craft', { url: CRAFT_URL });
+    const file = mcpRegistryPath(runtimeDir);
+    writeFileSync(file, '{ this is not valid json', 'utf8');
+
+    // The next mutating write must NOT silently treat the corrupt file as empty and
+    // then persist that empty view (erasing every registered server).
+    await expect(
+      registerMcpServer(runtimeDir, 'other', { url: 'https://x.example/mcp' }),
+    ).rejects.toThrow(/corrupt/);
+
+    // The corrupt bytes are preserved in a quarantine sibling, not lost.
+    const backup = readdirSync(runtimeDir).find((f) => f.startsWith('mcp.json.corrupt-'));
+    expect(backup).toBeDefined();
+    expect(readFileSync(join(runtimeDir, backup!), 'utf8')).toContain('this is not valid json');
+  });
+
+  it('writes atomically — no torn temp file is left behind', async () => {
+    const { runtimeDir } = makeConfig();
+    await registerMcpServer(runtimeDir, 'craft', { url: CRAFT_URL });
+    await setMcpEnabled(runtimeDir, 'craft', true);
+    expect(readdirSync(runtimeDir).filter((f) => f.includes('mcp.json.tmp-'))).toEqual([]);
+    expect(getMcpServer(runtimeDir, 'craft')?.enabled).toBe(true);
   });
 });
 
@@ -150,7 +182,7 @@ describe('SunnyOAuthProvider origin allowlist (D-MCP5)', () => {
     ).toThrow(/not allowlisted/);
   });
 
-  it('state() mints + persists a fresh CSRF state (storedState reads it) — never throws', () => {
+  it('state() mints + persists a fresh CSRF state (storedState reads it) — never throws', async () => {
     const { runtimeDir } = makeConfig();
     const p = new SunnyOAuthProvider({
       runtimeDir,
@@ -158,13 +190,13 @@ describe('SunnyOAuthProvider origin allowlist (D-MCP5)', () => {
       serverUrl: 'https://svc.example/mcp',
     });
     expect(p.storedState()).toBeUndefined();
-    const s1 = p.state();
+    const s1 = await p.state();
     expect(s1).toBeTruthy();
     expect(p.storedState()).toBe(s1); // persisted for callback validation
-    expect(p.state()).not.toBe(s1); // a fresh request mints a new one
+    expect(await p.state()).not.toBe(s1); // a fresh request mints a new one
   });
 
-  it('tracks token presence and finds a server by in-flight state', () => {
+  it('tracks token presence and finds a server by in-flight state', async () => {
     const { runtimeDir } = makeConfig();
     const p = new SunnyOAuthProvider({
       runtimeDir,
@@ -173,12 +205,71 @@ describe('SunnyOAuthProvider origin allowlist (D-MCP5)', () => {
     });
     expect(oauthTokensPresent(runtimeDir, 'svc')).toBe(false);
 
-    const state = p.state();
+    const state = await p.state();
     expect(findOAuthServerByState(runtimeDir, state)).toBe('svc');
     expect(findOAuthServerByState(runtimeDir, 'no-such-state')).toBeNull();
 
-    p.saveTokens({ access_token: 'tok', token_type: 'bearer' });
+    await p.saveTokens({ access_token: 'tok', token_type: 'bearer' });
     expect(oauthTokensPresent(runtimeDir, 'svc')).toBe(true);
+  });
+});
+
+describe('SunnyOAuthProvider serialized token store (D-MCP5)', () => {
+  const storePath = (runtimeDir: string) =>
+    join(runtimeDir, 'mcp-oauth', `${normalizeMcpName('svc')}.json`);
+  const mk = (runtimeDir: string) =>
+    new SunnyOAuthProvider({
+      runtimeDir,
+      serverName: 'svc',
+      serverUrl: 'https://svc.example/mcp',
+    });
+
+  it('concurrent writes across per-connection providers never lose a field', async () => {
+    const { runtimeDir } = makeConfig();
+    // A fresh provider PER connection (as the connect path does): the write lock is
+    // module-level, so these interleaved writes to distinct fields all survive.
+    await Promise.all([
+      mk(runtimeDir).saveTokens({
+        access_token: 'a1',
+        token_type: 'bearer',
+        refresh_token: 'RT1',
+      }),
+      mk(runtimeDir).saveClientInformation({ client_id: 'cid' } as never),
+      mk(runtimeDir).saveCodeVerifier('verifier'),
+      mk(runtimeDir).saveState('state-1'),
+    ]);
+    const store = JSON.parse(readFileSync(storePath(runtimeDir), 'utf8'));
+    expect(store.tokens?.refresh_token).toBe('RT1');
+    expect(store.clientInformation?.client_id).toBe('cid');
+    expect(store.codeVerifier).toBe('verifier');
+    expect(store.state).toBe('state-1');
+    // Atomic writes leave no torn temp file.
+    expect(readdirSync(join(runtimeDir, 'mcp-oauth')).filter((f) => f.includes('.tmp-'))).toEqual(
+      [],
+    );
+  });
+
+  it('two concurrent saveTokens keep a full, valid tokens object (no partial clobber)', async () => {
+    const { runtimeDir } = makeConfig();
+    await mk(runtimeDir).saveClientInformation({ client_id: 'cid' } as never);
+    await Promise.all([
+      mk(runtimeDir).saveTokens({
+        access_token: 'a1',
+        token_type: 'bearer',
+        refresh_token: 'RT-a',
+      }),
+      mk(runtimeDir).saveTokens({
+        access_token: 'a2',
+        token_type: 'bearer',
+        refresh_token: 'RT-b',
+      }),
+    ]);
+    const store = JSON.parse(readFileSync(storePath(runtimeDir), 'utf8'));
+    // Earlier client info is not clobbered, and whichever token write landed last is
+    // a complete object carrying its rotated refresh token — never a partial store.
+    expect(store.clientInformation?.client_id).toBe('cid');
+    expect(store.tokens?.access_token).toBeDefined();
+    expect(['RT-a', 'RT-b']).toContain(store.tokens?.refresh_token);
   });
 });
 

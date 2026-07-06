@@ -72,15 +72,3 @@ export type ChildModelName = keyof typeof CHILD_MODELS;
 export function resolveChildModel(name?: string): string | undefined {
   return name && name in CHILD_MODELS ? CHILD_MODELS[name as ChildModelName] : undefined;
 }
-
-export const MESSAGE_SUBAGENT_SPEC = {
-  description:
-    'Send a steering message to a child subagent that is still working (use the id returned by ' +
-    'delegate_task). Use it to pass new information or adjust course; the child folds it into ' +
-    'its work at its next step. Prefer this over aborting + re-delegating unless the task itself ' +
-    'is invalidated. Do not micromanage.',
-  inputSchema: z.object({
-    child: z.string().min(1).describe('The subagent id returned by delegate_task.'),
-    text: z.string().min(1).describe("The message/instruction to fold into the child's work."),
-  }),
-} as const;

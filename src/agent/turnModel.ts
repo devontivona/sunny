@@ -34,18 +34,6 @@ export function buildTurnModel(
 }
 
 /**
- * Build a plain Anthropic model INSTANCE for the Tier-2 job workflows (`job.ts`/`scheduledJob.ts`).
- * Constructed here, in a Node-free module, rather than importing `@ai-sdk/anthropic` directly into
- * a `'use workflow'` module — the WDK bundler rejects Node-tainted packages imported directly in
- * workflow code, but allows them behind a helper module (same reason `buildTurnModel` lives here).
- * The instance is WDK-serializable (`AnthropicLanguageModel` implements the serde protocol), so
- * `WorkflowAgent` can journal it across the `doStreamStep` boundary.
- */
-export function buildModel(modelId: string): LanguageModel {
-  return anthropic(modelId);
-}
-
-/**
  * The mock responses scripted for a turn, or undefined in production. Read in a STEP (the workflow
  * body runs in an isolated context where a `globalThis` override is NOT visible).
  *

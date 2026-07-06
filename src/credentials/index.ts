@@ -1,9 +1,10 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { Client } from '@1password/sdk';
 import { stateDir } from '../config/index.js';
 import { commitState } from '../state/index.js';
 import { logger } from '../logger.js';
+import { sanitizeSlug } from '../slug.js';
 
 const log = logger('credentials');
 
@@ -167,15 +168,10 @@ export function credentialsPath(runtimeDir: string): string {
   return join(stateDir(runtimeDir), 'credentials.json');
 }
 
-/** Normalize a symbolic credential name to a stable registry key. */
+/** Normalize a symbolic credential name to a stable registry key (shares the one `sanitizeSlug`
+ *  canonicalizer with the MCP/skill/memory normalizers). */
 export function normalizeCredentialName(name: string): string {
-  const slug = name
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-  if (!slug) throw new Error(`invalid credential name: ${name}`);
-  return slug;
+  return sanitizeSlug(name, 'credential name');
 }
 
 export function loadRegistry(runtimeDir: string): CredentialRegistry {
@@ -185,8 +181,17 @@ export function loadRegistry(runtimeDir: string): CredentialRegistry {
     const raw: unknown = JSON.parse(readFileSync(file, 'utf8'));
     return raw && typeof raw === 'object' ? (raw as CredentialRegistry) : {};
   } catch (err) {
-    log.warn('could not parse credentials registry (treating as empty)', { err: String(err) });
-    return {};
+    // A corrupt registry must NOT be silently treated as empty: the next
+    // registerCredential would then persist that empty view and permanently erase
+    // every mapping. Quarantine the unparseable file (preserving it for recovery)
+    // and refuse to proceed, so no write can clobber it to empty.
+    const quarantine = `${file}.corrupt-${Date.now()}`;
+    renameSync(file, quarantine);
+    log.error('credentials registry unparseable — quarantined, refusing to overwrite', {
+      err: String(err),
+      quarantine,
+    });
+    throw new Error(`credentials registry ${file} is corrupt; quarantined to ${quarantine}`);
   }
 }
 
@@ -231,7 +236,11 @@ export function registerCredential(
     registry[key] = entry;
     const file = credentialsPath(runtimeDir);
     mkdirSync(dirname(file), { recursive: true });
-    writeFileSync(file, `${JSON.stringify(registry, null, 2)}\n`, { mode: 0o644 });
+    // Atomic write: a temp file + rename so a crash or concurrent reader never sees
+    // a torn/half-written registry (which would parse-fail and be quarantined).
+    const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
+    writeFileSync(tmp, `${JSON.stringify(registry, null, 2)}\n`, { mode: 0o644 });
+    renameSync(tmp, file);
     // Commit the registry update to the `state` repo (runtime-home). Best-effort:
     // never fails the registration, even with no repo.
     await commitState(runtimeDir, `credentials: register ${key}`);

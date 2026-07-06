@@ -93,11 +93,7 @@ function Bubble({ m }: { m: ConversationMessage }) {
           {m.attachments.map((a, i) =>
             a.kind === 'image' ? (
               <a key={i} href={a.src} target="_blank" rel="noreferrer">
-                <img
-                  src={a.src}
-                  alt={a.name}
-                  className="max-h-64 max-w-full rounded border border-border"
-                />
+                <img src={a.src} alt={a.name} className="max-h-64 max-w-full" />
               </a>
             ) : (
               <a
@@ -242,7 +238,7 @@ function ThreadPage({ threadId }: { threadId: string }) {
 
   // Stream this thread live over one persistent SSE connection opened on mount —
   // whatever turn runs now or next, with no run-id discovery and no polling gap.
-  const { message, run, lastDoneRunId, version } = useLiveThread(threadId);
+  const { message, run, lastDoneRunId, error: liveError, version } = useLiveThread(threadId);
   const runId = run?.runId ?? null;
   const [settledRun, setSettledRun] = useState<string | null>(null);
 
@@ -276,7 +272,8 @@ function ThreadPage({ threadId }: { threadId: string }) {
   // Show the live trajectory as soon as the turn is RUNNING (the status event), not
   // only once the first chunk lands — so "responding…" appears immediately even while
   // the model is still thinking.
-  const showLive = run != null && run.status === 'running' && settledRun !== run.runId;
+  const showLive =
+    run != null && run.status === 'running' && settledRun !== run.runId && !liveError;
   const initialLoading = state.status === 'loading' && messages.length === 0;
 
   return (
@@ -303,12 +300,24 @@ function ThreadPage({ threadId }: { threadId: string }) {
     >
       {initialLoading && <Loading />}
       {state.status === 'error' && messages.length === 0 && <ErrorNote error={state.error} />}
+      {/* A background refetch (turn start / settle) failed while messages are already
+          on screen: keep the stale list but flag it, rather than silently rendering
+          the pre-turn snapshot as current. (A 401 doesn't land here — useAsync routes
+          it to re-pair — so this is a transient/server error worth surfacing.) */}
+      {state.status === 'error' && messages.length > 0 && (
+        <div className="mb-sm text-warning" title={state.error.message}>
+          ! couldn't refresh — showing last loaded messages
+        </div>
+      )}
       {!initialLoading && messages.length === 0 && !showLive && (
         <p className="text-fg-dim">No messages.</p>
       )}
       {messages.map((m) => (
         <Bubble key={m.id} m={m} />
       ))}
+      {liveError && (
+        <div className="mt-sm text-warning">! live stream disconnected — reconnecting…</div>
+      )}
       {showLive && (
         <div className="mt-sm min-w-0">
           <div className="mb-xs text-secondary">サニー · responding…</div>

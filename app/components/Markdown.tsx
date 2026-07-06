@@ -24,7 +24,7 @@ const components: Components = {
   // Single type size: headings differ by weight / case / a rule, never size.
   // Margins are whole/half rows so rendered markdown keeps the terminal rhythm.
   h1: ({ children }) => (
-    <h1 className="mt-md mb-sm font-bold uppercase tracking-[0.04em] text-fg">{children}</h1>
+    <h1 className="mt-md mb-sm font-bold tracking-[0.04em] text-fg">{children}</h1>
   ),
   h2: ({ children }) => <h2 className="mt-md mb-sm font-bold text-secondary">{children}</h2>,
   h3: ({ children }) => <h3 className="mt-md mb-0 font-bold text-fg">› {children}</h3>,
@@ -36,10 +36,10 @@ const components: Components = {
       {children}
     </li>
   ),
-  code: ({ children }) => <code className="bg-surface-elevated px-xs text-primary">{children}</code>,
-  pre: ({ children }) => (
-    <pre className="my-sm overflow-x-auto bg-bg-dark p-sm">{children}</pre>
+  code: ({ children }) => (
+    <code className="bg-surface-elevated px-xs text-primary">{children}</code>
   ),
+  pre: ({ children }) => <pre className="my-sm overflow-x-auto bg-bg-dark p-sm">{children}</pre>,
   blockquote: ({ children }) => (
     <blockquote className="my-sm pl-md text-fg-dim italic">{children}</blockquote>
   ),

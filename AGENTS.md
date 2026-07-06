@@ -45,7 +45,8 @@ Two layers split on the determinism/cost axis (design `testing-and-evals`):
 
 **Seams (inject at the exact point production wires them — no test-only branches):**
 - **Model** — `MockLanguageModelV3` from `ai/test` (scripts text + tool calls), injected
-  via `createAgentRunner({ model })`. Production passes nothing → real `getModel(config)`.
+  via `createAgentRunner({ model })`. Production passes no mock responses → the workflow's
+  `buildTurnModel(modelId)` (`src/agent/turnModel.ts`) returns the real Anthropic model.
 - **Gateway** — `FakeGateway` (`tests/fakes/gateway.ts`) records outbound + injects inbound;
   no Sendblue.
 - **Durable start** — a recording fake `start` injected via `createAgentRunner({ start })`;

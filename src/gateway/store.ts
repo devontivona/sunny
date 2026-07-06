@@ -211,7 +211,10 @@ export class ConversationStore {
       .select({ messageId: messages.messageId, role: messages.role })
       .from(messages)
       .where(eq(messages.threadId, threadId))
-      .orderBy(desc(messages.createdAt))
+      // Same tiebreaker as `recentWindow` (desc createdAt, desc messageId): on a `createdAt`
+      // tie the two must select the SAME rows, or the id set marked answered could diverge
+      // from the prompt window (R6) — a message in one but not the other is silently dropped.
+      .orderBy(desc(messages.createdAt), desc(messages.messageId))
       .limit(this.windowSize);
     return rows.filter((r) => r.role === 'user').map((r) => r.messageId);
   }
@@ -256,18 +259,23 @@ export class ConversationStore {
     media?: OutboundMediaResult,
   ): Promise<void> {
     const id = messageId || randomUUID();
-    await this.db.insert(messages).values({
-      channel,
-      threadId,
-      messageId: id,
-      role: 'assistant',
-      senderId: 'sunny',
-      senderName: 'Sunny',
-      text: sanitizePgText(text),
-      payload: sanitizePgJson(assistantSendPayload(id, text, media)),
-      isOwner: false,
-      timestamp: new Date(),
-    });
+    await this.db
+      .insert(messages)
+      .values({
+        channel,
+        threadId,
+        messageId: id,
+        role: 'assistant',
+        senderId: 'sunny',
+        senderName: 'Sunny',
+        text: sanitizePgText(text),
+        payload: sanitizePgJson(assistantSendPayload(id, text, media)),
+        isOwner: false,
+        timestamp: new Date(),
+      })
+      // Idempotent on a durable-step retry (D-DE1): a replayed send that re-inserts the same
+      // (channel, messageId) is a no-op, matching `appendInbound` — never a constraint throw.
+      .onConflictDoNothing({ target: [messages.channel, messages.messageId] });
   }
 
   /**

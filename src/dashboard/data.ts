@@ -79,16 +79,21 @@ export class DashboardData {
     people: { id: string; name: string; role: Role; identities: string[]; hasDoc: boolean }[];
   } {
     const paths = memoryPaths(this.config.runtimeDir);
-    const people: { id: string; name: string; role: Role; identities: string[]; hasDoc: boolean }[] =
-      [
-        {
-          id: 'owner',
-          name: this.config.owner.name,
-          role: 'owner',
-          identities: this.config.owner.identities,
-          hasDoc: existsSync(paths.USER),
-        },
-      ];
+    const people: {
+      id: string;
+      name: string;
+      role: Role;
+      identities: string[];
+      hasDoc: boolean;
+    }[] = [
+      {
+        id: 'owner',
+        name: this.config.owner.name,
+        role: 'owner',
+        identities: this.config.owner.identities,
+        hasDoc: existsSync(paths.USER),
+      },
+    ];
     for (const f of this.config.family) {
       const id = f.identities[0] ? personId(f.identities[0]) : sanitizePersonId(f.name);
       people.push({
@@ -374,7 +379,7 @@ export class DashboardData {
       order by r.created_at desc
       limit ${limit}
     `);
-    const rows = (res as unknown as { rows: Record<string, unknown>[] }).rows ?? [];
+    const rows = rowsOf(res);
     const iso = (v: unknown) => (v ? new Date(v as string).toISOString() : null);
     return {
       jobs: rows.map((r) => {
@@ -425,7 +430,7 @@ export class DashboardData {
       order by r.created_at desc
       limit 20
     `);
-    const rows = (res as unknown as { rows: Record<string, unknown>[] }).rows ?? [];
+    const rows = rowsOf(res);
     return rows.map((r) => {
       const started = r.started_at ?? r.created_at;
       return {
@@ -649,6 +654,39 @@ function partsOf(payload: unknown): UiPart[] {
   return [];
 }
 
+/**
+ * Safely extract the `rows` array from a raw `db.execute` result. The WDK tables aren't in the
+ * app's drizzle schema, so those queries return an untyped driver envelope; guard the shape so a
+ * driver returning a different shape (or no `rows`) degrades to an empty list instead of throwing
+ * at the `.map` call site.
+ */
+export function rowsOf(res: unknown): Record<string, unknown>[] {
+  if (res && typeof res === 'object' && 'rows' in res) {
+    const r = (res as { rows?: unknown }).rows;
+    if (Array.isArray(r)) return r as Record<string, unknown>[];
+  }
+  return [];
+}
+
+/**
+ * The text of a plain `text` UI part, only when it is actually a non-empty string. Persisted JSONB
+ * parts are untyped at this boundary, so a legacy or wrong-shape row must not inject a non-string
+ * value into the rendered conversation — such a part is skipped.
+ */
+export function textOfPart(p: UiPart): string | null {
+  return p.type === 'text' && typeof p.text === 'string' && p.text ? p.text : null;
+}
+
+/**
+ * The text of a `send_message` tool part, guarded to a real non-empty string (see {@link
+ * textOfPart}) — a legacy/wrong-shape row degrades to skipped rather than rendering garbage.
+ */
+export function sendMessageText(p: UiPart): string | null {
+  return p.type === 'tool-send_message' && typeof p.input?.text === 'string' && p.input.text
+    ? p.input.text
+    : null;
+}
+
 function normalizeUsage(usage: unknown) {
   if (!usage || typeof usage !== 'object') return null;
   const u = usage as Record<string, unknown>;
@@ -677,8 +715,8 @@ function toConversationMessage(row: typeof messages.$inferSelect, senderRole: Ro
   const attachments = mediaAttachments(row.id, row.payload);
   if (row.role === 'user') {
     const text = parts
-      .filter((p) => p.type === 'text' && p.text)
-      .map((p) => p.text as string)
+      .map(textOfPart)
+      .filter((t): t is string => t !== null)
       .join('\n');
     return {
       id: row.id,
@@ -707,15 +745,13 @@ function toConversationMessage(row: typeof messages.$inferSelect, senderRole: Ro
         // The <no-reply/> sentinel persists in the row but was never delivered.
         ...[stripNoReply(extractFinalText(uiParts)).text].filter(Boolean),
       ]
-    : parts
-        .filter((p) => p.type === 'tool-send_message' && p.input?.text)
-        .map((p) => p.input!.text as string);
+    : parts.map(sendMessageText).filter((t): t is string => t !== null);
   const scratch = (
     textMode
       ? extractInterimText(uiParts)
       : parts
-          .filter((p) => p.type === 'text' && p.text)
-          .map((p) => p.text as string)
+          .map(textOfPart)
+          .filter((t): t is string => t !== null)
           .join('\n')
   ).trim();
   return {

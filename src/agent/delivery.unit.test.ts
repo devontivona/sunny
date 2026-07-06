@@ -21,7 +21,13 @@ const tool = (name: string, id: string): Part =>
 
 describe('text-as-reply extraction (text delivery mode)', () => {
   it('splits final (after the last tool part) from interim (at/before it)', () => {
-    const parts = [text('checking...'), tool('bash', 'a'), text('found it'), tool('bash', 'b'), text('here is the answer')];
+    const parts = [
+      text('checking...'),
+      tool('bash', 'a'),
+      text('found it'),
+      tool('bash', 'b'),
+      text('here is the answer'),
+    ];
     expect(extractFinalText(parts)).toBe('here is the answer');
     expect(extractInterimText(parts)).toBe('checking...\nfound it');
   });
@@ -33,7 +39,12 @@ describe('text-as-reply extraction (text delivery mode)', () => {
   });
 
   it('data-translator parts never shift the final/interim boundary', () => {
-    const parts = [text('working'), tool('bash', 'a'), translatorPart('on it!', 1), text('the answer')];
+    const parts = [
+      text('working'),
+      tool('bash', 'a'),
+      translatorPart('on it!', 1),
+      text('the answer'),
+    ];
     expect(extractFinalText(parts)).toBe('the answer');
     expect(extractInterimText(parts)).toBe('working');
   });
@@ -43,6 +54,28 @@ describe('text-as-reply extraction (text delivery mode)', () => {
     expect(classifyTextDelivery('', '', true)).toBe('silence');
     expect(classifyTextDelivery('', 'notes only', false)).toBe('fallback_text');
     expect(classifyTextDelivery('', '', false)).toBe('silence');
+  });
+
+  it('R9a: abnormal finish with tool activity but no text is NOT deliberate silence', () => {
+    // A thinking turn can do real tool work yet write no delivered text: reasoning parts are
+    // dropped and tool-call parts don't count as interim, so both final AND interim are empty.
+    // When the turn ended ABNORMALLY (step-limit / length / error) that must route to the
+    // backstop (fallback_text), not be swallowed as a deliberate no-reply.
+    const parts = [tool('bash', 'a')];
+    const final = extractFinalText(parts); // '' (nothing after the tool call)
+    const interim = extractInterimText(parts); // '' (tool-call parts are not interim text)
+    expect(final).toBe('');
+    expect(interim).toBe('');
+
+    // Abnormal finishes route to the backstop even with nothing delivered.
+    expect(classifyTextDelivery(final, interim, false, 'tool-calls')).toBe('fallback_text');
+    expect(classifyTextDelivery(final, interim, false, 'length')).toBe('fallback_text');
+    expect(classifyTextDelivery(final, interim, false, 'error')).toBe('fallback_text');
+
+    // A NORMAL stop with nothing delivered is still deliberate silence; and omitting the
+    // finish reason preserves the legacy default (silence).
+    expect(classifyTextDelivery(final, interim, false, 'stop')).toBe('silence');
+    expect(classifyTextDelivery(final, interim, false)).toBe('silence');
   });
 
   it('stripNoReply: a sentinel-only reply is silence; nothing else is touched', () => {
@@ -74,7 +107,10 @@ describe('text-as-reply extraction (text delivery mode)', () => {
   });
 
   it('round-trips translator updates through data-translator parts', () => {
-    const parts = [translatorPart('on it — checking flights', 1), translatorPart('narrowing options', 4)];
+    const parts = [
+      translatorPart('on it — checking flights', 1),
+      translatorPart('narrowing options', 4),
+    ];
     expect(extractTranslatorUpdates(parts)).toEqual([
       { text: 'on it — checking flights', step: 1 },
       { text: 'narrowing options', step: 4 },
@@ -114,7 +150,6 @@ describe('text-as-reply extraction (text delivery mode)', () => {
   it('extractReportBlocks: an empty block delivers nothing', () => {
     expect(extractReportBlocks('<report>  </report>rest')).toEqual({ reports: [], rest: 'rest' });
   });
-
 });
 
 describe('calledStaySilent', () => {
