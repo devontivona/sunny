@@ -5,11 +5,18 @@ import {
   type BashToolInput,
   type FileReadToolInput,
 } from '../src/agent/tools/bashSpecs.js';
+import {
+  FILE_TOOL_SPECS,
+  type FileEditToolInput,
+  type FileWriteToolInput,
+} from '../src/agent/tools/fileSpecs.js';
 import { extractReportBlocks, stripNoReport } from '../src/agent/delivery.js';
 import {
   bashStep,
   deliver,
+  fileEditStep,
   fileReadStep,
+  fileWriteStep,
   finalAssistantText,
   markAnsweredStep,
   streamAgent,
@@ -143,13 +150,28 @@ function buildChildTools(input: SubagentInput): Parameters<typeof streamAgent>[0
   if (toolset === 'none') return {};
   if (toolset === 'readonly') {
     return {
-      file_read: tool({ ...BASH_TOOL_SPECS.file_read, execute: (a: FileReadToolInput) => fileReadStep(a) }),
+      file_read: tool({
+        ...BASH_TOOL_SPECS.file_read,
+        execute: (a: FileReadToolInput) => fileReadStep(a),
+      }),
     };
   }
-  // host: full host tools (still a subset of the parent; D-DS5).
+  // host: full host tools (still a subset of the parent; D-DS5). Includes the file mutation
+  // primitives (coding-agent-upgrade) — a host child can own a whole coding task end-to-end.
   return {
     bash: tool({ ...BASH_TOOL_SPECS.bash, execute: (a: BashToolInput) => bashStep(a) }),
-    file_read: tool({ ...BASH_TOOL_SPECS.file_read, execute: (a: FileReadToolInput) => fileReadStep(a) }),
+    file_read: tool({
+      ...BASH_TOOL_SPECS.file_read,
+      execute: (a: FileReadToolInput) => fileReadStep(a),
+    }),
+    file_write: tool({
+      ...FILE_TOOL_SPECS.file_write,
+      execute: (a: FileWriteToolInput) => fileWriteStep(a),
+    }),
+    file_edit: tool({
+      ...FILE_TOOL_SPECS.file_edit,
+      execute: (a: FileEditToolInput) => fileEditStep(a),
+    }),
   };
 }
 

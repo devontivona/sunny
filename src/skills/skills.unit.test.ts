@@ -158,7 +158,9 @@ describe('initSkills seeding', () => {
     const config = makeConfig();
 
     await initSkills(config);
-    expect(loadAllSkills(config).map((s) => s.name)).toContain('email');
+    const names = loadAllSkills(config).map((s) => s.name);
+    expect(names).toContain('email');
+    expect(names).toContain('coding');
     const after = loadAllSkills(config).length;
 
     await initSkills(config); // running again seeds nothing new

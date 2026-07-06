@@ -55,6 +55,10 @@ npm install
 cp .env.example .env   # fill keys; DATABASE_URL=postgres://sunny:<pw>@localhost:5544/sunny
                        # WORKFLOW_TARGET_WORLD=@workflow/world-postgres; WORKFLOW_POSTGRES_URL=$DATABASE_URL
                        # DASHBOARD_SESSION_SECRET=$(openssl rand -base64 32)   # enables the dashboard
+# Host CLIs Sunny's bash tool (and the coding skill) lean on: rg, jq, fd, git, gh, tmux.
+sudo apt install -y ripgrep jq fd-find gh tmux   # or user-local static binaries in ~/.local/bin —
+                       # then make sure the sunny SERVICE's PATH includes them (the devbox cmd's
+                       # exported PATH), not just your login shell.
 
 # 3. WDK world tables (idempotent); app migrations apply automatically on first boot
 WORKFLOW_POSTGRES_URL="$DATABASE_URL" npx workflow-postgres-setup

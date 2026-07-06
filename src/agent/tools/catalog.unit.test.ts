@@ -23,6 +23,8 @@ describe('toolCatalog', () => {
         'mcp_manage',
         'bash',
         'file_read',
+        'file_write',
+        'file_edit',
       ]),
     );
     expect(names).toEqual([...names].sort((a, b) => a.localeCompare(b)));
@@ -30,7 +32,17 @@ describe('toolCatalog', () => {
 
   it('flags host/registry/scheduling tools as owner-only and the rest as broad', () => {
     const byName = new Map(toolCatalog(makeConfig()).map((e) => [e.name, e]));
-    for (const n of ['bash', 'file_read', 'credential_manage', 'mcp_manage', 'schedule_create', 'delegate_task', 'message']) {
+    for (const n of [
+      'bash',
+      'file_read',
+      'file_write',
+      'file_edit',
+      'credential_manage',
+      'mcp_manage',
+      'schedule_create',
+      'delegate_task',
+      'message',
+    ]) {
       expect(byName.get(n)?.ownerOnly, n).toBe(true);
     }
     for (const n of ['send_image', 'memory_write']) {
