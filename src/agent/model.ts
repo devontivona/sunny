@@ -3,15 +3,6 @@ import type { LanguageModel } from 'ai';
 import type { SunnyConfig } from '../config/index.js';
 
 /**
- * Model wiring (D-PS3). `anthropic('claude-sonnet-5')` by default, provider-agnostic
- * so swapping models is a one-line change. `ANTHROPIC_API_KEY` is read from env by
- * the provider — we assert its presence at startup (see index.ts).
- */
-export function getModel(config: SunnyConfig): LanguageModel {
-  return anthropic(config.modelId);
-}
-
-/**
  * The cheap utility model: the interim-progress translator and the abnormal-turn-end
  * backstop (a turn that ended without final reply text — step limit, length cap, or an
  * error finish). Defaults to Haiku; overridable via `config.utilityModelId`.

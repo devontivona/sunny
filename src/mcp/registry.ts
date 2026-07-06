@@ -1,6 +1,7 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { logger } from '../logger.js';
+import { sanitizeSlug } from '../slug.js';
 
 const log = logger('mcp:registry');
 
@@ -70,16 +71,10 @@ export function mcpRegistryPath(runtimeDir: string): string {
   return join(runtimeDir, 'mcp.json');
 }
 
-/** Normalize a symbolic server name to a stable registry key (mirrors
- *  `normalizeCredentialName`). */
+/** Normalize a symbolic server name to a stable registry key (shares the one `sanitizeSlug`
+ *  canonicalizer with the credential/skill/memory normalizers). */
 export function normalizeMcpName(name: string): string {
-  const slug = name
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-  if (!slug) throw new Error(`invalid MCP server name: ${name}`);
-  return slug;
+  return sanitizeSlug(name, 'MCP server name');
 }
 
 export function loadMcpRegistry(runtimeDir: string): McpRegistry {
@@ -89,8 +84,17 @@ export function loadMcpRegistry(runtimeDir: string): McpRegistry {
     const raw: unknown = JSON.parse(readFileSync(file, 'utf8'));
     return raw && typeof raw === 'object' ? (raw as McpRegistry) : {};
   } catch (err) {
-    log.warn('could not parse mcp registry (treating as empty)', { err: String(err) });
-    return {};
+    // A corrupt registry must NOT be silently treated as empty: the next mutating
+    // write would then persist that empty view and permanently erase every
+    // registered server. Quarantine the unparseable file (preserving it for
+    // recovery) and refuse to proceed, so no write can clobber it to empty.
+    const quarantine = `${file}.corrupt-${Date.now()}`;
+    renameSync(file, quarantine);
+    log.error('mcp registry unparseable — quarantined, refusing to overwrite', {
+      err: String(err),
+      quarantine,
+    });
+    throw new Error(`mcp registry ${file} is corrupt; quarantined to ${quarantine}`);
   }
 }
 
@@ -125,9 +129,12 @@ function serializeRegistry<T>(fn: () => T | Promise<T>): Promise<T> {
 }
 
 function writeRegistry(runtimeDir: string, registry: McpRegistry): void {
-  writeFileSync(mcpRegistryPath(runtimeDir), `${JSON.stringify(registry, null, 2)}\n`, {
-    mode: 0o644,
-  });
+  // Atomic write: a temp file + rename so a crash or concurrent reader never sees
+  // a torn/half-written registry (which would parse-fail and be quarantined).
+  const file = mcpRegistryPath(runtimeDir);
+  const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
+  writeFileSync(tmp, `${JSON.stringify(registry, null, 2)}\n`, { mode: 0o644 });
+  renameSync(tmp, file);
 }
 
 const HTTP_URL_RE = /^https?:\/\/[^/\s]+/i;

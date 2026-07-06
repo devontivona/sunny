@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { makeConfig } from '../../../tests/factories.js';
 import { FakeResolver } from '../../../tests/fakes/credentials.js';
 import { registerCredential } from '../../credentials/index.js';
+import { SECRET_ENV_KEYS } from '../../observability/redact.js';
 import { editFileSafe, execBash, readFileSafe, runBash, writeFileSafe } from './bash.js';
 
 const CWD = process.cwd();
@@ -32,6 +33,40 @@ describe('runBash', () => {
   it('times out a long-running command', async () => {
     expect(await runBash('sleep 2', CWD, 100)).toMatch(/timed out/);
   });
+
+  it('strips every redact.ts SECRET_ENV_KEY from the subprocess env (no drift)', async () => {
+    // The bash strip-set must be derived from redact.ts SECRET_ENV_KEYS so the two lists
+    // cannot drift. Set a sentinel for every secret key and prove none reaches the shell —
+    // in particular LANGFUSE_SECRET_KEY and WORKFLOW_POSTGRES_URL, which drifted before.
+    const saved: Record<string, string | undefined> = {};
+    for (const k of SECRET_ENV_KEYS) {
+      saved[k] = process.env[k];
+      process.env[k] = `SENTINEL_${k}`;
+    }
+    try {
+      const cmd = SECRET_ENV_KEYS.map((k) => `[\${${k}}]`).join(' ');
+      const out = await runBash(`echo "${cmd}"`, CWD, 5000);
+      for (const k of SECRET_ENV_KEYS) {
+        expect(out, `${k} leaked into the shell`).not.toContain(`SENTINEL_${k}`);
+      }
+    } finally {
+      for (const k of SECRET_ENV_KEYS) {
+        if (saved[k] === undefined) delete process.env[k];
+        else process.env[k] = saved[k];
+      }
+    }
+  });
+
+  it('returns by the timeout even when a grandchild backgrounds and holds stdout open', async () => {
+    // `sleep 8 &` backgrounds a grandchild that inherits the stdout pipe. The shell exits
+    // immediately but the pipe stays open, so a close-driven wait never fires — the call
+    // must still return at the timeout (killing the whole process group), not hang.
+    const start = Date.now();
+    const out = await runBash('sleep 8 & echo bg', CWD, 300);
+    const elapsed = Date.now() - start;
+    expect(out).toMatch(/timed out/);
+    expect(elapsed).toBeLessThan(2500);
+  }, 20000);
 });
 
 describe('readFileSafe', () => {

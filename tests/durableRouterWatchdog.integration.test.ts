@@ -20,6 +20,19 @@ import { makeChannelEvent } from './factories.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** A gateway whose `send` throws for the watchdog apology note (simulating the same outage that
+ *  hung the turn), but works for every other send. */
+class ApologyFailingGateway extends FakeGateway {
+  override async send(
+    threadId: string,
+    message: Parameters<FakeGateway['send']>[1],
+    opts?: Parameters<FakeGateway['send']>[2],
+  ): ReturnType<FakeGateway['send']> {
+    if (/stuck on my end|partway/i.test(message.text)) throw new Error('outage: cannot send');
+    return super.send(threadId, message, opts);
+  }
+}
+
 /** A controllable fake turn-run: hangs by default; `resolve()` completes it. */
 function fakeRunHandle(runId: string): {
   handle: TurnRunHandle;
@@ -146,6 +159,90 @@ describe('DurableTurnRouter watchdog (hung turn-runs)', () => {
     await sleep(150); // past the turn's completion; nowhere near the 5s watchdog
     expect(run.cancelled()).toBe(false);
     expect(gateway.texts()).toEqual(['here you go']); // no watchdog note
+    expect(await store.hasUnansweredInbound(event.threadId)).toBe(false);
+  });
+
+  it('R7: a deterministically failing turn is retired after the cap — no unbounded loop, no endless re-send', async () => {
+    const event = makeChannelEvent({ text: 'this turn always throws' });
+    await store.appendInbound(event);
+
+    const runsStarted: string[] = [];
+    const router = new DurableTurnRouter(
+      gateway,
+      store,
+      meta(5000), // watchdog irrelevant here — the turn REJECTS (it doesn't hang)
+      async (threadId) => {
+        runsStarted.push(threadId);
+        // Sends a bubble, then rejects BEFORE marking answered — the R7 shape: a fresh run
+        // re-sends the bubble every loop, so the inbound stays unanswered forever without a cap.
+        await gateway.send(threadId, { text: 'partial bubble' }, { persist: false });
+        return {
+          runId: `fail-${runsStarted.length}`,
+          returnValue: new Promise<void>((_, reject) =>
+            setTimeout(() => reject(new Error('boom')), 1),
+          ),
+          cancel: async () => {},
+        };
+      },
+      { maxConsecutiveFailures: 3, backoffMs: () => 5 },
+    );
+
+    router.route(event);
+
+    // Retired after exactly the cap — not looping forever.
+    await vi.waitFor(
+      async () => expect(await store.hasUnansweredInbound(event.threadId)).toBe(false),
+      { timeout: 3000 },
+    );
+    expect(runsStarted).toHaveLength(3);
+    const retireNote = gateway.sent.filter((m) => /kept hitting an error/i.test(m.text));
+    expect(retireNote).toHaveLength(1);
+    expect(retireNote[0]!.persist).toBe(true);
+
+    // And it STAYS retired: no further runs, no further re-sends of the partial bubble.
+    await sleep(200);
+    expect(runsStarted).toHaveLength(3);
+    expect(gateway.texts().filter((t) => t === 'partial bubble')).toHaveLength(3);
+  });
+
+  it('Watchdog: a FAILED apology send does not silently consume the messages — the worker retries', async () => {
+    const event = makeChannelEvent({ text: 'will hang, and the apology send will fail too' });
+    await store.appendInbound(event);
+
+    // The same outage that hung the turn also fails the apology send (only the watchdog note).
+    const gw = new ApologyFailingGateway();
+    let call = 0;
+    const hung = fakeRunHandle('hung-then-recovered');
+    const router = new DurableTurnRouter(
+      gw,
+      store,
+      meta(60),
+      async (threadId) => {
+        call += 1;
+        if (call === 1) return hung.handle; // hangs → watchdog fires → apology send THROWS
+        // The retry (the outage has passed): a healthy turn actually answers.
+        const healthy = fakeRunHandle(`healthy-${call}`);
+        void (async () => {
+          await gw.send(threadId, { text: 'recovered — here you go' }, { persist: false });
+          const pending = await store.unansweredSteers(threadId, []);
+          await store.markAnsweredForThread(
+            threadId,
+            pending.map((p) => p.messageId),
+          );
+          healthy.resolve();
+        })();
+        return healthy.handle;
+      },
+      { maxConsecutiveFailures: 5, backoffMs: () => 5 },
+    );
+
+    router.route(event);
+
+    // The failed apology must NOT have retired the inbound: the worker re-runs and answers it.
+    await vi.waitFor(() => expect(gw.texts()).toContain('recovered — here you go'), {
+      timeout: 3000,
+    });
+    expect(call).toBeGreaterThanOrEqual(2); // it re-ran rather than swallowing the messages
     expect(await store.hasUnansweredInbound(event.threadId)).toBe(false);
   });
 

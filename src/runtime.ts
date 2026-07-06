@@ -5,7 +5,7 @@ import { DurableTurnRouter } from './agent/durableRouter.js';
 import { DelegationSupervisor } from './agent/delegationSupervisor.js';
 import { loadConfig, type SunnyConfig } from './config/index.js';
 import { createDb, runMigrations, type Db } from './db/client.js';
-import { messages } from './db/schema.js';
+import { messages, scheduleRuns } from './db/schema.js';
 import { ConversationStore } from './gateway/store.js';
 import { cleanupOutbox, ensureMediaDirs } from './gateway/media.js';
 import { SendblueGateway } from './gateway/sendblue.js';
@@ -67,10 +67,27 @@ export interface Runtime {
  */
 const RUNTIME_KEY = Symbol.for('sunny.runtime');
 
-export function getRuntime(): Promise<Runtime> {
+/**
+ * Memoize `starter()` on a `globalThis` slot, but CLEAR the slot if the promise REJECTS (R8) —
+ * otherwise a transient boot failure (e.g. Postgres briefly down in `runMigrations`) pins a
+ * rejected promise so every later `getRuntime()` rejects forever until a process restart. On a
+ * rejection the next call re-runs `starter()`. Exported for the regression test.
+ */
+export function memoizedStart(key: symbol, starter: () => Promise<Runtime>): Promise<Runtime> {
   const g = globalThis as Record<symbol, unknown>;
-  if (!g[RUNTIME_KEY]) g[RUNTIME_KEY] = start();
-  return g[RUNTIME_KEY] as Promise<Runtime>;
+  if (!g[key]) {
+    const p = starter();
+    p.catch(() => {
+      // Only clear if still the same promise (a later successful start hasn't replaced it).
+      if (g[key] === p) delete g[key];
+    });
+    g[key] = p;
+  }
+  return g[key] as Promise<Runtime>;
+}
+
+export function getRuntime(): Promise<Runtime> {
+  return memoizedStart(RUNTIME_KEY, start);
 }
 
 async function start(): Promise<Runtime> {
@@ -196,7 +213,7 @@ async function start(): Promise<Runtime> {
     startScheduler({
       db,
       dispatch: async (schedule, runId) => {
-        await startWorkflow(runScheduledJob, [
+        const run = await startWorkflow(runScheduledJob, [
           {
             scheduleId: schedule.id,
             runId,
@@ -208,6 +225,11 @@ async function start(): Promise<Runtime> {
             audience: scheduleAudience(schedule),
           },
         ]);
+        // Observe the terminal outcome (SchedRun): the workflow marks its OWN schedule_runs row
+        // 'completed' on success, but a TERMINAL failure never reaches that step — without this
+        // the row would stay 'running' forever and the occurrence be silently lost. Non-blocking
+        // (don't hold the tick): record the failure out of band.
+        observeScheduledRun(db, runId, run.returnValue);
       },
     });
   }
@@ -252,6 +274,24 @@ async function start(): Promise<Runtime> {
  *  record (it then can't be routed to a serial worker — we just await it before recovery,
  *  the pre-adoption behavior). A wedged one can't block startup past this. */
 const ORPHAN_AWAIT_MS = 30_000;
+
+/**
+ * Observe a dispatched scheduled run's terminal outcome (SchedRun). The workflow marks its own
+ * `schedule_runs` row 'completed' on success, but a TERMINAL failure (the agent step exhausted its
+ * retries) never reaches that step — so without observing `returnValue` the row is left stuck
+ * 'running' and the occurrence silently lost, with no reattach/watchdog like delegation children
+ * have. Non-blocking: record the failure out of band. Exported for the regression test.
+ */
+export function observeScheduledRun(db: Db, runId: string, returnValue: Promise<unknown>): void {
+  void returnValue.catch(async (err) => {
+    log.error('scheduled run failed terminally', { runId, err: String(err) });
+    await db
+      .update(scheduleRuns)
+      .set({ status: 'failed', error: String(err) })
+      .where(eq(scheduleRuns.id, runId))
+      .catch((e) => log.warn('could not record scheduled-run failure', { runId, err: String(e) }));
+  });
+}
 
 /**
  * Re-arm the delegation watchdog for children still marked `running` at startup (durable-subagents

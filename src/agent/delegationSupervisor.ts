@@ -73,7 +73,10 @@ export class DelegationSupervisor {
 
   private async doSpawn(input: SpawnInput): Promise<SpawnResult> {
     if (input.depth > MAX_DELEGATION_DEPTH) {
-      log.warn('delegation refused: depth cap', { depth: input.depth, parent: input.parentThreadId });
+      log.warn('delegation refused: depth cap', {
+        depth: input.depth,
+        parent: input.parentThreadId,
+      });
       return { error: 'depth_cap' };
     }
     const active = await activeChildCount(this.db, input.parentThreadId);
@@ -103,19 +106,45 @@ export class DelegationSupervisor {
       model: input.model,
     });
 
-    const run = await this.startSubagent({
-      childThreadId,
-      parentThreadId: input.parentThreadId,
-      task: input.task,
-      toolset: input.toolset,
-      model: input.model,
-      label: input.label,
+    // The link now holds a concurrency slot (status 'running'). If starting the child throws, that
+    // slot leaks forever (a running link with a null childRunId) — so compensate: free it before
+    // re-throwing. delegateStep runs inside a durable `'use step'`, so a throw here retries the
+    // whole spawn; freeing the slot keeps the retry from piling up leaked links (DelegSpawn).
+    let run: ChildRunHandle;
+    try {
+      run = await this.startSubagent({
+        childThreadId,
+        parentThreadId: input.parentThreadId,
+        task: input.task,
+        toolset: input.toolset,
+        model: input.model,
+        label: input.label,
+      });
+    } catch (err) {
+      await completeLink(this.db, childThreadId, 'failed').catch(() => {});
+      throw err;
+    }
+
+    // The child is now LIVE. From here doSpawn must NOT throw: a throw would retry the durable step
+    // and spawn a DUPLICATE live child for the same task (DelegSpawn). Recording the run id is
+    // therefore best-effort — a null childRunId is the same recoverable gap the restart re-attach
+    // already tolerates (it frees that slot), and the in-process watchdog observes the live handle
+    // regardless. So swallow a setChildRunId failure rather than let it trigger a re-spawn.
+    await setChildRunId(this.db, childThreadId, run.runId).catch((err) => {
+      log.error('setChildRunId failed (continuing; child is live)', {
+        childThreadId,
+        err: String(err),
+      });
     });
-    await setChildRunId(this.db, childThreadId, run.runId);
     log.info('child spawned', { childThreadId, runId: run.runId, parent: input.parentThreadId });
 
     // Watchdog (D-DS6): fire-and-forget — observe terminal failure the child can't report itself.
-    void this.watch(childThreadId, input.parentThreadId, input.label ?? 'subagent', run.returnValue);
+    void this.watch(
+      childThreadId,
+      input.parentThreadId,
+      input.label ?? 'subagent',
+      run.returnValue,
+    );
 
     return { childThreadId, childRunId: run.runId };
   }

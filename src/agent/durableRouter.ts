@@ -41,6 +41,29 @@ const WATCHDOG_NOTE_NOTHING_SENT =
 const WATCHDOG_NOTE_PARTIAL =
   'Sorry — I got stuck partway through that and had to stop. Nudge me if you were still waiting on something.';
 
+/** The user-facing note when a turn fails REPEATEDLY (not hung — it throws/errors each attempt).
+ *  After the retry cap the worker retires the inbound with this note instead of looping forever
+ *  (R7). */
+const RETRY_EXHAUSTED_NOTE =
+  'Sorry — I kept hitting an error trying to answer that and had to stop. Mind trying again in a bit?';
+
+/** How the serial worker bounds a turn that keeps FAILING (throwing / failing to start), so a
+ *  deterministically-broken turn can't spin the loop forever — each fresh run re-answers from
+ *  scratch, re-sending already-delivered bubbles and burning model spend (R7). After
+ *  `maxConsecutiveFailures` back-to-back failures the inbound is retired with an apology. */
+export interface TurnRetryPolicy {
+  maxConsecutiveFailures: number;
+  /** Backoff before the Nth (1-indexed) consecutive-failure retry. */
+  backoffMs: (failureCount: number) => number;
+}
+
+const DEFAULT_RETRY: TurnRetryPolicy = {
+  maxConsecutiveFailures: 5,
+  backoffMs: (n) => Math.min(500 * 2 ** (n - 1), 30_000),
+};
+
+const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
 /**
  * Durable Tier-1 router (durable-main-loop), the gateway-side counterpart of the per-turn
  * durable conversational run.
@@ -67,6 +90,9 @@ export class DurableTurnRouter {
     private readonly meta: { modelId: string; effort: string | null; turnWatchdogMs: number },
     /** Test seam: how a turn-run is started (production = the real WDK run). */
     private readonly runs: TurnRunner = startConversationRun,
+    /** How the worker bounds a repeatedly-failing turn (R7). Injectable so tests can use a tiny
+     *  backoff; production uses {@link DEFAULT_RETRY}. */
+    private readonly retry: TurnRetryPolicy = DEFAULT_RETRY,
   ) {}
 
   /** Route one inbound (already persisted + deduped by the gateway): ensure this thread's
@@ -95,11 +121,16 @@ export class DurableTurnRouter {
    * still had minutes to run, and recovery started a second run for the same inbound.
    */
   adoptRun(threadId: string, run: TurnRunHandle): void {
-    this.adopted.set(threadId, run);
+    // Track EVERY same-thread orphan, not last-wins (AdoptRun): a thread can have several runs
+    // still RUNNING at startup (e.g. a mid-turn steer spawned a second run), and a plain `.set`
+    // would silently drop an earlier handle so that run is never driven/watchdogged/cancelled.
+    const list = this.adopted.get(threadId);
+    if (list) list.push(run);
+    else this.adopted.set(threadId, [run]);
     this.ensureWorker(threadId);
   }
 
-  private readonly adopted = new Map<string, TurnRunHandle>();
+  private readonly adopted = new Map<string, TurnRunHandle[]>();
 
   /** Re-drive any inbound that was received but never answered (durable-main-loop D5): on
    *  startup, ensure a worker runs for each affected thread. The worker reads the store, so a
@@ -124,15 +155,32 @@ export class DurableTurnRouter {
     try {
       for (;;) {
         this.dirty.delete(threadId);
-        // An adopted restart-orphan runs FIRST, through the full turn machinery; only after
-        // it settles (and marked its messages) does the drain below see what's left.
-        const orphan = this.adopted.get(threadId);
-        if (orphan) {
+        // Adopted restart-orphans run FIRST, through the full turn machinery; only after they
+        // settle (and marked their messages) does the drain below see what's left. There can be
+        // more than one per thread (AdoptRun) — drive each.
+        const orphans = this.adopted.get(threadId);
+        if (orphans && orphans.length > 0) {
           this.adopted.delete(threadId);
-          await this.driveTurn(threadId, orphan);
+          for (const orphan of orphans) {
+            await this.driveTurn(threadId, orphan);
+          }
         }
+        // Bound consecutive turn FAILURES (R7): a turn that throws AFTER sending some bubbles but
+        // BEFORE marking answered leaves the inbound unanswered, so this loop would otherwise spin
+        // forever — each fresh run re-sends the already-delivered bubbles + burns model spend.
+        let consecutiveFailures = 0;
         while (await this.store.hasUnansweredInbound(threadId)) {
-          await this.runTurn(threadId);
+          const ok = await this.runTurn(threadId);
+          if (ok) {
+            consecutiveFailures = 0;
+            continue;
+          }
+          consecutiveFailures += 1;
+          if (consecutiveFailures >= this.retry.maxConsecutiveFailures) {
+            await this.retireFailedInbound(threadId);
+            break;
+          }
+          await delay(this.retry.backoffMs(consecutiveFailures));
         }
         // Sync check-clear (NO await between): an inbound that set `dirty` either landed
         // before this check (→ loop again) or after we clear `processing` (→ `ensureWorker`
@@ -149,37 +197,42 @@ export class DurableTurnRouter {
   }
 
   /** Run ONE durable turn for a thread and await its completion — bounded by the watchdog
-   *  (hung-model-stream exposure): a stalled model stream must never block the thread forever. */
-  private async runTurn(threadId: string): Promise<void> {
+   *  (hung-model-stream exposure): a stalled model stream must never block the thread forever.
+   *  Returns `false` when the turn failed in a way that left the inbound unanswered (start
+   *  failure, a non-watchdog rejection, or a hung turn the watchdog could not retire) — the
+   *  worker uses this to bound consecutive failures (R7). */
+  private async runTurn(threadId: string): Promise<boolean> {
     let run: TurnRunHandle | undefined;
     try {
       run = await this.runs(threadId);
     } catch (err) {
       log.error('conversation turn-run failed to start', { threadId, err: String(err) });
-      return;
+      return false;
     }
-    await this.driveTurn(threadId, run);
+    return this.driveTurn(threadId, run);
   }
 
   /** Drive one (fresh or adopted) turn-run: stream bridge (live pane + typing), watchdog
-   *  race, explicit abandon on timeout. Shared by `runTurn` and `adoptRun`. */
-  private async driveTurn(threadId: string, run: TurnRunHandle): Promise<void> {
+   *  race, explicit abandon on timeout. Shared by `runTurn` and `adoptRun`. Returns `false`
+   *  when the turn left the inbound unanswered (see {@link runTurn}). */
+  private async driveTurn(threadId: string, run: TurnRunHandle): Promise<boolean> {
     const startedAt = Date.now();
     try {
       this.bridgeRunStream(run.runId, threadId);
       // Durable: resolves when the turn (incl. its delivery step) is done. Raced against the
       // watchdog so a hung stream costs one abandoned turn, not the whole thread.
       await raceTurnWatchdog(run.returnValue, this.meta.turnWatchdogMs);
+      return true;
     } catch (err) {
       if (err instanceof TurnWatchdogTimeout) {
-        await this.abandonHungTurn(threadId, run, startedAt, err.timeoutMs);
-      } else {
-        log.error('conversation turn-run failed', {
-          threadId,
-          runId: run.runId,
-          err: String(err),
-        });
+        return this.abandonHungTurn(threadId, run, startedAt, err.timeoutMs);
       }
+      log.error('conversation turn-run failed', {
+        threadId,
+        runId: run.runId,
+        err: String(err),
+      });
+      return false;
     }
   }
 
@@ -189,22 +242,28 @@ export class DurableTurnRouter {
    *
    *  1. CANCEL the run in the WDK world (best-effort), so a zombie that un-hangs later can't
    *     keep executing steps (late bubbles, a stale `markAnswered` racing a fresh turn).
-   *  2. RETIRE the thread's unanswered inbound. This is the double-text guard (the PR #29
+   *  2. TELL the user on-thread (persisted): losing a message silently is the one outcome
+   *     worse than the hang. Wording depends on whether the hung turn already delivered
+   *     something (translator updates / early bubbles) this turn. This happens BEFORE the
+   *     retire (Watchdog fix): if the send fails — e.g. the same outage that hung the turn —
+   *     we must NOT retire, or the messages would be permanently consumed with no reply. On a
+   *     send failure we return `false` (not retired), leaving the inbound for the worker to
+   *     retry (bounded by the R7 failure cap) rather than silently swallowing it.
+   *  3. RETIRE the thread's unanswered inbound. This is the double-text guard (the PR #29
    *     duplicate-reply class): the worker's `hasUnansweredInbound` loop would otherwise start
    *     a FRESH run for the same messages — and a fresh run is not a replay, it re-answers from
-   *     scratch, re-sending anything the hung run already delivered (its sends are memoized
-   *     only within the SAME run's journal). This step must succeed for the loop to stop, so
-   *     its failure is the loudest log here.
-   *  3. TELL the user on-thread (persisted): losing a message silently is the one outcome
-   *     worse than the hang. Wording depends on whether the hung turn already delivered
-   *     something (translator updates / early bubbles) this turn.
+   *     scratch, re-sending anything the hung run already delivered (its sends are memoized only
+   *     within the SAME run's journal).
+   *
+   * Returns `true` once the inbound is retired (loop can stop), `false` if it must stay
+   * unanswered (send failed) so the worker re-runs it under the R7 cap.
    */
   private async abandonHungTurn(
     threadId: string,
     run: TurnRunHandle,
     startedAt: number,
     timeoutMs: number,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const sentThisTurn = (this.gateway.lastSentAt?.(threadId) ?? 0) > startedAt;
     log.error('turn watchdog fired — abandoning hung turn-run', {
       threadId,
@@ -225,6 +284,25 @@ export class DurableTurnRouter {
     }
 
     try {
+      await this.gateway.stopTyping?.(threadId).catch(() => {});
+      await this.gateway.send(
+        threadId,
+        { text: sentThisTurn ? WATCHDOG_NOTE_PARTIAL : WATCHDOG_NOTE_NOTHING_SENT },
+        { persist: true }, // history must show the loss — the next turn sees it, not a gap
+      );
+    } catch (err) {
+      // The note didn't land (likely the same outage that hung the turn). Do NOT retire — leaving
+      // the inbound unanswered lets the worker re-run it (bounded by the R7 cap), which is far
+      // better than silently consuming the messages with no reply.
+      log.error('watchdog could not notify the user — leaving the inbound for a bounded retry', {
+        threadId,
+        runId: run.runId,
+        err: String(err),
+      });
+      return false;
+    }
+
+    try {
       // Everything currently unanswered — the window the hung run was answering plus anything
       // that arrived during the hang (the apology's "send it again" covers those too).
       const pending = await this.store.unansweredSteers(threadId, []);
@@ -233,26 +311,49 @@ export class DurableTurnRouter {
         pending.map((p) => p.messageId),
       );
     } catch (err) {
-      // If this fails the worker loop WILL re-run the turn — the exact double-text hazard the
-      // retire exists to prevent. Log at maximum volume; the re-run at least answers the user.
+      // The user WAS notified, but we couldn't retire — the worker loop may re-run and double-text.
+      // Log at maximum volume and count it as a failure so the R7 cap bounds the re-run.
       log.error(
         'watchdog could not retire unanswered inbound — the thread may re-run and double-text',
         { threadId, runId: run.runId, err: String(err) },
       );
-      return; // don't also send the "I gave up" note when a re-run is about to answer anyway
+      return false;
     }
 
+    return true;
+  }
+
+  /**
+   * The turn kept FAILING past the retry cap (R7): stop the serial worker's re-run loop. A turn
+   * that throws each attempt (not a hang — the watchdog handles those) would otherwise spin the
+   * `hasUnansweredInbound` loop forever, re-sending already-delivered bubbles and burning model
+   * spend. Best-effort tell the user, then retire (mark answered) so the loop terminates. Both
+   * steps are independently guarded; the worker `break`s regardless, so a failure here can't
+   * re-loop.
+   */
+  private async retireFailedInbound(threadId: string): Promise<void> {
+    log.error('conversation turn failed repeatedly — retiring inbound to stop the re-run loop', {
+      threadId,
+      failures: this.retry.maxConsecutiveFailures,
+    });
     try {
       await this.gateway.stopTyping?.(threadId).catch(() => {});
-      await this.gateway.send(
+      await this.gateway.send(threadId, { text: RETRY_EXHAUSTED_NOTE }, { persist: true });
+    } catch (err) {
+      log.error('could not notify the user of the repeatedly-failing turn', {
         threadId,
-        { text: sentThisTurn ? WATCHDOG_NOTE_PARTIAL : WATCHDOG_NOTE_NOTHING_SENT },
-        { persist: true }, // history must show the loss — the next turn sees it, not a gap
+        err: String(err),
+      });
+    }
+    try {
+      const pending = await this.store.unansweredSteers(threadId, []);
+      await this.store.markAnsweredForThread(
+        threadId,
+        pending.map((p) => p.messageId),
       );
     } catch (err) {
-      log.error('watchdog could not notify the user of the abandoned turn', {
+      log.error('could not retire inbound after repeated turn failures', {
         threadId,
-        runId: run.runId,
         err: String(err),
       });
     }
@@ -320,7 +421,9 @@ export class DurableTurnRouter {
           // hair past the watchdog so an abandoned run can never wedge this bridge.
           await Promise.race([
             getRun<unknown>(runId).returnValue.catch(() => {}),
-            new Promise((resolve) => setTimeout(resolve, this.meta.turnWatchdogMs + 15_000).unref()),
+            new Promise((resolve) =>
+              setTimeout(resolve, this.meta.turnWatchdogMs + 15_000).unref(),
+            ),
           ]);
           status = (await getRun<unknown>(runId).status) === 'failed' ? 'errored' : 'finished';
         } catch {

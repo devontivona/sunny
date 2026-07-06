@@ -1,11 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConversationStore } from '../src/gateway/store.js';
-import {
-  DelegationSupervisor,
-  type ChildRunHandle,
-} from '../src/agent/delegationSupervisor.js';
+import { DelegationSupervisor, type ChildRunHandle } from '../src/agent/delegationSupervisor.js';
 import {
   MAX_CONCURRENT_CHILDREN,
+  activeChildCount,
   completeLink,
   createLink,
   getLinkByChildThread,
@@ -43,7 +41,13 @@ describe('DelegationSupervisor', () => {
 
   it('spawns under the caps: creates a link, starts the child, returns its id', async () => {
     const { sup, startSubagent } = makeSupervisor(Promise.resolve());
-    const res = await sup.spawn({ parentThreadId: PARENT, task: 'research X', depth: 1, label: 'r', parentAuthority: TRUSTED_DM_AUTHORITY });
+    const res = await sup.spawn({
+      parentThreadId: PARENT,
+      task: 'research X',
+      depth: 1,
+      label: 'r',
+      parentAuthority: TRUSTED_DM_AUTHORITY,
+    });
 
     expect('childThreadId' in res).toBe(true);
     if (!('childThreadId' in res)) return;
@@ -66,14 +70,24 @@ describe('DelegationSupervisor', () => {
       });
     }
     const { sup, startSubagent } = makeSupervisor(Promise.resolve());
-    const res = await sup.spawn({ parentThreadId: PARENT, task: 'one too many', depth: 1, parentAuthority: TRUSTED_DM_AUTHORITY });
+    const res = await sup.spawn({
+      parentThreadId: PARENT,
+      task: 'one too many',
+      depth: 1,
+      parentAuthority: TRUSTED_DM_AUTHORITY,
+    });
     expect(res).toEqual({ error: 'concurrency_cap' });
     expect(startSubagent).not.toHaveBeenCalled();
   });
 
   it('refuses past the depth cap', async () => {
     const { sup, startSubagent } = makeSupervisor(Promise.resolve());
-    const res = await sup.spawn({ parentThreadId: PARENT, task: 'too deep', depth: 99, parentAuthority: TRUSTED_DM_AUTHORITY });
+    const res = await sup.spawn({
+      parentThreadId: PARENT,
+      task: 'too deep',
+      depth: 99,
+      parentAuthority: TRUSTED_DM_AUTHORITY,
+    });
     expect(res).toEqual({ error: 'depth_cap' });
     expect(startSubagent).not.toHaveBeenCalled();
   });
@@ -109,10 +123,67 @@ describe('DelegationSupervisor', () => {
     expect(startSubagent).not.toHaveBeenCalled();
   });
 
+  it('a startSubagent failure frees the concurrency slot instead of leaking a running link (DelegSpawn)', async () => {
+    // createLink records a `running` link (a concurrency slot) BEFORE the child is started. If
+    // startSubagent then throws, without compensation that link leaks as `running` with a null
+    // childRunId — permanently consuming one of the parent's 3 slots. The fix marks it failed.
+    const startSubagent = vi.fn(async (): Promise<ChildRunHandle> => {
+      throw new Error('spawn boom');
+    });
+    const sup = new DelegationSupervisor(tdb.db, store, startSubagent, vi.fn());
+    await expect(
+      sup.spawn({
+        parentThreadId: PARENT,
+        task: 't',
+        depth: 1,
+        parentAuthority: TRUSTED_DM_AUTHORITY,
+      }),
+    ).rejects.toThrow('spawn boom');
+
+    // The slot is freed: no running link for this parent.
+    expect(await activeChildCount(tdb.db, PARENT)).toBe(0);
+  });
+
+  it('a setChildRunId failure after the child is live does not re-throw (no step-retry duplicate, DelegSpawn)', async () => {
+    // doSpawn runs inside a durable `'use step'`; a throw retries the WHOLE step, re-running
+    // startSubagent and spawning a DUPLICATE live child. So once the child is live, recording its
+    // run id is best-effort — a failure there must be swallowed, not re-thrown.
+    const startSubagent = vi.fn(
+      async (): Promise<ChildRunHandle> => ({ runId: 'run-x', returnValue: Promise.resolve() }),
+    );
+    const sup = new DelegationSupervisor(tdb.db, store, startSubagent, vi.fn());
+    // The only `db.update` in the success path is setChildRunId — make it throw once.
+    vi.spyOn(tdb.db, 'update').mockImplementationOnce(() => {
+      throw new Error('setChildRunId boom');
+    });
+
+    const res = await sup.spawn({
+      parentThreadId: PARENT,
+      task: 't',
+      depth: 1,
+      parentAuthority: TRUSTED_DM_AUTHORITY,
+    });
+
+    // Resolved (did not throw → the step won't retry → no duplicate child) and started exactly once.
+    expect('childThreadId' in res).toBe(true);
+    expect(startSubagent).toHaveBeenCalledOnce();
+    if (!('childThreadId' in res)) return;
+    // The child is live; its link stays running (a null childRunId is the recoverable gap the
+    // restart re-attach already tolerates).
+    const link = await getLinkByChildThread(tdb.db, res.childThreadId);
+    expect(link?.status).toBe('running');
+  });
+
   it('watchdog: a child that dies has its link failed + a failure event sent to the parent', async () => {
     const wake = vi.fn();
     const { sup } = makeSupervisor(Promise.reject(new Error('child exploded')), wake);
-    const res = await sup.spawn({ parentThreadId: PARENT, task: 'risky', depth: 1, label: 'risky', parentAuthority: TRUSTED_DM_AUTHORITY });
+    const res = await sup.spawn({
+      parentThreadId: PARENT,
+      task: 'risky',
+      depth: 1,
+      label: 'risky',
+      parentAuthority: TRUSTED_DM_AUTHORITY,
+    });
     expect('childThreadId' in res).toBe(true);
     if (!('childThreadId' in res)) return;
 

@@ -9,6 +9,7 @@ import {
   sanitizePersonId,
   sanitizeTopic,
 } from './index.js';
+import { normalize } from '../gateway/auth.js';
 import { makeConfig } from '../../tests/factories.js';
 
 describe('sanitizeTopic', () => {
@@ -23,6 +24,15 @@ describe('sanitizeTopic', () => {
 
   it('throws when nothing safe remains', () => {
     expect(() => sanitizeTopic('/////')).toThrow(/invalid topic name/);
+  });
+
+  // Slug consolidation (fix/code-review-sweep): sanitizeTopic now shares `sanitizeSlug`, which
+  // ADDS a leading `.trim()` it previously lacked. Behavior-equivalent (the char-class replace
+  // already collapsed surrounding whitespace to trimmed dashes), pinned here so it stays so.
+  it('trims surrounding whitespace to the same slug (shared sanitizeSlug)', () => {
+    expect(sanitizeTopic('  Travel Plans  ')).toBe('travel-plans');
+    expect(sanitizeTopic('Travel Plans')).toBe('travel-plans');
+    expect(() => sanitizeTopic('   ')).toThrow(/invalid topic name/);
   });
 
   it('keeps the resolved topic path inside the topics dir', () => {
@@ -61,6 +71,22 @@ describe('applyMemoryWrite — computeNext semantics', () => {
       content: 'warm',
     });
     expect(readFileSync(memoryPaths(config.runtimeDir).SUNNY, 'utf8')).toBe('tone: warm\n');
+  });
+
+  it('replace with target: inserts $-sequences in content verbatim (no pattern expansion)', async () => {
+    const config = freshConfig();
+    await applyMemoryWrite(config, { file: 'USER', action: 'add', content: 'PLACEHOLDER end' });
+    // These are String.prototype.replace special patterns: $& (whole match), $` /
+    // $' (text before/after), $$ (literal $), $1 (group). Model-supplied content
+    // containing them must be inserted literally, not expanded into file content.
+    const content = "literal $& $` $$ $' $1 done";
+    await applyMemoryWrite(config, {
+      file: 'USER',
+      action: 'replace',
+      target: 'PLACEHOLDER',
+      content,
+    });
+    expect(readFileSync(memoryPaths(config.runtimeDir).USER, 'utf8')).toBe(`${content} end\n`);
   });
 
   it('replace without target: full-file replace (consolidation primitive)', async () => {
@@ -135,6 +161,29 @@ describe('per-person profile docs (multiplayer-family D3)', () => {
     expect(personId('+1 (719) 314-6820')).toBe('17193146820'); // digits only
     expect(personId('+17193146820')).toBe('17193146820'); // formatting-stable
     expect(personId('kate@example.com')).toBe('kate-example-com');
+  });
+
+  // Consolidation safety net (fix/code-review-sweep): personId now canonicalizes through the SAME
+  // shared `normalize` the authorizer uses. The on-disk key MUST NOT change for common inputs, or
+  // existing person docs would be orphaned. Enumerate representative phone/email variants and pin
+  // the exact prior output; also assert personId === slug(normalize(...)) so the two can't drift.
+  it('personId output is unchanged after normalizing through the shared canonicalizer', () => {
+    const slug = (s: string) => s.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    const cases: Array<[string, string]> = [
+      ['+1 (719) 314-6820', '17193146820'],
+      ['+17193146820', '17193146820'],
+      ['1 719 314 6820', '17193146820'],
+      ['(719) 314-6820', '7193146820'],
+      ['  Kate@Example.COM ', 'kate-example-com'],
+      ['kate@example.com', 'kate-example-com'],
+    ];
+    for (const [input, expected] of cases) {
+      expect(personId(input)).toBe(expected);
+      // The write-target guard and the derived id agree, so a fresh id round-trips unchanged.
+      expect(sanitizePersonId(personId(input))).toBe(expected);
+      // personId is exactly the slug of the shared normalized identity.
+      expect(personId(input)).toBe(slug(normalize(input)));
+    }
   });
 
   it('sanitizePersonId strips path traversal in a write target', () => {

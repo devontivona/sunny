@@ -15,7 +15,7 @@ function ScrollToLatest() {
   return (
     <button
       onClick={() => void scrollToBottom()}
-      className="absolute bottom-md left-1/2 -translate-x-1/2 rounded-full bg-border px-sm text-fg hover:text-primary"
+      className="absolute bottom-md left-1/2 -translate-x-1/2 text-primary hover:underline"
     >
       ↓ latest
     </button>

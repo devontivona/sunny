@@ -1,6 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { stateDir, type SunnyConfig } from '../config/index.js';
+import { normalize } from '../gateway/auth.js';
+import { sanitizeSlug } from '../slug.js';
 import { commitState, initStateRepo } from '../state/index.js';
 
 /** Core file ids the write tool may target by name (plus `topics/<name>`). */
@@ -32,14 +34,10 @@ export function memoryPaths(runtimeDir: string): MemoryPaths {
   };
 }
 
-/** Restrict topic names to a safe slug — prevents path traversal. */
+/** Restrict topic names to a safe slug — prevents path traversal (shares the one `sanitizeSlug`
+ *  canonicalizer with the MCP/credential/skill normalizers). */
 export function sanitizeTopic(name: string): string {
-  const slug = name
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-  if (!slug) throw new Error(`invalid topic name: ${name}`);
-  return slug;
+  return sanitizeSlug(name, 'topic name');
 }
 
 /**
@@ -48,10 +46,12 @@ export function sanitizeTopic(name: string): string {
  * e.g. `+1 (719) 314-6820` → `17193146820`, `kate@x.com` → `kate-x-com`.
  */
 export function personId(identity: string): string {
-  // Mirror the authorizer's identity normalization so formatting variants of one phone/email map
-  // to the SAME doc: phones reduce to digits, emails lowercase. Then slug to a filesystem-safe id.
-  const t = identity.trim().toLowerCase();
-  const base = /[0-9]/.test(t) && !t.includes('@') ? t.replace(/[^0-9]/g, '') : t;
+  // Canonicalize the identity through the SAME shared normalizer the authorizer uses (the
+  // ownership source of truth), so formatting variants of one phone/email map to the SAME doc.
+  // Then slug to a filesystem-safe id: the `+` a normalized phone carries is a leading char that
+  // the slug drops, so a phone still reduces to digits and an email to `local-domain-tld` —
+  // identical on-disk keys to the prior hand-mirrored normalization.
+  const base = normalize(identity);
   const slug = base.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
   if (!slug) throw new Error(`invalid person identity: ${identity}`);
   return slug;
@@ -59,12 +59,7 @@ export function personId(identity: string): string {
 
 /** Defensively re-slug a person id used as a write target (prevents path traversal). */
 export function sanitizePersonId(id: string): string {
-  const slug = id
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-  if (!slug) throw new Error(`invalid person id: ${id}`);
-  return slug;
+  return sanitizeSlug(id, 'person id');
 }
 
 /** The always-on core, loaded fresh each run (agent-memory D3). */
@@ -234,7 +229,12 @@ function computeNext(current: string, input: MemoryWriteInput): string {
         if (!current.includes(input.target)) {
           throw new Error('replace target not found in file');
         }
-        return current.replace(input.target, input.content ?? '');
+        // Insert the replacement LITERALLY: a function replacer bypasses
+        // String.replace's `$`-pattern interpretation ($$, $&, $`, $', $n), so
+        // model-supplied content containing those sequences is written verbatim
+        // instead of splicing/duplicating file content.
+        const content = input.content ?? '';
+        return current.replace(input.target, () => content);
       }
       // No target → full-file replace (the consolidation primitive).
       return `${(input.content ?? '').trimEnd()}\n`;

@@ -35,4 +35,17 @@ describe('sanitizePgJson', () => {
     sanitizePgJson(input);
     expect(input.t).toBe(`p${NUL}`);
   });
+
+  it('preserves a Date as its ISO string (respects toJSON) instead of flattening to {}', () => {
+    const iso = '2026-07-05T12:34:56.000Z';
+    const input = { at: new Date(iso), nested: [{ when: new Date(iso) }] };
+    // Matches JSONB serialization semantics (JSON.stringify(date) -> ISO string), so the
+    // value round-trips on read/replay rather than becoming an empty object.
+    expect(sanitizePgJson(input)).toEqual({ at: iso, nested: [{ when: iso }] });
+  });
+
+  it('serializes a top-level Date to its ISO string', () => {
+    const iso = '2026-07-05T00:00:00.000Z';
+    expect(sanitizePgJson(new Date(iso))).toBe(iso);
+  });
 });

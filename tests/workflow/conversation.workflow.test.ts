@@ -725,6 +725,81 @@ describe('runConversation (workflow integration — real Local World)', () => {
     expect(ctx.gateway.texts()).toEqual(['bubble one\n\nbubble two']); // exactly once
   });
 
+  it('R6: a message that lands after the prompt snapshot is not marked answered without being seen', async () => {
+    // loadPending must derive its mark-answered id set from the SAME window snapshot the prompt
+    // was built from. If a second inbound lands in the gap (here: right after loadPending reads
+    // the window), it is neither in the prompt nor folded by steering — so it must NOT be stamped
+    // answered. It stays unprocessed for a later turn instead of being silently dropped.
+    ctx = await setupTestRuntime();
+    const a = makeChannelEvent({ text: 'first question' });
+    await ctx.store.appendInbound(a);
+    setTurnModel(replyOnce('answering the first'));
+
+    const b = makeChannelEvent({ text: 'a second, later question' });
+    let calls = 0;
+    const realRW = ctx.store.recentWindow.bind(ctx.store);
+    vi.spyOn(ctx.store, 'recentWindow').mockImplementation(async (threadId: string) => {
+      const win = await realRW(threadId);
+      calls += 1;
+      // Inject B AFTER loadPending's window read (the 2nd recentWindow call: setupTurn is the 1st).
+      if (calls === 2) await ctx.store.appendInbound(b);
+      return win;
+    });
+
+    const run = await start(runConversation, [{ threadId: a.threadId }]);
+    await run.returnValue;
+    expect(await run.status).toBe('completed');
+
+    expect(ctx.gateway.texts()).toEqual(['answering the first']);
+    const pending = (await ctx.store.findUnprocessedInbound()).map((e) => e.messageId);
+    expect(pending).toContain(b.messageId); // left for the next turn — NOT silently dropped
+    expect(pending).not.toContain(a.messageId); // A (in the prompt) was answered
+  });
+
+  it('R9b: a failing recovery backstop does not mark the inbound answered with no reply', async () => {
+    // Abnormal turn end → fallback_text → backstop. When the backstop THROWS (or composes
+    // nothing), the turn delivered nothing: the inbound must stay unanswered for a re-run, never
+    // be silently stamped answered-with-no-reply.
+    ctx = await setupTestRuntime(
+      {},
+      {
+        recoverOverride: () => {
+          throw new Error('backstop model unavailable');
+        },
+        translateOverride: () => '',
+      },
+    );
+    const event = makeChannelEvent({ text: 'check the weather' });
+    await ctx.store.appendInbound(event);
+    setTurnModel([
+      { type: 'tool-call', toolName: 'bash', input: '{"command":"echo x"}', text: 'checking' },
+      { type: 'text', text: '' },
+    ]);
+
+    const run = await start(runConversation, [{ threadId: event.threadId }]);
+    await run.returnValue;
+    expect(await run.status).toBe('completed'); // the throw is caught, not fatal
+
+    expect(ctx.gateway.sendCount).toBe(0); // backstop produced nothing → nothing sent
+    expect(await ctx.store.hasUnansweredInbound(event.threadId)).toBe(true); // left for recovery
+  });
+
+  it('R9c: a turn that produces no deliverable output does not silently consume the inbound', async () => {
+    // The model returns empty text and stops (no reply, no sentinel, no tool work). That is not a
+    // deliberate silence — nothing was delivered — so the inbound must not be marked answered.
+    ctx = await setupTestRuntime();
+    const event = makeChannelEvent({ text: 'hello?' });
+    await ctx.store.appendInbound(event);
+    setTurnModel([{ type: 'text', text: '' }]);
+
+    const run = await start(runConversation, [{ threadId: event.threadId }]);
+    await run.returnValue;
+    expect(await run.status).toBe('completed');
+
+    expect(ctx.gateway.sendCount).toBe(0);
+    expect(await ctx.store.hasUnansweredInbound(event.threadId)).toBe(true); // not silently consumed
+  });
+
   it('text mode: send_image rides the send step; send_message is not offered', async () => {
     // translateOverride: the step-1 cadence trigger now always has notes (the tool-call
     // log), so without the stub it would reach a live model.

@@ -43,6 +43,10 @@ export interface LiveRunState {
   run: LiveRun | null;
   /** True once the run has reached a terminal state on the wire. */
   done: boolean;
+  /** True once the SSE connection has hard-failed (a 401 / closed stream that
+   *  won't auto-reconnect) — lets the view stop showing "responding…" and mark the
+   *  data as stale instead of hanging forever. */
+  error: boolean;
   /** Increments on every streamed chunk — a stable "content grew" signal for
    *  keeping the view scrolled to the bottom while streaming. */
   version: number;
@@ -58,12 +62,14 @@ export function useLiveRun(runId: string | null, kind: RunKind): LiveRunState {
   const [message, setMessage] = useState<UIMessage | null>(null);
   const [run, setRun] = useState<LiveRun | null>(null);
   const [done, setDone] = useState(false);
+  const [error, setError] = useState(false);
   const [version, setVersion] = useState(0);
 
   useEffect(() => {
     setMessage(null);
     setRun(null);
     setDone(false);
+    setError(false);
     if (!runId) return;
 
     let cancelled = false;
@@ -106,6 +112,16 @@ export function useLiveRun(runId: string | null, kind: RunKind): LiveRunState {
       }
       es.close();
     });
+    // EventSource retries transient drops itself (readyState CONNECTING). A CLOSED
+    // state is a hard failure that won't reconnect — most often a 401 after the
+    // session lapsed. Surface it (so the pane stops on "responding…" forever) and,
+    // like `apiGet`, ask the shell to re-pair. Closing ES stops any reconnect loop.
+    es.addEventListener('error', () => {
+      if (cancelled || es.readyState !== EventSource.CLOSED) return;
+      es.close();
+      setError(true);
+      window.dispatchEvent(new CustomEvent('dashboard:unauthorized'));
+    });
 
     void (async () => {
       try {
@@ -129,7 +145,7 @@ export function useLiveRun(runId: string | null, kind: RunKind): LiveRunState {
     };
   }, [runId, kind]);
 
-  return { message, run, done, version };
+  return { message, run, done, error, version };
 }
 
 export interface LiveThreadState {
@@ -140,6 +156,9 @@ export interface LiveThreadState {
   /** The runId of the most recently completed turn — bumps on each `done` so the
    *  caller can refetch the persisted thread to settle. */
   lastDoneRunId: string | null;
+  /** True once the thread's SSE connection has hard-failed (a 401 / closed stream
+   *  that won't auto-reconnect) — lets the view stop showing "responding…" forever. */
+  error: boolean;
   /** Increments on every streamed chunk — a stable signal for "content grew", used to
    *  keep the view scrolled to the bottom while streaming. */
   version: number;
@@ -155,11 +174,13 @@ export function useLiveThread(threadId: string | null): LiveThreadState {
   const [message, setMessage] = useState<UIMessage | null>(null);
   const [run, setRun] = useState<LiveRun | null>(null);
   const [lastDoneRunId, setLastDoneRunId] = useState<string | null>(null);
+  const [error, setError] = useState(false);
   const [version, setVersion] = useState(0);
 
   useEffect(() => {
     setMessage(null);
     setRun(null);
+    setError(false);
     if (!threadId) return;
 
     let cancelled = false;
@@ -233,6 +254,16 @@ export function useLiveThread(threadId: string | null): LiveThreadState {
       }
       // Keep the EventSource open for the next turn on this thread.
     });
+    // EventSource retries transient drops itself (readyState CONNECTING). A CLOSED
+    // state is a hard failure that won't reconnect — most often a 401 after the
+    // session lapsed. Surface it (so the pane stops on "responding…" forever) and,
+    // like `apiGet`, ask the shell to re-pair. Closing ES stops any reconnect loop.
+    es.addEventListener('error', () => {
+      if (cancelled || es.readyState !== EventSource.CLOSED) return;
+      es.close();
+      setError(true);
+      window.dispatchEvent(new CustomEvent('dashboard:unauthorized'));
+    });
 
     return () => {
       cancelled = true;
@@ -245,7 +276,7 @@ export function useLiveThread(threadId: string | null): LiveThreadState {
     };
   }, [threadId]);
 
-  return { message, run, lastDoneRunId, version };
+  return { message, run, lastDoneRunId, error, version };
 }
 
 /** Re-render every second while `running` so elapsed-time labels tick. The value

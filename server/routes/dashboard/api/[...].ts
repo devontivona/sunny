@@ -67,6 +67,12 @@ type AuthState =
   | { state: 'anonymous' }
   | { state: 'pending'; requestId: string; deviceHint: string };
 
+// Raster image content-types safe to serve INLINE on the dashboard origin. Anything
+// else the (sender-controlled) stored mediaType claims — image/svg+xml, text/html,
+// … — could execute as a document on-origin (stored XSS), so it is forced to
+// download instead of rendered inline.
+const INLINE_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+
 // Per-IP rate limit for approval requests (module-level; persists across calls).
 const reqHits = new Map<string, number[]>();
 function rateLimited(ip: string, max = 5, windowMs = 10 * 60_000): boolean {
@@ -87,11 +93,26 @@ function cookieOpts(cfg: DashboardConfig, maxAgeMs: number) {
   };
 }
 
+/**
+ * Client IP for the approval rate-limit + device-hint keys. We sit behind a
+ * Cloudflare tunnel, so the leftmost `X-Forwarded-For` is attacker-controllable
+ * (a client can prepend arbitrary values) — keying on it lets an attacker rotate
+ * the header to mint fresh rate-limit buckets and spam the owner with approval
+ * texts. Trust ONLY `CF-Connecting-IP` (set — and overwritten — by our own
+ * Cloudflare edge, so a client can't forge it), falling back to the real socket
+ * IP. Never `getRequestIP(event, { xForwardedFor: true })`.
+ */
+function clientIp(event: H3Event): string {
+  const cf = getHeader(event, 'cf-connecting-ip');
+  if (cf) return cf.split(',')[0]!.trim();
+  return getRequestIP(event) ?? 'unknown';
+}
+
 function deviceHint(event: H3Event): string {
   const ua = String(getHeader(event, 'user-agent') ?? 'unknown');
   const platform = /Mac|iPhone|iPad|Android|Windows|Linux/.exec(ua)?.[0] ?? 'device';
   const browser = /Firefox|Edg|Chrome|Safari/.exec(ua)?.[0] ?? 'browser';
-  return `${platform}/${browser} · ${getRequestIP(event, { xForwardedFor: true }) ?? '?'}`;
+  return `${platform}/${browser} · ${clientIp(event)}`;
 }
 
 export default defineEventHandler(async (event) => {
@@ -167,7 +188,7 @@ export default defineEventHandler(async (event) => {
 
   if (path === 'auth/request' && method === 'POST') {
     if (cfg.mode !== 'auth') return json(400, { error: 'auth not configured' });
-    const ip = getRequestIP(event, { xForwardedFor: true }) ?? 'unknown';
+    const ip = clientIp(event);
     if (rateLimited(ip)) return json(429, { error: 'too many requests; try again later' });
     try {
       const existingId = getCookie(event, PENDING_COOKIE);
@@ -185,7 +206,7 @@ export default defineEventHandler(async (event) => {
     }
   }
 
-  if (path === 'auth/approve' && method === 'GET') {
+  if (path === 'auth/approve' && (method === 'GET' || method === 'POST')) {
     const rid = String(query.rid ?? '');
     const secret = String(query.secret ?? '');
     const row = rid ? await auth.getRequest(rid) : null;
@@ -202,6 +223,15 @@ export default defineEventHandler(async (event) => {
     }
     if (row.status !== 'pending' && row.status !== 'approved')
       return fail('This approval link was already used or is no longer valid.');
+    // Approval is state-changing, so it must NOT happen on a GET: the owner is
+    // texted this URL, and link-preview crawlers / prefetchers fetch it
+    // server-side with a GET — that would auto-approve a waiting attacker with
+    // zero owner interaction. GET only renders a confirm form; the owner tapping
+    // Approve POSTs it (crawlers don't submit forms). The constant-time secret
+    // check gates both verbs.
+    if (method === 'GET') {
+      return approvalConfirmPage(rid, secret, row.deviceHint ?? '');
+    }
     await auth.approveRequest(row.id);
     log.info('access request approved by owner', { requestId: row.id });
     return approvalPage(
@@ -328,7 +358,19 @@ export default defineEventHandler(async (event) => {
           }
           try {
             const bytes = readFileSync(ref.disk);
-            setResponseHeader(event, 'content-type', ref.mediaType || contentTypeForName(ref.disk));
+            const declared = (ref.mediaType || contentTypeForName(ref.disk))
+              .toLowerCase()
+              .split(';')[0]!
+              .trim();
+            if (INLINE_IMAGE_TYPES.has(declared)) {
+              setResponseHeader(event, 'content-type', declared);
+            } else {
+              // Not a known-safe raster image: never render it inline on this
+              // origin. Serve as a generic download so the browser can't execute
+              // it as a document (e.g. inbound image/svg+xml or text/html).
+              setResponseHeader(event, 'content-type', 'application/octet-stream');
+              setResponseHeader(event, 'content-disposition', 'attachment');
+            }
             setResponseHeader(event, 'cache-control', 'private, max-age=300');
             return bytes;
           } catch {
@@ -570,6 +612,28 @@ function approvalPage(message: string, ok: boolean): string {
 body{min-height:100dvh;display:flex;align-items:center;justify-content:center;padding:24px;background:#0d1117;color:#e6edf3;font-family:ui-monospace,"JetBrains Mono","Fira Code",monospace;font-size:15px;line-height:24px}
 .wrap{max-width:480px}.m{font-weight:700;letter-spacing:.2em;margin-bottom:12px}.t{color:${color}}</style></head>
 <body><div class="wrap"><div class="m">サニー</div><div class="t">${escapeHtml(message)}</div></div></body></html>`;
+}
+
+/**
+ * Owner confirm page for a device-approval GET (security: a GET must not mutate
+ * state). Renders a POST form back to the same approve endpoint — the secret is
+ * carried in the action query, so tapping Approve re-runs the constant-time
+ * secret check server-side. A crawler/prefetcher issues a GET and lands here
+ * without approving anything.
+ */
+function approvalConfirmPage(rid: string, secret: string, hint: string): string {
+  const action = `/dashboard/api/auth/approve?rid=${encodeURIComponent(rid)}&secret=${encodeURIComponent(secret)}`;
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="dark"><title>サニー</title>
+<style>:root{color-scheme:dark}html,body{margin:0}
+body{min-height:100dvh;display:flex;align-items:center;justify-content:center;padding:24px;background:#0d1117;color:#e6edf3;font-family:ui-monospace,"JetBrains Mono","Fira Code",monospace;font-size:15px;line-height:24px}
+.wrap{max-width:480px}.m{font-weight:700;letter-spacing:.2em;margin-bottom:12px}
+button{font:inherit;color:#0d1117;background:#3fb950;border:0;padding:10px 18px;margin-top:16px;cursor:pointer}
+.h{color:#8b949e;margin-top:16px}</style></head>
+<body><div class="wrap"><div class="m">サニー</div>
+<div>A new device (${escapeHtml(hint || 'unknown')}) is asking to open your dashboard.</div>
+<form method="POST" action="${escapeHtml(action)}"><button type="submit">Approve this device</button></form>
+<div class="h">If you didn't start this, close this tab — nothing changes unless you tap Approve.</div>
+</div></body></html>`;
 }
 
 function escapeHtml(s: string): string {

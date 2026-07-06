@@ -127,47 +127,70 @@ export interface SchedulerDeps {
 export function startScheduler(deps: SchedulerDeps): void {
   const { db, dispatch } = deps;
 
+  // Reentrancy guard (SchedDouble): a slow tick (blocked on dispatch or DB) must not overlap with
+  // the next interval fire — two overlapping ticks could both read the same row as due (the advance
+  // UPDATE hasn't committed yet) and dispatch it twice → duplicate scheduled texts. One in-process
+  // ticker, so a boolean fully closes it: a fire that lands while a tick is in flight is skipped
+  // (the still-due rows are simply picked up by the next tick).
+  let ticking = false;
+
   async function tick(): Promise<void> {
-    const now = new Date();
-    let due: ScheduleRow[];
+    if (ticking) return;
+    ticking = true;
     try {
-      due = await db
-        .select()
-        .from(schedules)
-        .where(and(eq(schedules.active, true), lte(schedules.nextRunAt, now)))
-        .limit(MAX_PER_TICK);
-    } catch (err) {
-      log.error('tick query failed', { err: String(err) });
-      return;
-    }
-
-    for (const s of due) {
-      // Advance the schedule BEFORE dispatch so a slow/failed run can't double-fire.
-      // Missed-fire policy: one-shots fire once then deactivate; recurring compute
-      // the next occurrence forward from now (no backfill of missed occurrences).
-      const next =
-        s.kind === 'once' ? null : computeNextRun(s.kind as ScheduleKind, s.spec, now, s.timezone);
-      await db
-        .update(schedules)
-        .set({ lastRunAt: now, nextRunAt: next, active: next !== null })
-        .where(eq(schedules.id, s.id));
-
-      const [run] = await db
-        .insert(scheduleRuns)
-        .values({ scheduleId: s.id, status: 'running' })
-        .returning();
-      if (!run) continue;
-
-      log.info('schedule firing', { id: s.id, label: s.label, kind: s.kind, runId: run.id });
+      const now = new Date();
+      let due: ScheduleRow[];
       try {
-        await dispatch(s, run.id);
+        due = await db
+          .select()
+          .from(schedules)
+          .where(and(eq(schedules.active, true), lte(schedules.nextRunAt, now)))
+          .limit(MAX_PER_TICK);
       } catch (err) {
-        log.error('dispatch failed', { id: s.id, err: String(err) });
-        await db
-          .update(scheduleRuns)
-          .set({ status: 'failed', error: String(err) })
-          .where(eq(scheduleRuns.id, run.id));
+        log.error('tick query failed', { err: String(err) });
+        return;
       }
+
+      for (const s of due) {
+        // Per-schedule isolation (SchedCrash): the advance UPDATE + run INSERT + dispatch run
+        // inside a try so a transient DB error on one schedule can't abort the rest of the tick —
+        // and, since `tick` is invoked as `void tick()` with no process-level unhandledRejection
+        // handler, can't reject an unobserved promise and crash the gateway. Log and continue.
+        try {
+          // Advance the schedule BEFORE dispatch so a slow/failed run can't double-fire.
+          // Missed-fire policy: one-shots fire once then deactivate; recurring compute
+          // the next occurrence forward from now (no backfill of missed occurrences).
+          const next =
+            s.kind === 'once'
+              ? null
+              : computeNextRun(s.kind as ScheduleKind, s.spec, now, s.timezone);
+          await db
+            .update(schedules)
+            .set({ lastRunAt: now, nextRunAt: next, active: next !== null })
+            .where(eq(schedules.id, s.id));
+
+          const [run] = await db
+            .insert(scheduleRuns)
+            .values({ scheduleId: s.id, status: 'running' })
+            .returning();
+          if (!run) continue;
+
+          log.info('schedule firing', { id: s.id, label: s.label, kind: s.kind, runId: run.id });
+          try {
+            await dispatch(s, run.id);
+          } catch (err) {
+            log.error('dispatch failed', { id: s.id, err: String(err) });
+            await db
+              .update(scheduleRuns)
+              .set({ status: 'failed', error: String(err) })
+              .where(eq(scheduleRuns.id, run.id));
+          }
+        } catch (err) {
+          log.error('schedule tick failed', { id: s.id, err: String(err) });
+        }
+      }
+    } finally {
+      ticking = false;
     }
   }
 
