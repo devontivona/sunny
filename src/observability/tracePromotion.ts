@@ -16,33 +16,42 @@ import type { AttributeValue } from '@opentelemetry/api';
  * `langfuse.trace.{name,session.id,user.id,input,output}` to the trace from ANY span in it (per
  * the Langfuse OpenTelemetry mapping). So we copy them across on every AI-SDK span.
  *
- * AI SDK v7 (the `@ai-sdk/otel` integration) renamed the SOURCE attributes vs v6: the function id
- * moved `ai.telemetry.functionId` → `gen_ai.agent.name`, and per-call metadata moved from the
- * `ai.telemetry.metadata.*` channel to runtime-context attributes `ai.settings.context.*` (we feed
- * `langfuseSessionId`/`langfuseUserId` via `telemetry.includeRuntimeContext`). The prompt/response
- * attribute names are unchanged. We read the v7 names with the v6 names as fallback. So we copy:
+ * Two span dialects feed this processor:
+ * - HOST-side vanilla calls (translator, backstop, judge) via the `@ai-sdk/otel` integration:
+ *   function id in `gen_ai.agent.name`, session in `ai.settings.context.*` (fed through
+ *   `telemetry.includeRuntimeContext`), payloads in semconv `gen_ai.input/output.messages`.
+ * - DURABLE runs via `ObservedLanguageModel` (the WorkflowAgent telemetry gap, see
+ *   observedModel.ts): same id/session attributes, payloads in the v6-style
+ *   `ai.prompt.messages`/`ai.response.text`/`ai.response.toolCalls`.
+ * We read both, v6 names first (exact fit) with semconv fallback. So we copy:
  * - name/session/user are constant across a turn's spans → set once, idempotent.
  * - input  = the user's message (last user turn in the prompt) — same on every step → consistent.
- * - output = the delivered reply (model text, or `send_message` text) — set last-write-wins so the
- *   final reply lands.
- * No-op on any span without our metadata (WDK infra, etc.). One wrinkle: the `delivery-recovery`
- * checkpoint runs WITHIN a turn (its own `functionId`), so it must NOT claim the trace name — we
- * skip naming from it, letting the `agent-turn`/`*-job` span name the trace.
+ * - output = the delivered reply. Text-as-reply (PR #31): the FINAL step's model text IS the
+ *   reply, so a span claims the output only when it finished `stop` (tool-call steps carry
+ *   narration, not the reply), with the legacy `send_message` extraction as fallback.
+ * No-op on any span without our metadata (WDK infra, etc.). Auxiliary passes that run WITHIN a
+ * turn (`turn-backstop` — né `delivery-recovery` — and `progress-translator`) must NOT claim the
+ * trace name/input; the backstop still claims output (it composes the delivered reply on
+ * abnormal turns), the translator claims nothing.
  *
  * Registered BEFORE the `LangfuseSpanProcessor` so the promoted attributes are present when it
  * exports (mirrors `RedactingSpanProcessor`: `onEnding` while writable, `onEnd` as a fallback).
  */
-// Source attribute candidates, v7 first then v6 fallback (see header). `pick` returns the first
-// present string value among them.
+// Source attribute candidates (see header). `pick` returns the first present string value.
 const SESSION_META = [
   'ai.settings.context.langfuseSessionId',
   'ai.telemetry.metadata.langfuseSessionId',
 ];
 const USER_META = ['ai.settings.context.langfuseUserId', 'ai.telemetry.metadata.langfuseUserId'];
 const FUNCTION_ID = ['gen_ai.agent.name', 'ai.telemetry.functionId'];
-const PROMPT_MESSAGES = ['ai.prompt.messages'];
+const PROMPT_MESSAGES = ['ai.prompt.messages', 'gen_ai.input.messages'];
 const RESPONSE_TEXT = ['ai.response.text'];
 const RESPONSE_TOOLCALLS = ['ai.response.toolCalls'];
+const OUTPUT_MESSAGES = ['gen_ai.output.messages'];
+const FINISH_REASONS = ['gen_ai.response.finish_reasons'];
+/** In-turn auxiliary passes: never name the trace or claim its input (see header). */
+const AUX_BACKSTOP = ['delivery-recovery', 'turn-backstop'];
+const AUX_SILENT = ['progress-translator'];
 
 /** First present string attribute among `keys`, else undefined. */
 function pick(
@@ -64,14 +73,15 @@ const TRACE_OUTPUT = 'langfuse.trace.output';
 
 const MAX_IO = 8000;
 
-/** Last user message in an `ai.prompt.messages` JSON string — the turn's input. */
+/** Last user message in a prompt-messages JSON string (`ai.prompt.messages` carries `content`;
+ *  semconv `gen_ai.input.messages` carries `parts`) — the turn's input. */
 function lastUserText(raw: AttributeValue | undefined): string | undefined {
   if (typeof raw !== 'string') return undefined;
   try {
     const msgs = JSON.parse(raw);
     if (!Array.isArray(msgs)) return undefined;
     for (let i = msgs.length - 1; i >= 0; i--) {
-      if (msgs[i]?.role === 'user') return textOf(msgs[i].content);
+      if (msgs[i]?.role === 'user') return textOf(msgs[i].content ?? msgs[i].parts);
     }
   } catch {
     /* malformed attribute — skip */
@@ -79,13 +89,40 @@ function lastUserText(raw: AttributeValue | undefined): string | undefined {
   return undefined;
 }
 
-/** A model-message `content` (string or part array) flattened to its text. */
+/** Assistant text of a semconv `gen_ai.output.messages` JSON string. */
+function semconvOutputText(raw: AttributeValue | undefined): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  try {
+    const msgs = JSON.parse(raw);
+    if (!Array.isArray(msgs)) return undefined;
+    const t = msgs
+      .map((m) => textOf(m?.parts))
+      .filter(Boolean)
+      .join('\n')
+      .trim();
+    return t || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Whether the span's model call finished `stop` (the reply-bearing final step; tool-call
+ *  steps finish `tool-calls` and carry narration, not the reply). */
+function finishedStop(raw: AttributeValue | undefined): boolean {
+  if (typeof raw === 'string') return raw === 'stop';
+  return Array.isArray(raw) && (raw as unknown[]).includes('stop');
+}
+
+/** A model-message `content`/`parts` (string or part array) flattened to its text. Handles the
+ *  v6/provider part shape (`{type:'text', text}`) AND semconv (`{type:'text', content}`). */
 function textOf(content: unknown): string | undefined {
   if (typeof content === 'string') return content.trim() || undefined;
   if (Array.isArray(content)) {
     const t = content
-      .filter((p) => p?.type === 'text' && typeof p.text === 'string')
-      .map((p) => p.text)
+      .filter((p) => p?.type === 'text')
+      .map((p) =>
+        typeof p.text === 'string' ? p.text : typeof p.content === 'string' ? p.content : '',
+      )
       .join('\n')
       .trim();
     return t || undefined;
@@ -159,25 +196,36 @@ export class TracePromotingSpanProcessor implements SpanProcessor {
     const user = pick(attrs, USER_META);
     if (typeof user === 'string' && typeof attrs[USER_ID] !== 'string') set(USER_ID, user);
 
-    // Name from the primary turn/job operation — NOT the `delivery-recovery` checkpoint, which
-    // runs within a turn and would otherwise hijack the trace name from `agent-turn`.
     const functionId = pick(attrs, FUNCTION_ID);
-    const isRecovery = typeof functionId === 'string' && functionId.startsWith('delivery-recovery');
-    if (typeof functionId === 'string' && !isRecovery && typeof attrs[TRACE_NAME] !== 'string') {
-      set(TRACE_NAME, functionId);
+    const isBackstop =
+      typeof functionId === 'string' && AUX_BACKSTOP.some((p) => functionId.startsWith(p));
+    const isSilentAux =
+      typeof functionId === 'string' && AUX_SILENT.some((p) => functionId.startsWith(p));
+
+    // Name + input come from the primary turn/job spans only — an in-turn auxiliary pass
+    // (backstop, translator) would otherwise hijack them from `agent-turn`/`*-job`.
+    if (!isBackstop && !isSilentAux) {
+      if (typeof functionId === 'string' && typeof attrs[TRACE_NAME] !== 'string') {
+        set(TRACE_NAME, functionId);
+      }
+      const input = lastUserText(pick(attrs, PROMPT_MESSAGES));
+      if (input && typeof attrs[TRACE_INPUT] !== 'string') set(TRACE_INPUT, input.slice(0, MAX_IO));
     }
 
-    // Input = the user's message (constant across a turn's steps; the recovery checkpoint's prompt
-    // has no user turn, so it contributes nothing).
-    const input = lastUserText(pick(attrs, PROMPT_MESSAGES));
-    if (input && typeof attrs[TRACE_INPUT] !== 'string') set(TRACE_INPUT, input.slice(0, MAX_IO));
-
-    // Output = the DELIVERED reply: the `send_message` text on a turn/job (plain model text is
-    // scratch, D-MG8), or the model text on the recovery checkpoint (which generates the reply).
-    // Last non-empty wins → the final reply.
-    const output = isRecovery
-      ? modelText(pick(attrs, RESPONSE_TEXT))
-      : sendMessageText(pick(attrs, RESPONSE_TOOLCALLS));
+    // Output = the DELIVERED reply (text-as-reply, PR #31): the final `stop` step's model text
+    // on a primary span (tool-call steps carry narration, skipped), the composed text on a
+    // backstop span (it generates the reply on abnormal turns), nothing from the translator.
+    // Legacy `send_message` extraction kept as the non-final fallback. Last non-empty wins.
+    const text =
+      modelText(pick(attrs, RESPONSE_TEXT)) ?? semconvOutputText(pick(attrs, OUTPUT_MESSAGES));
+    let output: string | undefined;
+    if (isBackstop) {
+      output = text;
+    } else if (!isSilentAux) {
+      output = finishedStop(attrs[FINISH_REASONS[0]!])
+        ? text
+        : sendMessageText(pick(attrs, RESPONSE_TOOLCALLS));
+    }
     if (output) set(TRACE_OUTPUT, output.slice(0, MAX_IO));
   }
 }

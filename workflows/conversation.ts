@@ -104,7 +104,11 @@ export async function runConversation(input: ConversationInput): Promise<void> {
   // (`translateStep`) and send are SEPARATE memoized steps, so a replay never re-relays.
   const subject = setup.subjectName ?? ownerName;
   const { result, usage, foldedIds, translatorUpdates } = await streamAgent({
-    model: buildTurnModel(setup.modelId, setup.testModelResponses),
+    // `observe` gives the turn exactly-once generation spans in Langfuse (session = thread).
+    model: buildTurnModel(setup.modelId, setup.testModelResponses, {
+      functionId: 'agent-turn',
+      sessionId: threadId,
+    }),
     instructions: setup.instructions,
     tools: buildTools({
       threadId,

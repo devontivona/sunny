@@ -73,7 +73,12 @@ export async function runSubagent(input: SubagentInput): Promise<void> {
     fromName: input.label ?? 'subagent',
   } as const;
   const { result, foldedIds, reportsSent } = await streamAgent({
-    model: buildTurnModel(setup.modelId, setup.testModelResponses),
+    // `observe` gives the child exactly-once generation spans in Langfuse, sessioned under the
+    // PARENT thread so the whole delegation tree groups with the conversation that spawned it.
+    model: buildTurnModel(setup.modelId, setup.testModelResponses, {
+      functionId: 'subagent-run',
+      sessionId: input.parentThreadId,
+    }),
     instructions: setup.instructions,
     tools: buildChildTools(input),
     providerOptions: {

@@ -1,8 +1,10 @@
 import type { LanguageModel } from 'ai';
+import type { LanguageModelV4 } from '@ai-sdk/provider';
 import { anthropic } from '@ai-sdk/anthropic';
 import { mockSequenceModel, type MockResponseDescriptor } from './mockModel.js';
+import { ObservedLanguageModel, type ObserveMeta } from './observedModel.js';
 
-export type { MockResponseDescriptor };
+export type { MockResponseDescriptor, ObserveMeta };
 
 /** Test seam key: a workflow integration test sets an array of mock response descriptors
  *  (plain, serializable data) here on `globalThis`. */
@@ -24,13 +26,22 @@ const TEST_TURN_MODEL = Symbol.for('sunny.testTurnModel');
  *
  * Node-free (only `@ai-sdk/anthropic` + the serializable mock + a type import), so it is safe to
  * import from the workflow, matching `bashSpecs`/`memorySpecs`.
+ *
+ * `observe` wraps the model (real OR mock — tests exercise the same serialization + span path)
+ * in {@link ObservedLanguageModel}, which emits one exactly-once generation span per model call
+ * from the host side of the journaled `doStreamStep` — the durable runs' Langfuse telemetry
+ * (see observedModel.ts for why the WorkflowAgent's own telemetry can't reach the exporter).
  */
 export function buildTurnModel(
   modelId: string,
   responses?: MockResponseDescriptor[],
+  observe?: ObserveMeta,
 ): LanguageModel {
-  if (responses && responses.length > 0) return mockSequenceModel(responses);
-  return anthropic(modelId);
+  const inner =
+    responses && responses.length > 0
+      ? (mockSequenceModel(responses) as unknown as LanguageModelV4)
+      : anthropic(modelId);
+  return observe ? new ObservedLanguageModel(inner, observe) : inner;
 }
 
 /**

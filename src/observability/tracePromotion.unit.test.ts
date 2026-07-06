@@ -136,4 +136,73 @@ describe('TracePromotingSpanProcessor', () => {
     proc.onEnding(fakeSpan(attrs) as never);
     expect(attrs['langfuse.trace.output']).toBeUndefined();
   });
+
+  it('uses the FINAL step model text as trace output (text-as-reply, finish=stop)', () => {
+    // PR #31: the reply IS the final text; the final step finishes `stop`, tool steps
+    // finish `tool-calls` (previous test) and never claim the output.
+    const attrs: Record<string, unknown> = {
+      'gen_ai.agent.name': 'agent-turn',
+      'ai.settings.context.langfuseSessionId': 'thread-1',
+      'ai.response.text': 'Done — deployed and verified.',
+      'gen_ai.response.finish_reasons': ['stop'],
+    };
+    proc.onEnding(fakeSpan(attrs) as never);
+    expect(attrs['langfuse.trace.output']).toBe('Done — deployed and verified.');
+  });
+
+  it('does NOT name the trace or claim input/output from the progress-translator', () => {
+    // The translator runs WITHIN a turn (a `'use step'` → its spans join the turn's trace);
+    // before the aux skip-list it renamed real turn traces to "progress-translator".
+    const attrs: Record<string, unknown> = {
+      'gen_ai.agent.name': 'progress-translator',
+      'ai.settings.context.langfuseSessionId': 'thread-1',
+      'ai.prompt.messages': JSON.stringify([{ role: 'user', content: 'interim notes' }]),
+      'ai.response.text': 'quick progress update',
+      'gen_ai.response.finish_reasons': ['stop'],
+    };
+    proc.onEnding(fakeSpan(attrs) as never);
+    expect(attrs['langfuse.trace.name']).toBeUndefined();
+    expect(attrs['langfuse.trace.input']).toBeUndefined();
+    expect(attrs['langfuse.trace.output']).toBeUndefined();
+    expect(attrs['langfuse.session.id']).toBe('thread-1'); // session still promotes
+  });
+
+  it('turn-backstop (renamed delivery-recovery) claims output but not name/input', () => {
+    const attrs: Record<string, unknown> = {
+      'gen_ai.agent.name': 'turn-backstop',
+      'ai.settings.context.langfuseSessionId': 'thread-1',
+      'ai.prompt.messages': JSON.stringify([{ role: 'user', content: 'notes' }]),
+      'ai.response.text': 'Still working on it — the build is at step 3.',
+    };
+    proc.onEnding(fakeSpan(attrs) as never);
+    expect(attrs['langfuse.trace.name']).toBeUndefined();
+    expect(attrs['langfuse.trace.input']).toBeUndefined();
+    expect(attrs['langfuse.trace.output']).toBe('Still working on it — the build is at step 3.');
+  });
+
+  it('reads semconv gen_ai.input/output.messages (the v7 integration dialect)', () => {
+    const attrs: Record<string, unknown> = {
+      'gen_ai.agent.name': 'turn-backstop',
+      'ai.settings.context.langfuseSessionId': 'thread-1',
+      'gen_ai.output.messages': JSON.stringify([
+        {
+          role: 'assistant',
+          parts: [{ type: 'text', content: 'composed status' }],
+          finish_reason: 'stop',
+        },
+      ]),
+    };
+    proc.onEnding(fakeSpan(attrs) as never);
+    expect(attrs['langfuse.trace.output']).toBe('composed status');
+
+    const input: Record<string, unknown> = {
+      'gen_ai.agent.name': 'agent-turn',
+      'ai.settings.context.langfuseSessionId': 'thread-1',
+      'gen_ai.input.messages': JSON.stringify([
+        { role: 'user', parts: [{ type: 'text', content: 'hello there' }] },
+      ]),
+    };
+    proc.onEnding(fakeSpan(input) as never);
+    expect(input['langfuse.trace.input']).toBe('hello there');
+  });
 });

@@ -24,7 +24,7 @@
  * and tests run with tracing off by default.
  */
 import { NodeSDK } from '@opentelemetry/sdk-node';
-import { LangfuseSpanProcessor } from '@langfuse/otel';
+import { isDefaultExportSpan, LangfuseSpanProcessor } from '@langfuse/otel';
 import type { SpanProcessor, ReadableSpan, Span } from '@opentelemetry/sdk-trace-base';
 import type { AttributeValue } from '@opentelemetry/api';
 import { registerTelemetry } from 'ai';
@@ -106,7 +106,31 @@ export function startTelemetry(): void {
     log.info('tracing disabled (no Langfuse keys, or SUNNY_OTEL_DISABLED=1)');
     return;
   }
-  langfuseProcessor = new LangfuseSpanProcessor();
+  // Export the default Langfuse set (gen_ai / LLM-instrumentor / Langfuse spans) PLUS the
+  // load-bearing subset of the WDK runtime's `workflow`-scoped spans — the durable runs' trace
+  // skeleton:
+  //  - `workflow.start <name>`: the run trace's ROOT span.
+  //  - `STEP <name>`: one per journaled step (model calls, tool executes, sends). WDK's execution
+  //    topology is a recursive staircase (each step's completion enqueues the next resume UNDER
+  //    it); the intermediate resume spans below are filtered, so each STEP's parent dangles and
+  //    Langfuse renders the steps as chronological SIBLINGS under the trace — the readable shape.
+  //  - `step.execute`: the step-body wrapper that is the direct OTel parent of the generation
+  //    spans emitted inside a step (`ObservedLanguageModel`, and the translator/backstop's
+  //    vanilla AI-SDK trees) — without it they'd detach from their STEP and render flat.
+  // Everything else in the scope is per-resume replay machinery (`WORKFLOW`/`workflow.run`/
+  // `workflow.replay`/`workflow.loadEvents`/`queue.publish`/`step.hydrate`/`step.dehydrate`) —
+  // ~90 spans of noise on a two-call turn, duplicated per resume, with no AI content. Verified
+  // against a live trace on 2026-07-06.
+  langfuseProcessor = new LangfuseSpanProcessor({
+    shouldExportSpan: ({ otelSpan }) => {
+      if (isDefaultExportSpan(otelSpan)) return true;
+      if (otelSpan.instrumentationScope.name !== 'workflow') return false;
+      const name = otelSpan.name;
+      return (
+        name.startsWith('workflow.start ') || name.startsWith('STEP ') || name === 'step.execute'
+      );
+    },
+  });
   sdk = new NodeSDK({
     // Order matters: redaction runs first (the exporter only sees scrubbed attributes), then
     // trace-promotion copies durable runs' AI-SDK telemetry onto Langfuse trace-level

@@ -47,7 +47,12 @@ export async function runJob(input: JobInput): Promise<void> {
   const setup = await buildSetup(input.model ?? DEFAULT_JOB_MODEL, input.subjectName);
 
   const { result } = await streamAgent({
-    model: buildTurnModel(setup.modelId, setup.testModelResponses),
+    // `observe` gives the job exactly-once generation spans in Langfuse (session = the
+    // thread the job delivers to).
+    model: buildTurnModel(setup.modelId, setup.testModelResponses, {
+      functionId: 'background-job',
+      sessionId: input.threadId,
+    }),
     instructions: setup.instructions,
     tools: {
       bash: tool({ ...BASH_TOOL_SPECS.bash, execute: (args) => bashStep(args) }),
