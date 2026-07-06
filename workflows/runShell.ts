@@ -85,11 +85,13 @@ export interface StreamAgentOpts {
 /**
  * Run the agent loop once — the shared body every profile used to duplicate: construct the
  * `WorkflowAgent`, stream with the standard durable wiring (`getWritable` to the run stream,
- * `stopWhen` at the step limit, telemetry OFF — the WDK isolated `node:vm` realm the global
- * telemetry integration can't reach, see vercel/ai #12164), and, when `steering` is set, fold
- * mid-run arrivals via `loadSteers` in `prepareStep` (no second stream consumer, deterministic on
- * replay). Returns the run `result`, the captured `usage`, and the ids it folded (so the caller can
- * mark exactly the window + folded steers answered).
+ * `stopWhen` at the step limit, WorkflowAgent telemetry OFF — it dispatches from the WDK isolated
+ * `node:vm` realm the global telemetry integration can't reach AND that realm replays on every
+ * resume, see vercel/ai #12164; durable-run generation spans are emitted instead by the
+ * `ObservedLanguageModel` the profiles wrap their model in, host-side and exactly-once), and,
+ * when `steering` is set, fold mid-run arrivals via `loadSteers` in `prepareStep` (no second
+ * stream consumer, deterministic on replay). Returns the run `result`, the captured `usage`, and
+ * the ids it folded (so the caller can mark exactly the window + folded steers answered).
  */
 export async function streamAgent(opts: StreamAgentOpts): Promise<{
   result: Awaited<ReturnType<InstanceType<typeof WorkflowAgent>['stream']>>;

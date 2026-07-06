@@ -39,7 +39,13 @@ export async function runScheduledJob(input: ScheduledJobInput): Promise<void> {
   const setup = await buildSetup(input.model ?? DEFAULT_SCHEDULED_MODEL, input.audience);
 
   const { result } = await streamAgent({
-    model: buildTurnModel(setup.modelId, setup.testModelResponses),
+    // `observe` gives the fired run exactly-once generation spans in Langfuse. Session = the
+    // audience's thread when it has one; otherwise group the schedule's firings together.
+    model: buildTurnModel(setup.modelId, setup.testModelResponses, {
+      functionId: 'scheduled-job',
+      sessionId:
+        input.audience.kind === 'thread' ? input.audience.threadId : `schedule:${input.scheduleId}`,
+    }),
     instructions: setup.instructions,
     tools: {
       memory_write: tool({
