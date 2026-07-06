@@ -5,6 +5,7 @@ import type { MockResponseDescriptor } from '../src/agent/mockModel.js';
 import { buildTurnModel } from '../src/agent/turnModel.js';
 import { z } from 'zod';
 import { BASH_TOOL_SPECS } from '../src/agent/tools/bashSpecs.js';
+import { FILE_TOOL_SPECS } from '../src/agent/tools/fileSpecs.js';
 import { MEMORY_TOOL_SPECS } from '../src/agent/tools/memorySpecs.js';
 import { SEND_IMAGE_SPEC } from '../src/agent/tools/sendImageSpec.js';
 import { MESSAGE_SPEC } from '../src/agent/tools/messageSpec.js';
@@ -24,7 +25,7 @@ import {
   usageOf,
   type Delivery,
 } from '../src/agent/delivery.js';
-import { bashStep, fileReadStep, streamAgent } from './runShell.js';
+import { bashStep, fileEditStep, fileReadStep, fileWriteStep, streamAgent } from './runShell.js';
 
 /**
  * Tier-1 durable conversational turn (durable-main-loop). ONE run = ONE turn (design D1,
@@ -335,10 +336,14 @@ function buildTools(ctx: {
         }
       : {}),
     // Host tools: trusted DMs only — real host access (D-TA2), mirroring the in-process loop.
+    // file_write/file_edit ride the same gate as bash (coding-agent-upgrade): they are file
+    // mutation primitives, not extra privilege — bash could already write anywhere.
     ...(trustedDm
       ? {
           bash: tool({ ...BASH_TOOL_SPECS.bash, execute: (a) => bashStep(a) }),
           file_read: tool({ ...BASH_TOOL_SPECS.file_read, execute: (a) => fileReadStep(a) }),
+          file_write: tool({ ...FILE_TOOL_SPECS.file_write, execute: (a) => fileWriteStep(a) }),
+          file_edit: tool({ ...FILE_TOOL_SPECS.file_edit, execute: (a) => fileEditStep(a) }),
         }
       : {}),
   };
@@ -611,7 +616,6 @@ async function markAnswered(threadId: string, messageIds: string[]): Promise<voi
   // channel) get marked too — otherwise `hasUnansweredInbound` stays true and the turn re-runs forever.
   await store.markAnsweredForThread(threadId, messageIds);
 }
-
 
 /**
  * Delegate a subtask to an isolated child (durable-subagents D-DS2): hand the brief to the

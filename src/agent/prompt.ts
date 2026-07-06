@@ -226,9 +226,11 @@ export function buildJobPrompt(
   if (opts.hostTools) {
     lines.push(
       `You have real tools — USE them, do not describe using them:`,
-      `- bash: your universal tool. Run CLIs, build files, fetch URLs (curl), host a site (the`,
-      `  devbox CLI), inspect the filesystem. Web fetch = curl via bash.`,
-      `- file_read: read a file's contents.`,
+      `- bash: your universal tool. Run CLIs, fetch URLs (curl), host a site (the devbox CLI),`,
+      `  inspect the filesystem. Web fetch = curl via bash.`,
+      `- file_read: read a file's contents (line-numbered; window big files with offset/limit).`,
+      `- file_write / file_edit: create or surgically edit files — prefer these over bash`,
+      `  heredocs or sed for any file mutation.`,
       `NEVER write tool calls as text (no "Tool: …", no JSON code blocks describing a call) —`,
       `actually call the tool. Text you emit is NOT executed; only real tool calls do anything.`,
       ``,
@@ -288,9 +290,6 @@ export function buildSubagentPrompt(config: SunnyConfig, core: MemoryCore, label
   ];
   return `${lines.join('\n')}\n\n${memoryCoreBlock(core)}`;
 }
-
-
-
 
 /**
  * Text delivery (the text-as-reply architecture, 2026-07): the model's reply text IS the

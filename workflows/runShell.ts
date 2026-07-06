@@ -1,9 +1,14 @@
-import type { LanguageModelUsage, ModelCallStreamPart, ModelMessage } from '../src/agent/aiTypes.js';
+import type {
+  LanguageModelUsage,
+  ModelCallStreamPart,
+  ModelMessage,
+} from '../src/agent/aiTypes.js';
 import { WorkflowAgent } from '@ai-sdk/workflow';
 import { getWritable } from 'workflow';
 import { steerMessageText } from '../src/agent/delivery.js';
 import { AGENT_STEP_LIMIT } from '../src/agent/limits.js';
 import type { BashToolInput, FileReadToolInput } from '../src/agent/tools/bashSpecs.js';
+import type { FileEditToolInput, FileWriteToolInput } from '../src/agent/tools/fileSpecs.js';
 import type { Audience } from '../src/agent/audience.js';
 
 /**
@@ -270,9 +275,8 @@ export async function deliver(audience: Audience, text: string): Promise<void> {
   if (!text || audience.kind === 'household') return;
 
   const { getRuntime } = await import('../src/runtime.js');
-  const { isChildThread, appendInterRunMessage, reportToParent } = await import(
-    '../src/agent/delegation.js'
-  );
+  const { isChildThread, appendInterRunMessage, reportToParent } =
+    await import('../src/agent/delegation.js');
   const runtime = await getRuntime();
 
   if (audience.kind === 'parent') {
@@ -417,5 +421,25 @@ export async function fileReadStep(args: FileReadToolInput): Promise<string> {
   'use step';
 
   const { readFileSafe } = await import('../src/agent/tools/bash.js');
-  return readFileSafe(args.path, args.max_bytes);
+  return readFileSafe(args.path, {
+    offset: args.offset,
+    limit: args.limit,
+    maxBytes: args.max_bytes,
+  });
+}
+
+/** Create/overwrite a host file as a durable step (shared host-tool execute). */
+export async function fileWriteStep(args: FileWriteToolInput): Promise<string> {
+  'use step';
+
+  const { writeFileSafe } = await import('../src/agent/tools/bash.js');
+  return writeFileSafe(args.path, args.content);
+}
+
+/** Exact-string-edit a host file as a durable step (shared host-tool execute). */
+export async function fileEditStep(args: FileEditToolInput): Promise<string> {
+  'use step';
+
+  const { editFileSafe } = await import('../src/agent/tools/bash.js');
+  return editFileSafe(args.path, args.old_string, args.new_string, args.replace_all ?? false);
 }

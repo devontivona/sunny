@@ -1,7 +1,16 @@
 import { tool } from '@ai-sdk/provider-utils';
 import { buildTurnModel, type MockResponseDescriptor } from '../src/agent/turnModel.js';
 import { BASH_TOOL_SPECS } from '../src/agent/tools/bashSpecs.js';
-import { bashStep, deliver, fileReadStep, finalAssistantText, streamAgent } from './runShell.js';
+import { FILE_TOOL_SPECS } from '../src/agent/tools/fileSpecs.js';
+import {
+  bashStep,
+  deliver,
+  fileEditStep,
+  fileReadStep,
+  fileWriteStep,
+  finalAssistantText,
+  streamAgent,
+} from './runShell.js';
 
 /**
  * Tier-2 durable job — the background-job PROFILE of the shared run shell (durable-subagents
@@ -10,8 +19,9 @@ import { bashStep, deliver, fileReadStep, finalAssistantText, streamAgent } from
  * completion it reports to its configured `output_target` (D-DS1) via the shared `emitStep` — the
  * same outward primitive every profile uses; the old bespoke `deliver` is gone.
  *
- * The job has the real host tools (`bash`, `file_read`) so a backgrounded task can actually DO
- * work — build files, run CLIs (devbox, curl), read a skill's SKILL.md and follow it. No
+ * The job has the real host tools (`bash`, `file_read`, `file_write`, `file_edit`) so a
+ * backgrounded task can actually DO work — build/edit files, run CLIs (devbox, curl), read a
+ * skill's SKILL.md and follow it. No
  * `send_message`/`schedule`/`start_job` (no mid-run chatter, no nested jobs, no self-scheduling):
  * the agent's final text IS the deliverable, emitted terminally (`recoverOnMiss: 'rawtext'`).
  * Since unify-background-work (2026-07-05) this engine serves SCHEDULED runs only —
@@ -42,6 +52,8 @@ export async function runJob(input: JobInput): Promise<void> {
     tools: {
       bash: tool({ ...BASH_TOOL_SPECS.bash, execute: (args) => bashStep(args) }),
       file_read: tool({ ...BASH_TOOL_SPECS.file_read, execute: (args) => fileReadStep(args) }),
+      file_write: tool({ ...FILE_TOOL_SPECS.file_write, execute: (args) => fileWriteStep(args) }),
+      file_edit: tool({ ...FILE_TOOL_SPECS.file_edit, execute: (args) => fileEditStep(args) }),
     },
     providerOptions: {
       anthropic: { thinking: { type: 'adaptive', display: 'omitted' }, effort: 'high' },

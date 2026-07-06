@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { start } from 'workflow/api';
 import { runConversation } from '../../workflows/conversation.js';
 import {
@@ -37,6 +40,40 @@ describe('runConversation (workflow integration — real Local World)', () => {
     const window = await ctx.store.recentWindow(event.threadId);
     expect(window.filter((m) => m.role === 'assistant')).toHaveLength(1); // one persisted turn
     expect(await ctx.store.hasUnansweredInbound(event.threadId)).toBe(false); // marked processed
+  });
+
+  it('file tools (coding-agent-upgrade): write → edit → read round-trip through real durable steps', async () => {
+    // Drives the REAL registered file_write/file_edit/file_read tools through the durable
+    // turn's `'use step'` seam against the real filesystem — the end-to-end wiring check.
+    ctx = await setupTestRuntime();
+    const file = join(mkdtempSync(join(tmpdir(), 'sunny-wf-files-')), 'app.ts');
+    const event = makeChannelEvent({ text: 'make me a file' });
+    await ctx.store.appendInbound(event);
+    setTurnModel([
+      {
+        type: 'tool-call',
+        toolName: 'file_write',
+        input: JSON.stringify({ path: file, content: 'const x = 1;\nconst y = 2;\n' }),
+      },
+      {
+        type: 'tool-call',
+        toolName: 'file_edit',
+        input: JSON.stringify({
+          path: file,
+          old_string: 'const y = 2;',
+          new_string: 'const y = 42;',
+        }),
+      },
+      { type: 'tool-call', toolName: 'file_read', input: JSON.stringify({ path: file }) },
+      { type: 'text', text: 'done — y is now 42' },
+    ]);
+
+    const run = await start(runConversation, [{ threadId: event.threadId }]);
+    await run.returnValue;
+    expect(await run.status).toBe('completed');
+
+    expect(readFileSync(file, 'utf8')).toBe('const x = 1;\nconst y = 42;\n'); // the edit landed
+    expect(ctx.gateway.texts()).toEqual(['done — y is now 42']);
   });
 
   it('persists ONLY this turn — never re-merges prior tool calls from the window (no dup tool_use ids)', async () => {
@@ -113,7 +150,6 @@ describe('runConversation (workflow integration — real Local World)', () => {
     expect(new Set(allToolIds).size).toBe(allToolIds.length); // no duplicate tool_use ids anywhere
   });
 
-
   it('is a no-op when there is no unanswered inbound', async () => {
     ctx = await setupTestRuntime();
     const event = makeChannelEvent({ text: 'already answered' });
@@ -173,7 +209,11 @@ describe('runConversation (workflow integration — real Local World)', () => {
       {
         type: 'tool-call',
         toolName: 'memory_write',
-        input: JSON.stringify({ file: 'people:17193146820', action: 'add', content: '- Vegetarian' }),
+        input: JSON.stringify({
+          file: 'people:17193146820',
+          action: 'add',
+          content: '- Vegetarian',
+        }),
       },
       { type: 'text', text: 'got it!' },
     ]);
@@ -268,7 +308,12 @@ describe('runConversation (workflow integration — real Local World)', () => {
     // Kate has an existing DM thread (so the recipient resolves to it).
     const kateThread = 'sendblue:owner:kate';
     await ctx.store.appendInbound(
-      makeChannelEvent({ threadId: kateThread, senderId: KATE, senderName: 'Kate', isOwner: false }),
+      makeChannelEvent({
+        threadId: kateThread,
+        senderId: KATE,
+        senderName: 'Kate',
+        isOwner: false,
+      }),
     );
     // Devon, in his own DM, asks Sunny to text Kate.
     const devon = makeChannelEvent({
@@ -309,7 +354,12 @@ describe('runConversation (workflow integration — real Local World)', () => {
     });
     const kateThread = 'sendblue:owner:kate';
     await ctx.store.appendInbound(
-      makeChannelEvent({ threadId: kateThread, senderId: KATE, senderName: 'Kate', isOwner: false }),
+      makeChannelEvent({
+        threadId: kateThread,
+        senderId: KATE,
+        senderName: 'Kate',
+        isOwner: false,
+      }),
     );
     const devon = makeChannelEvent({
       threadId: 'sendblue:owner:devon',
@@ -387,7 +437,10 @@ describe('runConversation (workflow integration — real Local World)', () => {
     expect(ctx.gateway.texts()).toEqual(['tip one: sleep early\n\ntip two: less coffee']);
     const window = await ctx.store.recentWindow(event.threadId);
     const turn = window.find((m) => m.role === 'assistant')!;
-    const meta = (turn.payload as UIMessage).metadata as { delivered?: string; recovered?: boolean };
+    const meta = (turn.payload as UIMessage).metadata as {
+      delivered?: string;
+      recovered?: boolean;
+    };
     expect(meta.delivered).toBe('text');
     expect(meta.recovered).toBe(false);
     expect(await ctx.store.hasUnansweredInbound(event.threadId)).toBe(false);
@@ -412,7 +465,9 @@ describe('runConversation (workflow integration — real Local World)', () => {
     expect((payload.metadata as { delivered?: string }).delivered).toBe('silence');
     // The sentinel persists verbatim in the row's text part.
     expect(
-      payload.parts.some((p) => p.type === 'text' && (p as { text?: string }).text === '<no-reply/>'),
+      payload.parts.some(
+        (p) => p.type === 'text' && (p as { text?: string }).text === '<no-reply/>',
+      ),
     ).toBe(true);
   });
 
@@ -430,21 +485,30 @@ describe('runConversation (workflow integration — real Local World)', () => {
 
     expect(ctx.gateway.texts()).toEqual(['actually — take the earlier flight.']);
     const window = await ctx.store.recentWindow(event.threadId);
-    const meta = (window.find((m) => m.role === 'assistant')!.payload as UIMessage)
-      .metadata as { delivered?: string };
+    const meta = (window.find((m) => m.role === 'assistant')!.payload as UIMessage).metadata as {
+      delivered?: string;
+    };
     expect(meta.delivered).toBe('text');
   });
 
   it('text mode: empty final with interim narration takes the recovery backstop (recovered=true)', async () => {
-    ctx = await setupTestRuntime({}, {
-      recoverOverride: (scratch: string) => `composed from notes: ${scratch.slice(0, 20)}`,
-      translateOverride: () => '', // keep the cadence step from reaching a live model
-    });
+    ctx = await setupTestRuntime(
+      {},
+      {
+        recoverOverride: (scratch: string) => `composed from notes: ${scratch.slice(0, 20)}`,
+        translateOverride: () => '', // keep the cadence step from reaching a live model
+      },
+    );
     const event = makeChannelEvent({ text: 'check the weather' });
     await ctx.store.appendInbound(event);
     // Narration + a tool call, then the turn ENDS on a tool step (no final text).
     setTurnModel([
-      { type: 'tool-call', toolName: 'bash', input: '{"command":"echo sunny"}', text: 'checking forecast' },
+      {
+        type: 'tool-call',
+        toolName: 'bash',
+        input: '{"command":"echo sunny"}',
+        text: 'checking forecast',
+      },
       { type: 'text', text: '' },
     ]);
 
@@ -463,24 +527,33 @@ describe('runConversation (workflow integration — real Local World)', () => {
     expect(types).not.toContain('tool-send_message');
     expect(
       payload.parts.some(
-        (p) => p.type === 'text' && (p as { text?: string }).text?.startsWith('composed from notes'),
+        (p) =>
+          p.type === 'text' && (p as { text?: string }).text?.startsWith('composed from notes'),
       ),
     ).toBe(true);
   });
 
   it('text mode: translator relays narration on the first non-terminal step, persists data-translator', async () => {
     const composed: string[] = [];
-    ctx = await setupTestRuntime({ translatorEveryNSteps: 3 }, {
-      translateOverride: (interim: string) => {
-        composed.push(interim);
-        return `update: ${interim.split('\n')[0]}`;
+    ctx = await setupTestRuntime(
+      { translatorEveryNSteps: 3 },
+      {
+        translateOverride: (interim: string) => {
+          composed.push(interim);
+          return `update: ${interim.split('\n')[0]}`;
+        },
       },
-    });
+    );
     const event = makeChannelEvent({ text: 'plan my trip' });
     await ctx.store.appendInbound(event);
     // Step 0: narration + tool call (non-terminal). Step 1: the final reply text.
     setTurnModel([
-      { type: 'tool-call', toolName: 'bash', input: '{"command":"echo x"}', text: 'looking at flights first' },
+      {
+        type: 'tool-call',
+        toolName: 'bash',
+        input: '{"command":"echo x"}',
+        text: 'looking at flights first',
+      },
       { type: 'text', text: 'booked research done — options coming up' },
     ]);
 
@@ -511,13 +584,21 @@ describe('runConversation (workflow integration — real Local World)', () => {
   });
 
   it('text mode: a declined update (translator silence) relays nothing and persists no part', async () => {
-    ctx = await setupTestRuntime({}, {
-      translateOverride: () => '',
-    });
+    ctx = await setupTestRuntime(
+      {},
+      {
+        translateOverride: () => '',
+      },
+    );
     const event = makeChannelEvent({ text: 'quick check' });
     await ctx.store.appendInbound(event);
     setTurnModel([
-      { type: 'tool-call', toolName: 'bash', input: '{"command":"echo x"}', text: 'internal bookkeeping' },
+      {
+        type: 'tool-call',
+        toolName: 'bash',
+        input: '{"command":"echo x"}',
+        text: 'internal bookkeeping',
+      },
       { type: 'text', text: 'all set: nothing to change' },
     ]);
 
@@ -536,12 +617,15 @@ describe('runConversation (workflow integration — real Local World)', () => {
     // 9/9 declines on a 15-step turn. Now: decline → the next beat sees EVERYTHING since
     // the last SENT update, plus the step counters the prompt needs.
     const beats: Array<{ interim: string; step?: number; since?: number }> = [];
-    ctx = await setupTestRuntime({ translatorEveryNSteps: 2 }, {
-      translateOverride: (interim: string, _r: string[], step?: number, since?: number) => {
-        beats.push({ interim, step, since });
-        return beats.length < 2 ? '' : `update after ${since} silent steps`; // decline first beat
+    ctx = await setupTestRuntime(
+      { translatorEveryNSteps: 2 },
+      {
+        translateOverride: (interim: string, _r: string[], step?: number, since?: number) => {
+          beats.push({ interim, step, since });
+          return beats.length < 2 ? '' : `update after ${since} silent steps`; // decline first beat
+        },
       },
-    });
+    );
     const event = makeChannelEvent({ text: 'long research task' });
     await ctx.store.appendInbound(event);
     setTurnModel([
@@ -568,12 +652,15 @@ describe('runConversation (workflow integration — real Local World)', () => {
 
   it('text mode: translator cadence — fires at steps 1 and 1+N, not in between', async () => {
     const firedAt: string[] = [];
-    ctx = await setupTestRuntime({ translatorEveryNSteps: 2 }, {
-      translateOverride: (interim: string) => {
-        firedAt.push(interim);
-        return `u${firedAt.length}`;
+    ctx = await setupTestRuntime(
+      { translatorEveryNSteps: 2 },
+      {
+        translateOverride: (interim: string) => {
+          firedAt.push(interim);
+          return `u${firedAt.length}`;
+        },
       },
-    });
+    );
     const event = makeChannelEvent({ text: 'long task' });
     await ctx.store.appendInbound(event);
     // Steps 0-3 are tool calls with narration; step 4 is the final reply. With N=2 the
@@ -662,6 +749,4 @@ describe('runConversation (workflow integration — real Local World)', () => {
     expect(img?.text).toBe('this week');
     expect(ctx.gateway.texts()).toContain('chart sent — red line is spend');
   });
-
-
 });
