@@ -133,3 +133,40 @@ Higher-level capabilities SHALL be delivered as `SKILL.md` skills composed over 
 - **WHEN** Sunny is asked to build an explainer, presentation, or report site
 - **THEN** the website-builder skill produces a single-page HTML site using a bundled design style and the `devbox` skill to run/host it
 
+
+### Requirement: Spawn tools share an audience + authority argument shape
+The run-creation tools (`delegate_task`, `schedule_create`) SHALL remain distinct verbs (for reliable model tool-selection) but SHALL accept a common `{ audience, authority }` argument shape, where `authority` is the subset of the creating run's grants to endow (subsuming `delegate_task`'s prior `toolset` argument). A spawn call SHALL be refused if the requested `authority` is not a subset of the creating run's authority. (As synced: the former `start_job` spawn verb was retired by `unify-background-work` — delegation is the one now-firing async primitive, scheduling the later/recurring one.)
+
+#### Scenario: Shared shape across spawn verbs
+- **WHEN** Sunny delegates a subtask or creates a schedule
+- **THEN** each spawn verb accepts the same `audience` and `authority` arguments, differing only in when it fires
+
+#### Scenario: Over-broad authority request refused
+- **WHEN** a spawn requests an authority grant the creating run does not itself hold
+- **THEN** the spawn is refused
+
+### Requirement: Messaging tools — one reply verb, one addressed verb, over the bus
+Outward messaging SHALL be exposed as one reply lane and one addressed tool, both delivering through the single delivery bus. The reply lane is the run's own TEXT (as synced: text-as-reply replaced the former `send_message` tool — the text a run ends on IS the reply), resolved from the run's Audience with no address argument. The one addressed `message(recipient, text)` tool SHALL send to a named other entity whose `recipient` resolves against {roster people} ∪ {the run's currently-running subagents}; it subsumes the former `message_person` (relay to a roster member) and `message_subagent` (steer a running child) — the same bus operation to a different mailbox. Arbitrary (non-roster, non-subagent) recipients SHALL be refused.
+
+#### Scenario: Reply needs no address
+- **WHEN** Sunny replies to whoever it is currently serving
+- **THEN** its reply text is delivered with no recipient argument, resolved from the run's Audience
+
+#### Scenario: One addressed verb reaches a person or a subagent
+- **WHEN** Sunny relays to a roster member, or steers one of its running subagents
+- **THEN** it calls the same `message(recipient, text)` tool, and the bus delivers to that entity's mailbox
+
+#### Scenario: Non-roster recipient refused
+- **WHEN** `message` is called with a recipient that is neither a roster member nor one of the run's subagents
+- **THEN** it is refused
+
+### Requirement: Unified run inspection and cancellation
+Sunny SHALL expose `list_runs` and `cancel_run` tools spanning schedules and delegated subagents, scoped by ownership: a caller SHALL see and cancel runs whose derived subject is themselves, and the owner SHALL see and cancel all runs. These SHALL replace schedule-specific list/delete as the general lifecycle surface.
+
+#### Scenario: List spans schedules and subagents
+- **WHEN** Sunny lists runs on behalf of a subject
+- **THEN** the result includes that subject's schedules and running subagents
+
+#### Scenario: Non-owner cannot cancel another subject's run
+- **WHEN** a family member attempts to cancel a run whose subject is someone else
+- **THEN** it is refused, while the owner may cancel any run

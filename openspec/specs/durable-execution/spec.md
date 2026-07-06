@@ -72,16 +72,16 @@ External AI-SDK trajectory telemetry (OpenTelemetry → Langfuse) for the DURABL
 - **AND** this is configured explicitly (`telemetry.isEnabled: false` with an in-code rationale), so the absence is intentional and documented rather than an apparent-but-broken integration
 
 ### Requirement: Durable background jobs survive crashes and resume
-Tier 2 jobs SHALL be durable: a job that is interrupted by a crash, reboot, or timeout SHALL resume rather than restart from scratch. On completion a job SHALL report to its **configured output target** (see *Configurable output target*) rather than always notifying the user. Side-effecting operations within a job SHALL be expressed as retryable durable steps.
+Tier 2 jobs SHALL be durable: a job that is interrupted by a crash, reboot, or timeout SHALL resume rather than restart from scratch. On completion a job SHALL deliver its result through the **delivery bus**, resolved from its **Audience** (see *Configurable output target*), rather than always notifying the user; a job with no messaging grant delivers nothing and records its result. Side-effecting operations within a job SHALL be expressed as retryable durable steps.
 
 #### Scenario: Job survives a reboot
 - **WHEN** the host reboots while a Tier 2 job is mid-execution
 - **THEN** the job resumes from its last durable step after restart
 - **AND** does not re-run already-completed side-effecting steps
 
-#### Scenario: Completion reported to the configured target
-- **WHEN** a Tier 2 job finishes
-- **THEN** its result is reported to the job's configured output target (the user via the gateway, the spawning parent run, or no proactive message when silent)
+#### Scenario: Completion delivered to the job's audience
+- **WHEN** a Tier 2 job finishes with a result
+- **THEN** its result is delivered through the bus to the job's audience (a bound thread via the gateway, or a parent run's inbox), or nothing is sent if the job holds no messaging grant
 
 ### Requirement: Single-write message persistence
 Messages SHALL be persisted to the conversation store exactly once, on completion of the turn or job, and SHALL NOT be written per replayed execution step. The agent SHALL run to completion before its messages are saved (no user-facing token streaming is required).
@@ -106,20 +106,19 @@ The message archive, full-text index, vector embeddings (when added), and durabl
 - **THEN** they remain markdown files on disk, not rows in the database
 
 ### Requirement: Configurable output target
-Every durable run SHALL have an output target of `user`, `parent`, or `silent`. A `user` run's messages SHALL be delivered to the owner through the messaging gateway. A `parent` run's messages SHALL be delivered to its spawning run. A `silent` run SHALL send no proactive messages; it SHALL complete and record its result without messaging anyone.
+Every durable run SHALL be addressed by an **Audience** (the run-audiences capability) — `person`, `household`, `thread`, or `parent` — rather than a fixed `user`/`parent`/`silent` output target. Delivery SHALL go through the single delivery bus, which resolves the Audience to a Thread and dispatches on its binding (bound → gateway, detached → append + wake). A run not endowed a messaging grant SHALL send no proactive message and SHALL still record its result (silence is structural, not an output mode). A run's terminal message SHALL be delivered through the same bus — not a separate per-profile terminal-emit path — so headless output is never stranded. A `parent`-audience run's messages SHALL be delivered to its spawning run.
 
 #### Scenario: Silent maintenance job sends nothing
-- **WHEN** a run configured `silent` (e.g. nightly memory consolidation) completes
-- **THEN** no proactive message is sent to the user
-- **AND** its result is still recorded for later inspection
+- **WHEN** a run with no messaging grant (e.g. nightly memory consolidation) completes
+- **THEN** no proactive message is sent, and its result is still recorded for later inspection
 
 #### Scenario: Delegated child reports to its parent
-- **WHEN** a run configured `parent` sends a message
-- **THEN** the message is delivered to its spawning run, not to the user
+- **WHEN** a run with a `parent` audience delivers a message
+- **THEN** it is delivered to its spawning run through the bus, not to a human
 
-#### Scenario: User-targeted job reports to the owner
-- **WHEN** a run configured `user` completes with a result
-- **THEN** the result is delivered to the owner via the messaging gateway
+#### Scenario: Run reports to its audience, not always the owner
+- **WHEN** a run with a `person` audience delivers its result
+- **THEN** it goes to that person's conversation via the bus, even if that person is not the owner
 
 ### Requirement: Configurable model per run
 A delegated or background durable run SHALL be able to specify the model it runs on, independently of the main thread's model.
@@ -147,15 +146,19 @@ Sunny SHALL be able to delegate a subtask by starting a child durable run that e
 - **AND** no messaging tool call is required for the report to be delivered
 
 ### Requirement: Least-privilege child runs
-A child run's tools and credential references SHALL be a subset of its parent's, never broader. All child actions SHALL pass through the same tool-access gating, approval tiers, and blocklist as the parent. A child SHALL NOT resolve a credential reference its parent could not.
+Every **spawned** run — a delegated child, a background job, or a scheduled run — SHALL be endowed an authority (tools + credential references) that is a subset of its creator's, never broader, granted explicitly at spawn with no ambient inheritance. All spawned-run actions SHALL pass through the same tool-access gating, approval tiers, and blocklist as the creator. A spawned run SHALL NOT resolve a credential reference its creator could not, nor invoke a tool it was not endowed even if that tool exists in-process.
 
-#### Scenario: Child cannot exceed parent permissions
-- **WHEN** a child run attempts an action or credential resolution its parent could not perform
+#### Scenario: Spawned run cannot exceed creator permissions
+- **WHEN** a spawned run attempts an action or credential resolution its creator could not perform
 - **THEN** it is refused
 
 #### Scenario: Untrusted-content child is powerless
 - **WHEN** Sunny delegates processing of untrusted content
 - **THEN** it can grant the child no credentials and no high-consequence tools
+
+#### Scenario: Endowment is explicit, not ambient
+- **WHEN** a spawned run was not endowed a given tool grant
+- **THEN** it cannot invoke that tool even though the tool is registered in the process
 
 ### Requirement: Bidirectional asynchronous parent-child messaging
 A parent run SHALL be able to send a message to a still-running child, and a child run SHALL be able to proactively report (progress or result) to its parent — both delivered to the recipient, folded into its in-flight run at the next step boundary if it is running, otherwise picked up by the next run started for the recipient, using the same mechanism as owner double-text steering, without the recipient polling. Child→parent reporting SHALL be text-based: the child's final text SHALL be delivered terminally as its result, and a mid-task progress report SHALL be expressed as an explicit sentinel-delimited report block (`<report>…</report>`) in the child's interim text, extracted at a step boundary and delivered while the child continues working. A child SHALL signal "nothing to report" by making a no-report sentinel its entire final text, in which case nothing is delivered to the parent and the run still completes normally. A final text containing real content alongside a stray sentinel SHALL be delivered with the sentinel stripped — content genuinely written for the parent SHALL never be swallowed. If a child ends with neither final text nor the sentinel, the system SHALL fall back to delivering its raw interim narration (or a fixed empty-result notice when there is none), without invoking an additional model.
