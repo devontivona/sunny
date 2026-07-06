@@ -1,5 +1,5 @@
 import type { LanguageModelUsage, ModelMessage, SystemModelMessage } from '../src/agent/aiTypes.js';
-import { tool } from '@ai-sdk/provider-utils';
+import { jsonSchema, tool } from '@ai-sdk/provider-utils';
 import type { SharedV4ProviderOptions } from '@ai-sdk/provider';
 import type { MockResponseDescriptor } from '../src/agent/mockModel.js';
 import { buildTurnModel } from '../src/agent/turnModel.js';
@@ -10,6 +10,12 @@ import { MEMORY_TOOL_SPECS } from '../src/agent/tools/memorySpecs.js';
 import { SEND_IMAGE_SPEC } from '../src/agent/tools/sendImageSpec.js';
 import { MESSAGE_SPEC } from '../src/agent/tools/messageSpec.js';
 import { RUNS_TOOL_SPECS, scheduleToolSpecs } from '../src/agent/tools/scheduleSpecs.js';
+import {
+  CREDENTIAL_MANAGE_SPEC,
+  type CredentialManageInput,
+} from '../src/agent/tools/credentialManageSpecs.js';
+import { MCP_MANAGE_SPEC, type McpManageInput } from '../src/agent/tools/mcpManageSpecs.js';
+import type { McpToolDef } from '../src/mcp/turnTools.js';
 import { DELEGATE_TASK_SPEC, type ChildModelName } from '../src/agent/tools/delegationSpecs.js';
 import { TRUSTED_DM_AUTHORITY } from '../src/agent/audience.js';
 import type { ChildToolset } from './subagent.js';
@@ -71,6 +77,11 @@ interface TurnSetup {
   /** Mock model responses set by a workflow test (plain serializable data), read in the step
    *  and used by the body to build a mock; undefined in production. */
   testModelResponses?: MockResponseDescriptor[];
+  /** Enabled MCP servers' tool definitions (mcp D-MCP6/7), discovered in the setup step —
+   *  plain data (name/description/JSON Schema), so it journals across the boundary. Only
+   *  populated for the owner-DM turn (attended-only); the body builds dynamic tools whose
+   *  execute is the journaled per-call `mcpCallStep`. */
+  mcpTools?: McpToolDef[];
 }
 
 interface PendingTurn {
@@ -117,6 +128,7 @@ export async function runConversation(input: ConversationInput): Promise<void> {
       ownerPresent: setup.ownerPresent,
       timezone: setup.timezone,
       subjectName: setup.subjectName,
+      mcpTools: setup.mcpTools,
     }),
     providerOptions: setup.providerOptions,
     messages: pending.messages,
@@ -317,8 +329,9 @@ function buildTools(ctx: {
   ownerPresent: boolean;
   timezone: string;
   subjectName?: string;
+  mcpTools?: McpToolDef[];
 }) {
-  const { threadId, ownerName, trustedDm, ownerPresent, timezone, subjectName } = ctx;
+  const { threadId, ownerName, trustedDm, ownerPresent, timezone, subjectName, mcpTools } = ctx;
   const scheduleSpecs = scheduleToolSpecs(timezone);
   return {
     // The reply IS the final text (delivered in finalizeTurn); silence is the <no-reply/>
@@ -380,6 +393,45 @@ function buildTools(ctx: {
           }),
         }
       : {}),
+    // Credential registry (credentials D-CR5) — owner-DM only (credentials are owner-facing,
+    // stricter than the trusted-DM gate: family must not enumerate the vault or rewire
+    // name→reference mappings). The in-process loop registered this on owner DMs; the
+    // durable-main-loop migration dropped it (2026-07-06 regression: Sunny couldn't
+    // discover/register vault items even though bash `credentials` injection — which
+    // resolves the names this tool registers — kept working). `'use step'`-wrapped like
+    // every side-effecting execute, so a replay never re-registers.
+    ...(trustedDm && ownerPresent
+      ? {
+          credential_manage: tool({
+            ...CREDENTIAL_MANAGE_SPEC,
+            execute: (args) => credentialManageStep(args),
+          }),
+          // MCP server registry (mcp D-MCP4) — the add → probe → test → enable lifecycle,
+          // sibling of credential_manage (owner-DM only) and dropped by the same migration.
+          // No consent driver is passed: an OAuth server's authorization URL comes back in
+          // the tool RESULT text and Sunny relays it (the old wiring's posture too).
+          mcp_manage: tool({
+            ...MCP_MANAGE_SPEC,
+            execute: (args) => mcpManageStep(args),
+          }),
+        }
+      : {}),
+    // Live MCP server tools (mcp D-MCP6/7) — attended-only: discovered in `setupTurn` for
+    // the owner-DM turn (empty everywhere else, incl. jobs/scheduled/children by
+    // construction — their profiles never discover). Namespaced `<server>__<tool>` to
+    // avoid clobbering native tools; the schema is the server's own JSON Schema; execute
+    // is the journaled per-call step (connect → call → close on the host), so a replayed
+    // turn never re-invokes a server tool. Results are untrusted content.
+    ...Object.fromEntries(
+      (mcpTools ?? []).map((d) => [
+        `${d.server}__${d.name}`,
+        tool({
+          description: d.description,
+          inputSchema: jsonSchema<Record<string, unknown>>(d.inputSchema),
+          execute: (args) => mcpCallStep(d.server, d.name, args),
+        }),
+      ]),
+    ),
     // Host tools: trusted DMs only — real host access (D-TA2), mirroring the in-process loop.
     // file_write/file_edit ride the same gate as bash (coding-agent-upgrade): they are file
     // mutation primitives, not extra privilege — bash could already write anywhere.
@@ -434,7 +486,23 @@ async function setupTurn(threadId: string, isGroup: boolean): Promise<TurnSetup>
   }
   const docs = await ensureAndLoadPeople(config, familyRefs);
   const people = docs.length > 0 ? { ownerPresent, docs } : undefined;
-  void isGroup; // group-specific gating happens in buildTools / gateway auth
+
+  // Live MCP tool discovery (mcp D-MCP6/7) — owner-DM turns only (attended-only seam).
+  // Runs INSIDE this journaled step, so the defs are plain data the body rebuilds tools
+  // from identically on every replay. Connect failures degrade to an owner notice (once
+  // per server) and never fail the turn.
+  let mcpTools: TurnSetup['mcpTools'];
+  if (ownerPresent && !isGroup) {
+    const { discoverMcpToolDefs } = await import('../src/mcp/turnTools.js');
+    const { resolverFromEnv } = await import('../src/credentials/index.js');
+    const { logger } = await import('../src/logger.js');
+    const { gateway } = await getRuntime();
+    mcpTools = await discoverMcpToolDefs(config, resolverFromEnv() ?? undefined, (text) => {
+      void gateway.send(threadId, { text }).catch((err) => {
+        logger('conversation').warn('mcp owner notice failed', { threadId, err: String(err) });
+      });
+    });
+  }
 
   return {
     instructions: assembleTurnInstructions(config, people),
@@ -459,6 +527,7 @@ async function setupTurn(threadId: string, isGroup: boolean): Promise<TurnSetup>
     // route clears it), so a scripted reply reliably drives this thread's turns and never leaks
     // onto a real thread. Journaled by this step, so replays reuse it.
     testModelResponses: testModelResponses(threadId),
+    mcpTools,
   };
 }
 
@@ -845,6 +914,47 @@ async function readTopicStep(name: string): Promise<string> {
   const { execReadTopic } = await import('../src/agent/tools/memory.js');
   const { config } = await getRuntime();
   return execReadTopic(config, name);
+}
+
+/** Credential-registry actions (list/discover/register) as a durable step. The resolver comes
+ *  from env exactly like `bashStep`'s injection path, so "register" verifies against the SAME
+ *  1Password client the bash `credentials` argument resolves through. Journaled — a replayed
+ *  turn never re-registers. */
+async function credentialManageStep(args: CredentialManageInput): Promise<string> {
+  'use step';
+
+  const { getRuntime } = await import('../src/runtime.js');
+  const { execCredentialManage } = await import('../src/agent/tools/credentialManage.js');
+  const { resolverFromEnv } = await import('../src/credentials/index.js');
+  const { config } = await getRuntime();
+  return execCredentialManage(config, resolverFromEnv() ?? undefined, args);
+}
+
+/** MCP-registry actions (add/probe/test/list/enable/disable/remove) as a durable step —
+ *  `credential_manage`'s sibling. No consent driver: an OAuth authorization URL is returned
+ *  in the result text for Sunny to relay. Journaled — a replayed turn never re-adds. */
+async function mcpManageStep(args: McpManageInput): Promise<string> {
+  'use step';
+
+  const { getRuntime } = await import('../src/runtime.js');
+  const { execMcpManage } = await import('../src/agent/tools/mcpManage.js');
+  const { resolverFromEnv } = await import('../src/credentials/index.js');
+  const { config } = await getRuntime();
+  return execMcpManage(config, resolverFromEnv() ?? undefined, {}, args);
+}
+
+/** One MCP tool invocation as a durable step (connect → call → close on the host;
+ *  mcp D-MCP6/7). Never throws — a flaky server degrades to an `ERROR …` result the model
+ *  reads, instead of failing (and WDK-retrying) the turn. Journaled — a replayed turn
+ *  never re-invokes a server tool. */
+async function mcpCallStep(server: string, toolName: string, input: unknown): Promise<unknown> {
+  'use step';
+
+  const { getRuntime } = await import('../src/runtime.js');
+  const { callMcpTool } = await import('../src/mcp/turnTools.js');
+  const { resolverFromEnv } = await import('../src/credentials/index.js');
+  const { config } = await getRuntime();
+  return callMcpTool(config, resolverFromEnv() ?? undefined, server, toolName, input);
 }
 
 /**

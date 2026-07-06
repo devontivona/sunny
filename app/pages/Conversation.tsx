@@ -238,7 +238,14 @@ function ThreadPage({ threadId }: { threadId: string }) {
 
   // Stream this thread live over one persistent SSE connection opened on mount —
   // whatever turn runs now or next, with no run-id discovery and no polling gap.
-  const { message, run, lastDoneRunId, error: liveError, version } = useLiveThread(threadId);
+  const {
+    message,
+    run,
+    lastDoneRunId,
+    error: liveError,
+    version,
+    inboundVersion,
+  } = useLiveThread(threadId);
   const runId = run?.runId ?? null;
   const [settledRun, setSettledRun] = useState<string | null>(null);
 
@@ -248,6 +255,14 @@ function ThreadPage({ threadId }: { threadId: string }) {
   useEffect(() => {
     if (runId) reload();
   }, [runId, reload]);
+
+  // A new inbound landed MID-turn (a reply that folds into the running turn — it never
+  // rides the model-chunk stream): refetch so the user's bubble renders in its
+  // chronological spot while the live pane keeps streaming, instead of appearing only
+  // when the turn settles.
+  useEffect(() => {
+    if (inboundVersion > 0) reload();
+  }, [inboundVersion, reload]);
 
   // Settle when a turn finishes: refetch (the turn becomes a persisted per-step
   // bubble) and stop rendering the live trajectory.
