@@ -180,7 +180,7 @@ export class ConversationStore {
   async unansweredSteers(
     threadId: string,
     excludeIds: string[],
-  ): Promise<{ messageId: string; text: string; senderName?: string }[]> {
+  ): Promise<{ messageId: string; text: string; senderName?: string; hasMedia: boolean }[]> {
     const conds = [
       eq(messages.threadId, threadId),
       eq(messages.role, 'user'),
@@ -192,6 +192,7 @@ export class ConversationStore {
         messageId: messages.messageId,
         text: messages.text,
         senderName: messages.senderName,
+        payload: messages.payload,
       })
       .from(messages)
       .where(and(...conds))
@@ -201,6 +202,11 @@ export class ConversationStore {
       messageId: r.messageId,
       text: r.text,
       senderName: r.senderName ?? undefined,
+      // Media flag (multipart-coalesce): the mid-turn steering fold is TEXT-ONLY, so a
+      // media-bearing message must NOT fold — folding would mark it answered while the
+      // image never reaches any model turn. Callers leave these for the next full turn,
+      // whose window inlines the media properly.
+      hasMedia: attachmentRefsOf(r.payload).length > 0,
     }));
   }
 

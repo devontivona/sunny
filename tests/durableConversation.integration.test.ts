@@ -119,6 +119,32 @@ describe('durable conversational run', () => {
       expect(await store.unansweredSteers(b.threadId, [a.messageId, b.messageId])).toEqual([]);
     });
 
+    it('flags media-bearing steers so the text-only fold can skip them (multipart-coalesce)', async () => {
+      // A split multipart send: the image part lands mid-turn as its own webhook. The fold
+      // is TEXT-ONLY — folding this would consume the image unseen — so hasMedia lets
+      // loadSteersStep leave it unanswered for the NEXT turn's window (media inlined there).
+      const a = makeChannelEvent({ text: 'check out this pic' });
+      await store.appendInbound(a);
+      const img = makeChannelEvent({ text: '' });
+      await store.appendInbound(img, [
+        {
+          path: '/tmp/leo.jpg',
+          mediaType: 'image/jpeg',
+          kind: 'image',
+          name: 'leo.jpg',
+          size: 1234,
+          direction: 'inbound',
+        },
+      ]);
+
+      const steers = await store.unansweredSteers(a.threadId, [a.messageId]);
+      expect(steers).toHaveLength(1);
+      expect(steers[0]).toMatchObject({ messageId: img.messageId, hasMedia: true });
+      // Plain-text steers stay foldable.
+      const textSteers = await store.unansweredSteers(a.threadId, [img.messageId]);
+      expect(textSteers[0]).toMatchObject({ messageId: a.messageId, hasMedia: false });
+    });
+
     it('group steers carry the speaker prefix when folded', async () => {
       const a = makeChannelEvent({ threadId: GROUP_THREAD, isGroup: true, text: 'design a logo' });
       const b = makeChannelEvent({
