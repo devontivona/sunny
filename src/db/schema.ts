@@ -88,6 +88,36 @@ export const schedules = pgTable(
   (t) => [index('schedules_due_idx').on(t.active, t.nextRunAt)],
 );
 
+/**
+ * Outbound delivery tracking (delivery-status-tracking, 2026-07-07). One row per tracked
+ * text send, keyed by Sendblue's `message_handle` — the async status callback's correlation
+ * key. Sendblue's REST 2xx only means "accepted"; the real outcome (DELIVERED vs
+ * ERROR/INTERNAL_ERROR) arrives later on the webhook, which previously nobody consumed —
+ * a failed send left the turn recorded `delivered: 'text'` while the person got nothing
+ * (the Kate phantom-send incidents, Jul 05 + Jul 07). `message_handle` is re-keyed to the
+ * newest handle on each retry, so one row tracks a logical message across resends.
+ */
+export const outboundDeliveries = pgTable(
+  'outbound_deliveries',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    messageHandle: text('message_handle').notNull(),
+    threadId: text('thread_id').notNull(),
+    text: text('text').notNull(),
+    /** 'sent' (awaiting status) | 'delivered' | 'retrying' (resend in flight) | 'failed'. */
+    status: text('status').notNull().default('sent'),
+    /** Sends performed for this logical message (initial send = 1). */
+    attempts: integer('attempts').notNull().default(1),
+    /** The most recent raw Sendblue status seen (observability). */
+    lastStatus: text('last_status'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('outbound_deliveries_handle_idx').on(t.messageHandle)],
+);
+
+export type OutboundDeliveryRow = typeof outboundDeliveries.$inferSelect;
+
 /** Run history for schedules (scheduling D-SC5: retained for inspection). */
 export const scheduleRuns = pgTable('schedule_runs', {
   id: uuid('id').primaryKey().defaultRandom(),

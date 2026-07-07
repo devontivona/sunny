@@ -1,7 +1,7 @@
-import { and, asc, desc, eq, inArray, isNull, notInArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, lt, ne, notInArray, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import type { Db } from '../db/client.js';
-import { messages } from '../db/schema.js';
+import { messages, outboundDeliveries, type OutboundDeliveryRow } from '../db/schema.js';
 import { attachmentRefsOf, type AttachmentRef, type OutboundMediaResult } from './media.js';
 import { sanitizePgJson, sanitizePgText } from './sanitize.js';
 import { isGroupThreadId } from './threadId.js';
@@ -303,6 +303,124 @@ export class ConversationStore {
       isOwner: false,
       timestamp: new Date(),
     });
+  }
+
+  // --- outbound delivery tracking (delivery-status-tracking, 2026-07-07) -----------------
+
+  /** Record a tracked outbound text send, keyed by Sendblue's `message_handle`. Best-effort
+   *  at the call site — a tracking failure must never fail the send. */
+  async registerOutboundDelivery(handle: string, threadId: string, text: string): Promise<void> {
+    await this.db
+      .insert(outboundDeliveries)
+      .values({ messageHandle: handle, threadId, text: sanitizePgText(text) })
+      .onConflictDoNothing();
+  }
+
+  /** Look up a tracked send by its current handle (tracker dispatch + tests). */
+  async outboundDeliveryByHandle(handle: string): Promise<OutboundDeliveryRow | null> {
+    const rows = await this.db
+      .select()
+      .from(outboundDeliveries)
+      .where(eq(outboundDeliveries.messageHandle, handle))
+      .limit(1);
+    return rows[0] ?? null;
+  }
+
+  /** Record a success-ish status for a tracked send (DELIVERED/READ/SENT). */
+  async markOutboundDelivered(handle: string, rawStatus: string): Promise<void> {
+    await this.db
+      .update(outboundDeliveries)
+      .set({ status: 'delivered', lastStatus: rawStatus, updatedAt: new Date() })
+      .where(eq(outboundDeliveries.messageHandle, handle));
+  }
+
+  /**
+   * Claim a failed send for a retry: atomically transition `sent` → `retrying` (bumping
+   * `attempts` for the resend about to happen) and return the row — or null when this
+   * callback lost the race (a duplicate status callback for the same handle), the row is
+   * unknown (untracked send), already `failed`, or out of attempts. The conditional UPDATE
+   * is the dedupe: only ONE callback per handle can claim the retry.
+   */
+  async claimOutboundRetry(
+    handle: string,
+    rawStatus: string,
+    maxAttempts: number,
+  ): Promise<OutboundDeliveryRow | null> {
+    const rows = await this.db
+      .update(outboundDeliveries)
+      .set({
+        status: 'retrying',
+        attempts: sql`${outboundDeliveries.attempts} + 1`,
+        lastStatus: rawStatus,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(outboundDeliveries.messageHandle, handle),
+          eq(outboundDeliveries.status, 'sent'),
+          lt(outboundDeliveries.attempts, maxAttempts),
+        ),
+      )
+      .returning();
+    return rows[0] ?? null;
+  }
+
+  /** A resend went out: re-key the row to the NEW handle and await its status callback. */
+  async completeOutboundRetry(id: string, newHandle: string): Promise<void> {
+    await this.db
+      .update(outboundDeliveries)
+      .set({ messageHandle: newHandle, status: 'sent', updatedAt: new Date() })
+      .where(eq(outboundDeliveries.id, id));
+  }
+
+  /** Terminal failure: retries exhausted (or the resend itself could not be posted). */
+  async markOutboundFailed(handle: string, rawStatus: string): Promise<OutboundDeliveryRow | null> {
+    const rows = await this.db
+      .update(outboundDeliveries)
+      .set({ status: 'failed', lastStatus: rawStatus, updatedAt: new Date() })
+      .where(
+        and(eq(outboundDeliveries.messageHandle, handle), ne(outboundDeliveries.status, 'failed')),
+      )
+      .returning();
+    return rows[0] ?? null;
+  }
+
+  /**
+   * History honesty for a terminally-failed send (the phantom-send fix): find the persisted
+   * assistant row that carried `failedText` and mark it undelivered — `metadata.delivered:
+   * 'failed'` plus a `data-delivery-failure` part that read-time rendering turns into a
+   * bracketed note, so future turns KNOW the person never saw that text (instead of
+   * "waiting" on a reply to a message that never arrived). Returns false when no row
+   * matched (e.g. a persist:false send whose turn row hasn't landed yet — callers log).
+   */
+  async markTurnUndelivered(threadId: string, failedText: string, note: string): Promise<boolean> {
+    const rows = await this.db
+      .select()
+      .from(messages)
+      .where(and(eq(messages.threadId, threadId), eq(messages.role, 'assistant')))
+      .orderBy(desc(messages.createdAt))
+      .limit(5);
+    const needle = sanitizePgText(failedText).trim();
+    const row = rows.find((r) => (r.text ?? '').includes(needle));
+    if (!row) return false;
+
+    const payload = (row.payload ?? {}) as {
+      metadata?: Record<string, unknown>;
+      parts?: unknown[];
+    };
+    const patched = {
+      ...payload,
+      metadata: { ...(payload.metadata ?? {}), delivered: 'failed' },
+      parts: [...(payload.parts ?? []), { type: 'data-delivery-failure', data: { note } }],
+    };
+    await this.db
+      .update(messages)
+      .set({
+        payload: sanitizePgJson(patched),
+        text: sanitizePgText(`${row.text ?? ''}\n[${note}]`),
+      })
+      .where(eq(messages.id, row.id));
+    return true;
   }
 
   /**
