@@ -110,6 +110,34 @@ describe('runScheduledJob (workflow integration — real Local World)', () => {
     expect(sent?.threadId).toBe(kateThread); // delivered to Kate's thread, not imessage:owner
   });
 
+  it('authority: a run endowed host grants can act on the host (bash) — the craft-tagging gap', async () => {
+    ctx = await setupTestRuntime();
+    const { runId } = await seedScheduleRun('user');
+    setTurnModel([
+      {
+        type: 'tool-call',
+        toolName: 'bash',
+        input: JSON.stringify({ command: 'echo tagged-3-docs' }),
+      },
+      { type: 'text', text: 'Tagged 3 docs.' },
+    ]);
+
+    const run = await start(runScheduledJob, [
+      {
+        scheduleId: 's',
+        runId,
+        prompt: 'run the daily tagging job',
+        ownerName: 'Devon',
+        audience: { kind: 'thread', threadId: 'imessage:owner' },
+        authority: ['file_read', 'memory_read', 'bash', 'file_write'],
+      },
+    ]);
+    await run.returnValue;
+    expect(await run.status).toBe('completed'); // the bash tool existed and the call succeeded
+
+    expect(ctx.gateway.texts()).toEqual(['Tagged 3 docs.']);
+  });
+
   it('proactive fan-out (D-RA10): a delivering scheduled run can message a roster member via the bus', async () => {
     ctx = await setupTestRuntime({ family: [{ name: 'Kate', identities: ['+17193146820'] }] });
     const { runId } = await seedScheduleRun('user');

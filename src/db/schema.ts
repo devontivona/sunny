@@ -74,6 +74,10 @@ export const schedules = pgTable(
      *  thread — so the owner can schedule a reminder FOR a family member. When null, the audience
      *  is derived from `threadId` + `outputTarget` (the common per-person case). */
     audience: text('audience'),
+    /** The grants the fired run is endowed ({ audience, authority } — tool-access spec; D-RA5).
+     *  Attenuated against the creating turn's authority at creation. Null (legacy rows / default)
+     *  → the memory-maintenance default (memory tools + message). */
+    authority: text('authority').array(),
     timezone: text('timezone').notNull(),
     label: text('label'),
     nextRunAt: timestamp('next_run_at', { withTimezone: true }),

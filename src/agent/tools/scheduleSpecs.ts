@@ -42,6 +42,31 @@ export function scheduleToolSpecs(timezone: string) {
               'fired run acts for and is delivered to THEM, not you. Omit to schedule for the ' +
               'current person. Roster members only.',
           ),
+        authority: z
+          .array(
+            z.enum([
+              'file_read',
+              'memory_read',
+              'runs_read',
+              'bash',
+              'file_write',
+              'memory_write',
+              'credentials',
+              'mcp',
+              'message',
+            ]),
+          )
+          .optional()
+          .describe(
+            'The grants the fired run is endowed (least authority — grant only what the task ' +
+              'needs, and never more than you hold). memory_read/memory_write = the memory ' +
+              'tools; file_read/file_write = file tools; bash = shell (+ credential injection); ' +
+              'credentials/mcp = the registries + live MCP server tools; runs_read = list_runs; ' +
+              'message = proactive roster messaging. Omit for the default (memory tools + ' +
+              'message). A task that must act on the host or call MCP servers (e.g. a recurring ' +
+              'maintenance job following a skill) needs the host grants: file_read, bash, ' +
+              'file_write, plus mcp/credentials as required.',
+          ),
       }),
     },
   };

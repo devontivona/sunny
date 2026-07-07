@@ -1,9 +1,9 @@
 import { tool } from '@ai-sdk/provider-utils';
 import { buildTurnModel, type MockResponseDescriptor } from '../src/agent/turnModel.js';
-import { MEMORY_TOOL_SPECS } from '../src/agent/tools/memorySpecs.js';
 import { MESSAGE_SPEC } from '../src/agent/tools/messageSpec.js';
 import { type Audience, subjectName } from '../src/agent/audience.js';
-import { deliver, finalAssistantText, streamAgent } from './runShell.js';
+import type { McpToolDef } from '../src/mcp/turnTools.js';
+import { deliver, finalAssistantText, grantTools, streamAgent } from './runShell.js';
 
 /**
  * Durable job for a fired schedule — the scheduled-job PROFILE of the shared run shell
@@ -11,12 +11,15 @@ import { deliver, finalAssistantText, streamAgent } from './runShell.js';
  * (D-DE1/2): each LLM call and tool call is a durable workflow step, so a crash mid-run resumes
  * from the last completed step instead of re-running the whole agent.
  *
- * MEMORY tools only — no messaging, schedule, or delegation tools — which enforces the
- * anti-recursion guard (D-SC4: a scheduled run cannot create schedules) and least privilege by
- * construction. Tool `execute` is step-wrapped so a replay never re-applies a non-idempotent
- * `memory_write` (add appends). The outcome is always recorded (`recordRun`); the reply is
- * reported to the schedule's `output_target` via the shared `emitStep` — so a maintenance
- * schedule set `silent` (nightly memory consolidation) records its result but sends NO 2am text.
+ * The run's toolset is its stored AUTHORITY ({ audience, authority } — tool-access spec):
+ * the grants the creating turn endowed at `schedule_create`, mapped through the shared
+ * `grantTools` builder — so a maintenance schedule can hold host reach (bash/files/MCP) while
+ * a plain reminder stays memory-only. Legacy/default rows (null authority) get the memory
+ * tools + `message`. No `schedule`/`delegate` grants ever (anti-recursion, D-SC4 — a scheduled
+ * run cannot create schedules or spawn children). Tool `execute`s are step-wrapped so a replay
+ * never re-applies a non-idempotent action. The outcome is always recorded (`recordRun`); the
+ * reply is reported to the schedule's audience via the shared bus — so a `household`
+ * maintenance schedule (nightly memory consolidation) records its result but sends NO 2am text.
  */
 export interface ScheduledJobInput {
   scheduleId: string;
@@ -26,6 +29,8 @@ export interface ScheduledJobInput {
   /** Who the fired run is for — resolved to a delivery thread through the bus (run-audiences
    *  D-RA2). `household` = record-only (structurally silent, e.g. nightly consolidation). */
   audience: Audience;
+  /** The grants this run is endowed (D-RA5); omitted → the memory-maintenance default. */
+  authority?: string[];
   /** Model id for this run (D-DS9); defaults to the standard job model. */
   model?: string;
 }
@@ -33,10 +38,15 @@ export interface ScheduledJobInput {
 /** Default model for a scheduled run; overridable per run (D-DS9). */
 const DEFAULT_SCHEDULED_MODEL = 'claude-opus-4-8';
 
+/** Legacy/default grants (rows created before `authority` existed, and the common reminder
+ *  case): the memory tools + proactive roster messaging. */
+const DEFAULT_SCHEDULE_GRANTS = ['memory_read', 'memory_write', 'message'];
+
 export async function runScheduledJob(input: ScheduledJobInput): Promise<void> {
   'use workflow';
 
-  const setup = await buildSetup(input.model ?? DEFAULT_SCHEDULED_MODEL, input.audience);
+  const grants = input.authority ?? DEFAULT_SCHEDULE_GRANTS;
+  const setup = await buildSetup(input.model ?? DEFAULT_SCHEDULED_MODEL, input.audience, grants);
 
   const { result } = await streamAgent({
     // `observe` gives the fired run exactly-once generation spans in Langfuse. Session = the
@@ -48,25 +58,23 @@ export async function runScheduledJob(input: ScheduledJobInput): Promise<void> {
     }),
     instructions: setup.instructions,
     tools: {
-      memory_write: tool({
-        ...MEMORY_TOOL_SPECS.memory_write,
-        execute: (args) => writeStep(args),
+      // Grant-mapped tools (the shared builder): memory, host, registries, live MCP tools.
+      // ownerScope: a scheduled run may edit the owner-core files only when it acts FOR the
+      // owner (a household/owner-audience run, e.g. consolidation) — never for a family subject.
+      ...grantTools(grants, {
+        ownerScope: setup.subject === input.ownerName,
+        runs: {
+          threadId: input.audience.kind === 'thread' ? input.audience.threadId : '',
+          subject: setup.subject,
+        },
+        mcpTools: setup.mcpTools,
       }),
-      read_topic: tool({
-        ...MEMORY_TOOL_SPECS.read_topic,
-        execute: ({ name }) => readTopicStep(name),
-      }),
-      recall_history: tool({
-        ...MEMORY_TOOL_SPECS.recall_history,
-        execute: ({ query, limit }) => recallStep(query, limit),
-      }),
-      // Proactive fan-out (run-audiences D-RA10, Phase 3.1): a *delivering* scheduled run may reach
-      // OTHER roster members via the bus. Withheld from `household` — today the only household
-      // schedule is the silent maintenance run (consolidation), which holds no messaging grant → is
-      // structurally silent (D-RA14). (A future household *fan-out* run would need the grant wired
-      // at its creation path, which doesn't exist yet.) The run's OWN audience is reached by its
-      // terminal result — `message` is refused for the audience's own subject (no double-send).
-      ...(input.audience.kind !== 'household'
+      // Proactive fan-out (run-audiences D-RA10, Phase 3.1): a *delivering* scheduled run may
+      // reach OTHER roster members via the bus — rides the `message` grant AND a non-household
+      // audience. A household run without the grant is structurally silent (D-RA14). The run's
+      // OWN audience is reached by its terminal result — `message` is refused for the audience's
+      // own subject (no double-send).
+      ...(grants.includes('message') && input.audience.kind !== 'household'
         ? {
             message: tool({
               ...MESSAGE_SPEC,
@@ -93,70 +101,67 @@ export async function runScheduledJob(input: ScheduledJobInput): Promise<void> {
 interface ScheduledSetup {
   instructions: string;
   modelId: string;
+  /** The audience's canonical subject name (resolved in the step, where config is visible). */
+  subject: string;
+  /** Live MCP server tool defs (mcp D-MCP6/7) — discovered here only when the run holds the
+   *  `mcp` grant; plain data, so it journals across the step boundary. */
+  mcpTools?: McpToolDef[];
   testModelResponses?: MockResponseDescriptor[];
 }
 
 /**
  * Build the autonomous-run instructions + model config once, in a step, so they stay stable
  * across replays even though the run itself mutates the memory core mid-flight. Uses the shared
- * job-prompt builder (autonomous + memory tools) — same identity, memory semantics, and core as
- * the interactive thread; no host tools/skills (least privilege + anti-recursion, D-SC4). Reads
- * the test-model seam here (in the step, where a test's `globalThis` override is visible) and
- * threads it to the body, so a scheduled run is mockable in the workflow suite.
+ * job-prompt builder — same identity, memory semantics, core, and SKILLS index as the interactive
+ * thread — with the prompt's tool sections gated on the run's actual grants. When the run holds
+ * the `mcp` grant, the enabled MCP servers' tools are discovered here (the same journaled-defs
+ * seam as the owner-DM turn); connect failures degrade to a log line and never fail the run.
+ * Reads the test-model seam here (in the step, where a test's `globalThis` override is visible)
+ * and threads it to the body, so a scheduled run is mockable in the workflow suite.
  */
-async function buildSetup(modelId: string, audience: Audience): Promise<ScheduledSetup> {
+async function buildSetup(
+  modelId: string,
+  audience: Audience,
+  grants: string[],
+): Promise<ScheduledSetup> {
   'use step';
 
   const { getRuntime } = await import('../src/runtime.js');
   const { loadCore, memoryPaths } = await import('../src/memory/index.js');
+  const { loadAllSkills, renderSkillIndex } = await import('../src/skills/index.js');
   const { buildJobPrompt } = await import('../src/agent/prompt.js');
   const { testModelResponses } = await import('../src/agent/turnModel.js');
   const { config } = await getRuntime();
   const core = loadCore(memoryPaths(config.runtimeDir));
+  const skillsIndex = renderSkillIndex(loadAllSkills(config), config.skills);
   // Frame the run for its subject (D-RA4), derived from the audience — a schedule fired in Kate's
   // thread reports for Kate, not the owner. `household` (consolidation) → owner framing.
   const subject = subjectName(audience, config);
+
+  // Live MCP tool discovery (mcp D-MCP6/7) — only for runs endowed the `mcp` grant. No owner
+  // notice channel here (the run is unattended); failures log and degrade to no tools.
+  let mcpTools: McpToolDef[] | undefined;
+  if (grants.includes('mcp')) {
+    const { discoverMcpToolDefs } = await import('../src/mcp/turnTools.js');
+    const { resolverFromEnv } = await import('../src/credentials/index.js');
+    const { logger } = await import('../src/logger.js');
+    mcpTools = await discoverMcpToolDefs(config, resolverFromEnv() ?? undefined, (text) => {
+      logger('scheduled-job').warn('mcp notice (unattended run)', { text });
+    });
+  }
+
   return {
-    instructions: buildJobPrompt(config, core, '', {
+    instructions: buildJobPrompt(config, core, skillsIndex, {
       autonomous: true,
-      memoryTools: true,
+      memoryTools: grants.includes('memory_read') || grants.includes('memory_write'),
+      hostTools: grants.includes('bash'),
       subject,
     }),
     modelId,
+    subject,
+    mcpTools,
     testModelResponses: testModelResponses(),
   };
-}
-
-async function writeStep(args: {
-  file: string;
-  action: 'add' | 'replace' | 'remove';
-  content?: string;
-  target?: string;
-}): Promise<string> {
-  'use step';
-
-  const { getRuntime } = await import('../src/runtime.js');
-  const { execMemoryWrite } = await import('../src/agent/tools/memory.js');
-  const { config } = await getRuntime();
-  return execMemoryWrite(config, args);
-}
-
-async function readTopicStep(name: string): Promise<string> {
-  'use step';
-
-  const { getRuntime } = await import('../src/runtime.js');
-  const { execReadTopic } = await import('../src/agent/tools/memory.js');
-  const { config } = await getRuntime();
-  return execReadTopic(config, name);
-}
-
-async function recallStep(query: string, limit?: number): Promise<string> {
-  'use step';
-
-  const { getRuntime } = await import('../src/runtime.js');
-  const { execRecall } = await import('../src/agent/tools/memory.js');
-  const { store, config } = await getRuntime();
-  return execRecall(store, config, query, limit);
 }
 
 /**

@@ -251,8 +251,10 @@ export function buildJobPrompt(
   );
 
   const memory = `${lines.join('\n')}\n\n${memoryCoreBlock(core)}`;
-  // Skills only when the job can act on them (needs file_read to read a SKILL.md).
-  const skills = opts.hostTools ? skillsBlock(skillsIndex) : '';
+  // Every run profile carries the full skills index (2026-07-07): even a memory-only run
+  // benefits from knowing what capabilities exist (it can say so in its report), and any run
+  // holding file_read can act on a SKILL.md directly.
+  const skills = skillsBlock(skillsIndex);
   return skills ? `${memory}\n${skills}` : memory;
 }
 
@@ -265,7 +267,12 @@ export function buildJobPrompt(
  * report; `<report>…</report>` blocks are deliberate mid-task updates; `<no-report/>` is the
  * deliberate no-op. The transport (where the report actually goes) is invisible here.
  */
-export function buildSubagentPrompt(config: SunnyConfig, core: MemoryCore, label: string): string {
+export function buildSubagentPrompt(
+  config: SunnyConfig,
+  core: MemoryCore,
+  label: string,
+  skillsIndex = '',
+): string {
   const owner = config.owner.name;
   const lines: string[] = [
     `You are a delegated subagent of Sunny (${owner}'s assistant), working as "${label}". You were`,
@@ -288,7 +295,11 @@ export function buildSubagentPrompt(config: SunnyConfig, core: MemoryCore, label
     `  <no-report/> — that delivers nothing.`,
     `- Stay strictly within your task's boundaries; do not take actions beyond what was asked.`,
   ];
-  return `${lines.join('\n')}\n\n${memoryCoreBlock(core)}`;
+  const base = `${lines.join('\n')}\n\n${memoryCoreBlock(core)}`;
+  // The full skills index travels with every run profile (2026-07-07): a child with file
+  // access acts on a SKILL.md exactly like the interactive thread.
+  const skills = skillsBlock(skillsIndex);
+  return skills ? `${base}\n${skills}` : base;
 }
 
 /**

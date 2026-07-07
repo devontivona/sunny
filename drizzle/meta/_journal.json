@@ -71,6 +71,13 @@
       "when": 1783006907048,
       "tag": "0009_schedule_audience",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1783444175266,
+      "tag": "0010_schedule_authority",
+      "breakpoints": true
     }
   ]
 }

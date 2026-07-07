@@ -1,7 +1,7 @@
 import type { Db } from '../db/client.js';
 import type { ConversationStore } from '../gateway/store.js';
 import { runSerial } from '../gateway/serial.js';
-import { type Authority, authorityForToolset, isAuthoritySubset } from './audience.js';
+import { type Authority, attenuate, authorityForToolset } from './audience.js';
 import type { SubagentInput, ChildToolset } from '../../workflows/subagent.js';
 import {
   MAX_CONCURRENT_CHILDREN,
@@ -32,14 +32,17 @@ export interface SpawnInput {
   orchestrator?: boolean;
   /** Spawn depth: a top-level (Sunny) delegation is depth 1; an orchestrator child's children 2… */
   depth: number;
-  /** The spawning run's authority (run-audiences D-RA5). The child's toolset grants MUST be a
-   *  subset — monotone attenuation, enforced here at spawn (no ambient authority). */
+  /** The spawning run's authority (run-audiences D-RA5). The child's preset grants are
+   *  ATTENUATED against it here at spawn (intersection — no ambient authority): a preset asks
+   *  for its full bundle and receives what the parent can actually endow. */
   parentAuthority: Authority;
+  /** Whether the spawning context may edit the owner-core files; inherited by the child. */
+  ownerScope?: boolean;
 }
 
 export type SpawnResult =
   | { childThreadId: string; childRunId: string }
-  | { error: 'depth_cap' | 'concurrency_cap' | 'authority' };
+  | { error: 'depth_cap' | 'concurrency_cap' };
 
 /**
  * The delegation supervisor (durable-subagents D-DS13/D-DS6) — the run-supply engine for
@@ -84,17 +87,11 @@ export class DelegationSupervisor {
       log.warn('delegation refused: concurrency cap', { active, parent: input.parentThreadId });
       return { error: 'concurrency_cap' };
     }
-    // Monotone attenuation (D-RA5): the child's toolset may not grant authority the parent lacks.
-    // Structurally always true for a top-level delegation (delegation is trusted-DM-only, and the
-    // parent holds the full set); it bites a future orchestrator whose grandchild asks for more.
-    const childAuthority = authorityForToolset(input.toolset);
-    if (!isAuthoritySubset(childAuthority, input.parentAuthority)) {
-      log.warn('delegation refused: authority not a subset of parent', {
-        child: childAuthority,
-        parent: input.parentAuthority,
-      });
-      return { error: 'authority' };
-    }
+    // Monotone attenuation (D-RA5): the child's grants are the preset's bundle INTERSECTED with
+    // the parent's authority — a preset is a convenience request, not a named demand, so a host
+    // child of a family DM simply comes up without the owner-facing registries instead of being
+    // refused. (Explicit grant requests — schedule_create's `authority` — use subset+refusal.)
+    const childAuthority = attenuate(authorityForToolset(input.toolset), input.parentAuthority);
 
     const childThreadId = newChildThreadId();
     await createLink(this.db, {
@@ -117,6 +114,8 @@ export class DelegationSupervisor {
         parentThreadId: input.parentThreadId,
         task: input.task,
         toolset: input.toolset,
+        authority: childAuthority,
+        ownerScope: input.ownerScope ?? false,
         model: input.model,
         label: input.label,
       });

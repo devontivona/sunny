@@ -146,7 +146,7 @@ Sunny SHALL be able to delegate a subtask by starting a child durable run that e
 - **AND** no messaging tool call is required for the report to be delivered
 
 ### Requirement: Least-privilege child runs
-Every **spawned** run — a delegated child, a background job, or a scheduled run — SHALL be endowed an authority (tools + credential references) that is a subset of its creator's, never broader, granted explicitly at spawn with no ambient inheritance. All spawned-run actions SHALL pass through the same tool-access gating, approval tiers, and blocklist as the creator. A spawned run SHALL NOT resolve a credential reference its creator could not, nor invoke a tool it was not endowed even if that tool exists in-process.
+Every **spawned** run — a delegated child or a scheduled run — SHALL be endowed an authority (tools + credential references) that is a subset of its creator's, never broader, granted explicitly at spawn with no ambient inheritance. All spawned-run actions SHALL pass through the same tool-access gating, approval tiers, and blocklist as the creator. A spawned run SHALL NOT resolve a credential reference its creator could not, nor invoke a tool it was not endowed even if that tool exists in-process.
 
 #### Scenario: Spawned run cannot exceed creator permissions
 - **WHEN** a spawned run attempts an action or credential resolution its creator could not perform

@@ -23,9 +23,35 @@ export type Audience =
   | { kind: 'parent'; threadId: string; fromId?: string; fromName?: string }
   | { kind: 'household' };
 
-/** A run's authority: the set of grant-name strings it was endowed (run-audiences D-RA5). A
- *  spawned run's authority MUST be a subset of its creator's (monotone attenuation). String array
- *  (not Set) so it rides in a serializable WDK workflow input. */
+/** One endowable capability (run-audiences D-RA5). Each grant maps to a concrete tool bundle
+ *  (see `grantTools` in `workflows/runShell.ts`):
+ *   - file_read     → file_read
+ *   - memory_read   → read_topic, recall_history
+ *   - runs_read     → list_runs
+ *   - bash          → bash (credential injection rides its `credentials` argument)
+ *   - file_write    → file_write, file_edit
+ *   - memory_write  → memory_write
+ *   - credentials   → credential_manage (vault discovery/registration)
+ *   - mcp           → mcp_manage + the enabled MCP servers' live tools
+ *   - message       → message (roster relay / subagent steer)
+ *   - schedule      → schedule_create, cancel_run
+ *   - delegate      → delegate_task */
+export type Grant =
+  | 'file_read'
+  | 'memory_read'
+  | 'runs_read'
+  | 'bash'
+  | 'file_write'
+  | 'memory_write'
+  | 'credentials'
+  | 'mcp'
+  | 'message'
+  | 'schedule'
+  | 'delegate';
+
+/** A run's authority: the set of grants it was endowed (run-audiences D-RA5). A spawned run's
+ *  authority MUST be a subset of its creator's (monotone attenuation). String array (not Set)
+ *  so it rides in a serializable WDK workflow input. */
 export type Authority = string[];
 
 /** True iff `child` ⊆ `parent` by set inclusion — the attenuation invariant checked at spawn. */
@@ -34,30 +60,52 @@ export function isAuthoritySubset(child: Authority, parent: Authority): boolean 
   return child.every((g) => p.has(g));
 }
 
-/** The full authority of a trusted-DM conversation turn (owner or family) — the ROOT of the
- *  spawn derivation tree (run-audiences D-RA5). A group turn's root is `['memory']` (no host,
- *  no delegation/scheduling); delegation is trusted-DM-only, so a spawn's parent authority is
- *  this set. */
-export const TRUSTED_DM_AUTHORITY: Authority = [
+/** `requested ∩ parent` — monotone attenuation for PRESET-derived grants: a preset asks for its
+ *  full bundle and receives what its parent can actually endow (e.g. a host child of a family DM
+ *  gets host minus credentials/mcp). Explicit grant requests use `isAuthoritySubset` + refusal
+ *  instead, so a run that NAMED a grant hears "no" rather than silently losing it. */
+export function attenuate(requested: Authority, parent: Authority): Authority {
+  const p = new Set(parent);
+  return requested.filter((g) => p.has(g));
+}
+
+/** The read-side preset: inspect without mutating. Safe enough for untrusted-content work. */
+export const READONLY_GRANTS: Authority = ['file_read', 'memory_read', 'runs_read'];
+
+/** The act-side preset: everything readonly has, plus host mutation and the registries. */
+export const HOST_GRANTS: Authority = [
+  ...READONLY_GRANTS,
   'bash',
-  'file_read',
-  'memory',
+  'file_write',
+  'memory_write',
+  'credentials',
+  'mcp',
+];
+
+/** The authority of a trusted-DM conversation turn (owner OR family) — a spawn-derivation ROOT
+ *  (run-audiences D-RA5). Family DMs hold host reach but NOT the owner-facing registries
+ *  (credentials/mcp); a group turn's root is `GROUP_AUTHORITY`. */
+export const TRUSTED_DM_AUTHORITY: Authority = [
+  ...READONLY_GRANTS,
+  'bash',
+  'file_write',
+  'memory_write',
   'message',
   'schedule',
   'delegate',
 ];
 
-/** The grants a child's least-privilege toolset preset endows (run-audiences D-RA5). Every child
- *  can always report (`send_message` to its parent) — that is inherent, not a grant. */
-export function authorityForToolset(toolset: 'host' | 'readonly' | 'none' | undefined): Authority {
-  switch (toolset) {
-    case 'host':
-      return ['bash', 'file_read'];
-    case 'readonly':
-      return ['file_read'];
-    default:
-      return [];
-  }
+/** The owner-DM root: trusted-DM plus the owner-facing registries. */
+export const OWNER_DM_AUTHORITY: Authority = [...TRUSTED_DM_AUTHORITY, 'credentials', 'mcp'];
+
+/** A group turn's root: memory only (no host reach, no spawning; design D5). */
+export const GROUP_AUTHORITY: Authority = ['memory_read', 'memory_write'];
+
+/** The grants a child's least-privilege toolset preset REQUESTS (run-audiences D-RA5); the
+ *  supervisor attenuates them against the parent's authority at spawn. Reporting back to the
+ *  parent is inherent (the final text), not a grant. */
+export function authorityForToolset(toolset: 'host' | 'readonly' | undefined): Authority {
+  return toolset === 'readonly' ? READONLY_GRANTS : HOST_GRANTS;
 }
 
 /**

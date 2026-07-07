@@ -174,6 +174,67 @@ describe('self-scheduling on a trusted-DM turn (run-audiences Phase 1a)', () => 
     expect(await listSchedules(ctx.db.db)).toHaveLength(0); // refused → nothing created
   });
 
+  it('{ audience, authority }: an owner-DM turn endows a schedule host grants, stored on the row', async () => {
+    ctx = await setupTestRuntime();
+    const event = makeChannelEvent({ text: 'tag my craft docs every morning' });
+    await ctx.store.appendInbound(event);
+    setTurnModel([
+      {
+        type: 'tool-call',
+        toolName: 'schedule_create',
+        input: JSON.stringify({
+          kind: 'cron',
+          spec: '0 5 * * *',
+          prompt: 'Run the daily craft tagging job per skill:craft.',
+          label: 'craft-tagging',
+          authority: ['file_read', 'bash', 'file_write', 'mcp', 'memory_read'],
+        }),
+      },
+      { type: 'text', text: 'Scheduled with host access.' },
+    ]);
+
+    const run = await start(runConversation, [{ threadId: event.threadId }]);
+    await run.returnValue;
+    expect(await run.status).toBe('completed');
+
+    const rows = await listSchedules(ctx.db.db);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.authority).toEqual(['file_read', 'bash', 'file_write', 'mcp', 'memory_read']);
+  });
+
+  it('{ audience, authority }: a family DM cannot endow the owner-facing registries (refused, no row)', async () => {
+    const KATE = '+17195550000';
+    ctx = await setupTestRuntime({ family: [{ name: 'Kate', identities: [KATE] }] });
+    const event = makeChannelEvent({
+      threadId: 'sendblue:owner:kate',
+      senderId: KATE,
+      senderName: 'Kate',
+      isOwner: false,
+      text: 'set up a nightly job that manages credentials',
+    });
+    await ctx.store.appendInbound(event);
+    setTurnModel([
+      {
+        type: 'tool-call',
+        toolName: 'schedule_create',
+        input: JSON.stringify({
+          kind: 'cron',
+          spec: '0 2 * * *',
+          prompt: 'rotate things',
+          authority: ['bash', 'credentials'],
+        }),
+      },
+      { type: 'text', text: 'ok' },
+    ]);
+
+    const run = await start(runConversation, [{ threadId: event.threadId }]);
+    await run.returnValue;
+    expect(await run.status).toBe('completed');
+
+    // `credentials` exceeds a family DM's authority (owner-DM only) → refused loudly, no row.
+    expect(await listSchedules(ctx.db.db)).toHaveLength(0);
+  });
+
   it('list_runs shows the owner all schedules', async () => {
     ctx = await setupTestRuntime();
     const { createSchedule } = await import('../../src/scheduler/index.js');

@@ -1,8 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  attenuate,
   audienceForSchedule,
   authorityForToolset,
+  HOST_GRANTS,
   isAuthoritySubset,
+  OWNER_DM_AUTHORITY,
+  READONLY_GRANTS,
   resolveMemberThread,
   resolveRosterMember,
   scheduleAudience,
@@ -120,9 +124,35 @@ describe('authority attenuation', () => {
     expect(isAuthoritySubset(['bash', 'file_read'], ['file_read'])).toBe(false);
   });
 
-  it('authorityForToolset maps presets to grant sets', () => {
-    expect(authorityForToolset('host')).toEqual(['bash', 'file_read']);
-    expect(authorityForToolset('readonly')).toEqual(['file_read']);
-    expect(authorityForToolset('none')).toEqual([]);
+  it('authorityForToolset maps presets to grant bundles (host is the default)', () => {
+    expect(authorityForToolset('host')).toEqual(HOST_GRANTS);
+    expect(authorityForToolset('readonly')).toEqual(READONLY_GRANTS);
+    expect(authorityForToolset(undefined)).toEqual(HOST_GRANTS);
+  });
+
+  it('readonly holds only read-side grants; host adds mutation + the registries', () => {
+    expect(READONLY_GRANTS).toEqual(['file_read', 'memory_read', 'runs_read']);
+    for (const g of ['bash', 'file_write', 'memory_write', 'credentials', 'mcp']) {
+      expect(READONLY_GRANTS).not.toContain(g);
+      expect(HOST_GRANTS).toContain(g);
+    }
+  });
+
+  it('attenuate intersects preset grants with the parent authority', () => {
+    // A host child of a FAMILY DM comes up without the owner-facing registries.
+    const familyChild = attenuate(HOST_GRANTS, TRUSTED_DM_AUTHORITY);
+    expect(familyChild).not.toContain('credentials');
+    expect(familyChild).not.toContain('mcp');
+    expect(familyChild).toContain('bash');
+    // A host child of an OWNER DM keeps the full bundle.
+    expect(attenuate(HOST_GRANTS, OWNER_DM_AUTHORITY)).toEqual(HOST_GRANTS);
+  });
+
+  it('conversation roots: owner DM ⊇ trusted DM; only owner DMs hold the registries', () => {
+    expect(isAuthoritySubset(TRUSTED_DM_AUTHORITY, OWNER_DM_AUTHORITY)).toBe(true);
+    expect(TRUSTED_DM_AUTHORITY).not.toContain('credentials');
+    expect(TRUSTED_DM_AUTHORITY).not.toContain('mcp');
+    expect(OWNER_DM_AUTHORITY).toContain('credentials');
+    expect(OWNER_DM_AUTHORITY).toContain('mcp');
   });
 });

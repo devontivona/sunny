@@ -90,9 +90,8 @@ export function toolCatalog(config: SunnyConfig): ToolCatalogEntry[] {
   const inertStore = undefined as unknown as ConversationStore;
 
   // Mirror `conversation.ts` `buildTools` (text-as-reply, PR #31: the reply is the model's
-  // final text — no send_message/stay_silent tools). `send_image`/`start_job`/memory are
-  // registered on every turn; scheduling/credentials/mcp/host tools are trusted-DM-only
-  // (owner OR family).
+  // final text — no send_message/stay_silent tools). `send_image`/memory are registered on
+  // every turn; scheduling/credentials/mcp/host tools are trusted-DM-only (owner OR family).
   const broad: Record<string, ToolLike> = {
     send_image: SEND_IMAGE_SPEC,
     ...createMemoryTools(config, inertStore),
