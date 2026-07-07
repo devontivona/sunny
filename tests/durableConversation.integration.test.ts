@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ConversationStore } from '../src/gateway/store.js';
 import { steerMessageText } from '../src/agent/delivery.js';
+import { toModelMessages } from '../src/agent/turn.js';
 import { createTestDb, type TestDb } from './db.js';
 import { FakeGateway } from './fakes/gateway.js';
 import {
@@ -119,16 +120,17 @@ describe('durable conversational run', () => {
       expect(await store.unansweredSteers(b.threadId, [a.messageId, b.messageId])).toEqual([]);
     });
 
-    it('flags media-bearing steers so the text-only fold can skip them (multipart-coalesce)', async () => {
-      // A split multipart send: the image part lands mid-turn as its own webhook. The fold
-      // is TEXT-ONLY — folding this would consume the image unseen — so hasMedia lets
-      // loadSteersStep leave it unanswered for the NEXT turn's window (media inlined there).
+    it('media-bearing steers fold with their image inlined (multipart-coalesce v2)', async () => {
+      // A split multipart send: the image part lands mid-turn as its own webhook. Steers
+      // return FULL rows and convert through the SAME toModelMessages pipeline as the
+      // window — so the fold carries a real media part (here the unreadable-file note,
+      // since /tmp/leo.jpg does not exist: D-MM2, degraded but never silently dropped).
       const a = makeChannelEvent({ text: 'check out this pic' });
       await store.appendInbound(a);
       const img = makeChannelEvent({ text: '' });
       await store.appendInbound(img, [
         {
-          path: '/tmp/leo.jpg',
+          path: '/tmp/does-not-exist-leo.jpg',
           mediaType: 'image/jpeg',
           kind: 'image',
           name: 'leo.jpg',
@@ -139,10 +141,12 @@ describe('durable conversational run', () => {
 
       const steers = await store.unansweredSteers(a.threadId, [a.messageId]);
       expect(steers).toHaveLength(1);
-      expect(steers[0]).toMatchObject({ messageId: img.messageId, hasMedia: true });
-      // Plain-text steers stay foldable.
-      const textSteers = await store.unansweredSteers(a.threadId, [img.messageId]);
-      expect(textSteers[0]).toMatchObject({ messageId: a.messageId, hasMedia: false });
+      expect(steers[0]!.messageId).toBe(img.messageId);
+      // The steer converts exactly like a window row: the attachment surfaces to the model
+      // (as an inline image, or a note when the file is unreadable) — never dropped.
+      const model = await toModelMessages(steers, false);
+      const rendered = JSON.stringify(model);
+      expect(rendered).toContain('leo.jpg');
     });
 
     it('group steers carry the speaker prefix when folded', async () => {

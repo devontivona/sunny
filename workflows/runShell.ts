@@ -6,7 +6,6 @@ import type {
 import { WorkflowAgent } from '@ai-sdk/workflow';
 import { jsonSchema, tool } from '@ai-sdk/provider-utils';
 import { getWritable } from 'workflow';
-import { steerMessageText } from '../src/agent/delivery.js';
 import { AGENT_STEP_LIMIT } from '../src/agent/limits.js';
 import { BASH_TOOL_SPECS } from '../src/agent/tools/bashSpecs.js';
 import type { BashToolInput, FileReadToolInput } from '../src/agent/tools/bashSpecs.js';
@@ -156,24 +155,16 @@ export async function streamAgent(opts: StreamAgentOpts): Promise<{
       if (stepNumber === 0) return {};
       let folded: typeof messages | undefined;
       if (steering) {
-        const steers = await loadSteersStep(steering.inboxThreadId, [
-          ...steering.baseExcludeIds,
-          ...foldedIds,
-        ]);
-        if (steers.length > 0) {
-          for (const s of steers) foldedIds.push(s.messageId);
-          folded = [
-            ...messages,
-            ...steers.map((s) => ({
-              role: 'user' as const,
-              content: [
-                {
-                  type: 'text' as const,
-                  text: steerMessageText(s.text, s.senderName, steering.isGroup),
-                },
-              ],
-            })),
-          ];
+        const steers = await loadSteersStep(
+          steering.inboxThreadId,
+          [...steering.baseExcludeIds, ...foldedIds],
+          steering.isGroup,
+        );
+        if (steers.ids.length > 0) {
+          foldedIds.push(...steers.ids);
+          // Steers are pre-converted model messages (text AND media — multipart-coalesce v2),
+          // rendered by the same pipeline as the prompt window.
+          folded = [...messages, ...(steers.messages as typeof messages)];
         }
       }
 
@@ -371,28 +362,31 @@ async function notifyOwnerUndeliverable(
 
 /**
  * Read messages that arrived on `threadId` that the run hasn't folded yet (D-DS4 steering),
- * excluding ids already seen. Shared by the conversation turn (owner double-text) and a child
- * run (parent→child steer via `message`) — both fold the same way via `loadSteers`.
- * A `'use step'`, so it's deterministic on replay.
- *
- * MEDIA-bearing arrivals are NOT returned (multipart-coalesce, 2026-07-07): the fold is
- * text-only, so folding an image would consume it unseen — the model never gets the bytes,
- * but `foldedIds` marks it answered. Left unfolded, it stays unanswered and the router's next
- * turn reads it from the window with the media properly inlined. (The filter lives INSIDE the
- * step so the journal records exactly what was folded.)
+ * excluding ids already seen, CONVERTED to model messages through the same
+ * `toModelMessages` pipeline as the prompt window (multipart-coalesce v2, 2026-07-07): a
+ * mid-turn image folds as a real inlined image part — the group speaker prefix, media
+ * downscaling/caps, and unreadable-file notes all match the window's rendering, because it
+ * IS the window's rendering. Shared by the conversation turn (owner double-text) and a child
+ * run (parent→child steer via `message`). A `'use step'`, so the converted messages (media
+ * parts included — the same journaling cost `loadPending` already pays) are deterministic
+ * on replay.
  */
 export async function loadSteersStep(
   threadId: string,
   excludeIds: string[],
-): Promise<{ messageId: string; text: string; senderName?: string }[]> {
+  isGroup: boolean,
+): Promise<{ ids: string[]; messages: ModelMessage[] }> {
   'use step';
 
   const { getRuntime } = await import('../src/runtime.js');
+  const { toModelMessages } = await import('../src/agent/turn.js');
   const { store } = await getRuntime();
   const steers = await store.unansweredSteers(threadId, excludeIds);
-  return steers
-    .filter((s) => !s.hasMedia)
-    .map(({ messageId, text, senderName }) => ({ messageId, text, senderName }));
+  if (steers.length === 0) return { ids: [], messages: [] };
+  return {
+    ids: steers.map((s) => s.messageId),
+    messages: await toModelMessages(steers, isGroup),
+  };
 }
 
 /** Mark a thread's inbound messages answered (the watermark) — shared across profiles. */

@@ -177,10 +177,7 @@ export class ConversationStore {
    * inside a `'use step'` and avoids a concurrent hook consumer (which would race the
    * between-turn `await hook`). Capped at the window size.
    */
-  async unansweredSteers(
-    threadId: string,
-    excludeIds: string[],
-  ): Promise<{ messageId: string; text: string; senderName?: string; hasMedia: boolean }[]> {
+  async unansweredSteers(threadId: string, excludeIds: string[]): Promise<StoredMessage[]> {
     const conds = [
       eq(messages.threadId, threadId),
       eq(messages.role, 'user'),
@@ -188,25 +185,24 @@ export class ConversationStore {
     ];
     if (excludeIds.length > 0) conds.push(notInArray(messages.messageId, excludeIds));
     const rows = await this.db
-      .select({
-        messageId: messages.messageId,
-        text: messages.text,
-        senderName: messages.senderName,
-        payload: messages.payload,
-      })
+      .select()
       .from(messages)
       .where(and(...conds))
       .orderBy(asc(messages.createdAt))
       .limit(this.windowSize);
+    // FULL rows (multipart-coalesce v2): the fold converts steers through the SAME
+    // `toModelMessages` pipeline as the prompt window, so a mid-turn image folds as a real
+    // image part instead of being dropped by a text-only fold.
     return rows.map((r) => ({
       messageId: r.messageId,
-      text: r.text,
+      threadId: r.threadId,
+      role: r.role as 'user' | 'assistant',
+      senderId: r.senderId,
       senderName: r.senderName ?? undefined,
-      // Media flag (multipart-coalesce): the mid-turn steering fold is TEXT-ONLY, so a
-      // media-bearing message must NOT fold — folding would mark it answered while the
-      // image never reaches any model turn. Callers leave these for the next full turn,
-      // whose window inlines the media properly.
-      hasMedia: attachmentRefsOf(r.payload).length > 0,
+      text: r.text,
+      payload: r.payload,
+      timestamp: r.timestamp,
+      isOwner: r.isOwner,
     }));
   }
 
