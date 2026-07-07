@@ -71,7 +71,10 @@ export class AuthStore {
 
   /** A session is valid only if it exists, isn't revoked, and hasn't expired. */
   async getValidSession(id: string): Promise<DashboardSessionRow | null> {
-    const [row] = await this.db.select().from(dashboardSessions).where(eq(dashboardSessions.id, id));
+    const [row] = await this.db
+      .select()
+      .from(dashboardSessions)
+      .where(eq(dashboardSessions.id, id));
     if (!row || row.revoked || row.expiresAt.getTime() <= Date.now()) return null;
     return row;
   }

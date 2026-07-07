@@ -43,8 +43,6 @@ describe('buildSystemPrompt', () => {
     expect(before).not.toBe(after);
   });
 
-
-
   it('text mode: text-as-reply prompt (narration welcome, dangling-promise guard, send_image; no send_message)', () => {
     const p = buildSystemPrompt(config, core({ user: '- Name: Devon' }));
     expect(p).toContain('Your reply IS the message');
@@ -67,8 +65,6 @@ describe('buildSystemPrompt', () => {
     expect(p).toContain('the ONLY way to say nothing');
     expect(p).not.toContain('stay_silent');
   });
-
-
 
   it('is byte-identical when the people context is empty (owner-only cache preserved)', () => {
     const c = core({ user: '- Name: Devon' });

@@ -56,15 +56,19 @@ A job executing as a scheduled run SHALL NOT be able to create, modify, or delet
 - **THEN** it can create, modify, or delete schedules
 
 ### Requirement: Scheduled output delivery and history
-A scheduled run SHALL deliver through the single delivery bus, whose destination is **resolved from the schedule's audience** — defaulting to the audience's subject (the creating conversation), NOT a hardcoded owner thread. A schedule whose run holds no messaging grant (e.g. nightly consolidation) SHALL record its outcome and send nothing. Run outcomes SHALL be retained for later inspection.
+A scheduled run SHALL deliver through the single delivery bus, whose destination is **resolved from the schedule's audience** — defaulting to the audience's subject (the creating conversation), NOT a hardcoded owner thread. A `household` schedule's TERMINAL result SHALL be recorded without being sent (no single recipient); its run MAY still deliberately fan out to roster members via the `message` tool (the audience axis — e.g. a household job briefing each member), so a maintenance run like nightly consolidation is silent because it has nothing to send, not because it is muzzled. Run outcomes SHALL be retained for later inspection.
 
 #### Scenario: Scheduled result is delivered to its audience
 - **WHEN** a scheduled run created by a family member completes with a result
 - **THEN** the result is delivered to that family member's conversation via the gateway
 
-#### Scenario: Silent maintenance schedule sends nothing
-- **WHEN** a `household` schedule whose run holds no messaging grant (e.g. nightly consolidation) completes
+#### Scenario: Household terminal result is recorded, not sent
+- **WHEN** a `household` schedule (e.g. nightly consolidation) completes with a result and sent no messages
 - **THEN** no proactive message is sent, and its outcome is still recorded
+
+#### Scenario: Household run can fan out deliberately
+- **WHEN** a `household` scheduled run calls `message` for a roster member
+- **THEN** that member receives it in their own conversation, while the run's terminal result is still only recorded
 
 #### Scenario: Run history retained
 - **WHEN** a scheduled run finishes

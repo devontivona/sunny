@@ -35,9 +35,7 @@ export class Authorizer {
 
   constructor(config: SunnyConfig) {
     this.ownerIdentities = new Set(config.owner.identities.map(normalize));
-    this.familyIdentities = new Set(
-      config.family.flatMap((p) => p.identities.map(normalize)),
-    );
+    this.familyIdentities = new Set(config.family.flatMap((p) => p.identities.map(normalize)));
     this.allowGroups = config.allowGroups;
   }
 

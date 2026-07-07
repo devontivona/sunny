@@ -150,6 +150,61 @@ The full architecture lives in [`openspec/`](openspec/) — canonical capability
 and the design history (proposals, design decisions, rejected alternatives) under
 [`openspec/changes/archive/`](openspec/changes/archive/).
 
+## Capability model — authority × audience
+
+Every agent run (a conversation turn, a delegated subagent, a fired schedule) is governed by two
+orthogonal axes. **Authority says what a run may DO** — a set of grants, each mapping to a fixed
+tool bundle through one shared builder (`grantTools` in `workflows/runShell.ts`; vocabulary in
+`src/agent/audience.ts`). **Audience says how a run may SPEAK** — its reply lane and messaging
+verbs derive from who the run is for, never from a grant. Conversation turns hold a root
+authority by thread type; spawned runs are endowed a `toolset` preset (`host` — the default —
+or `readonly`), and the **effective authority is preset ∩ creator's root** (monotone
+attenuation: a spawned run never exceeds its creator, and never holds the spawn grants).
+
+### Authority: what a run may do
+
+| Grant → tools | Group root | Trusted-DM root | Owner-DM root | `readonly` preset | `host` preset |
+|---|---|---|---|---|---|
+| `memory_read` → read_topic, recall_history | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `memory_write` → memory_write ¹ | ✅ | ✅ | ✅ | ❌ | ✅ |
+| `file_read` → file_read | ❌ | ✅ | ✅ | ✅ | ✅ |
+| `runs_read` → list_runs | ❌ | ✅ | ✅ | ✅ | ✅ |
+| `bash` → bash (+ credential injection) | ❌ | ✅ | ✅ | ❌ | ✅ |
+| `file_write` → file_write, file_edit | ❌ | ✅ | ✅ | ❌ | ✅ |
+| `credentials` → credential_manage | ❌ | ❌ | ✅ | ❌ | ✅ |
+| `mcp` → mcp_manage + live MCP tools | ❌ | ❌ | ✅ | ❌ | ✅ |
+| `schedule` → schedule_create, cancel_run | ❌ | ✅ | ✅ | never ² | never ² |
+| `delegate` → delegate_task | ❌ | ✅ | ✅ | never ² | never ² |
+
+¹ USER.md/SUNNY.md edits additionally require owner scope, inherited from the creator and never
+broadened.
+² Anti-recursion: no preset contains the spawn grants, so no spawned run can schedule or
+delegate.
+
+Internal callers may endow bespoke grant lists (e.g. the nightly-consolidation seed is
+memory-only); rows store the resolved grants, so they stay self-describing if presets change.
+
+### Audience: how a run speaks
+
+| Audience kind | Typical run | Reply/deliverable lane | Mid-run channel | `message` (roster fan-out) | send_image |
+|---|---|---|---|---|---|
+| **live thread** | conversation turn | final text → the thread | translator progress updates | ✅ (trusted DMs; never groups) | ✅ |
+| **thread / person** | delivering scheduled run | final text → audience's thread/DM | — | ✅ (own subject refused — no double-send) | ✅ |
+| **household** | maintenance schedule | recorded only — nothing sent | — | ✅ (its only voice; any roster member) | ❌ (no single recipient) |
+| **parent** | subagent | final text → parent's inbox | `<report>…</report>` blocks | ❌ — speaks only upward, by design | ❌ |
+
+All run profiles carry the full skills index and memory core in their prompt, and every prompt
+is capability-gated so a run is never told to use a tool it doesn't hold. Normative statements
+live in `openspec/specs/tool-access/spec.md` (authority + messaging), `scheduling/spec.md`, and
+`durable-execution/spec.md` — keep this section in sync with those.
+
+These two axes fully determine a run's TOOLS. Two other things vary per run but are not
+capability axes: **lifecycle** — the run-supply policy that decides when runs fire and how they
+end (the router's perpetual per-turn runs vs. a subagent's spawn-once-report-back vs. the
+scheduler's clock; steerability and the failure watchdog ride this axis), and **model/effort** —
+a quality-cost dial (`sonnet` default for children, `opus` for scheduled runs) that never
+changes what a run may do or say.
+
 ## Capabilities
 
 | Capability | What it covers |

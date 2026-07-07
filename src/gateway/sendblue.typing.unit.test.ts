@@ -27,7 +27,10 @@ describe('rawTypingSend', () => {
   }
 
   it('sends start/stop through the raw client with decoded numbers (a DM)', async () => {
-    const { adapter, calls } = fakeAdapter({ fromNumber: '+15550001111', contactNumber: '+19702229425' });
+    const { adapter, calls } = fakeAdapter({
+      fromNumber: '+15550001111',
+      contactNumber: '+19702229425',
+    });
     await rawTypingSend(adapter, 'sendblue:x:y', 'start');
     await rawTypingSend(adapter, 'sendblue:x:y', 'stop');
     expect(calls).toEqual([

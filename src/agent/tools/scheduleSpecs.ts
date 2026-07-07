@@ -68,16 +68,18 @@ export const RUNS_TOOL_SPECS = {
   list_runs: {
     description:
       'List the durable runs you can see: your active schedules and any subagents currently ' +
-      'working for this conversation. The owner sees everyone\'s; a family member sees their own. ' +
+      "working for this conversation. The owner sees everyone's; a family member sees their own. " +
       'Each row shows an id you can pass to cancel_run.',
     inputSchema: z.object({}),
   },
   cancel_run: {
     description:
       'Cancel a durable run by its id (from list_runs): deletes a schedule, or stops a running ' +
-      "subagent of this conversation. You can only cancel runs you own (the owner can cancel any).",
+      'subagent of this conversation. You can only cancel runs you own (the owner can cancel any).',
     inputSchema: z.object({
-      id: z.string().describe('The run id to cancel (a schedule id or a subagent id from list_runs).'),
+      id: z
+        .string()
+        .describe('The run id to cancel (a schedule id or a subagent id from list_runs).'),
     }),
   },
 } as const;

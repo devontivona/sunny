@@ -125,7 +125,10 @@ export function renderTranslatorParts(
  */
 function stripReasoning(msg: Omit<UIMessage, 'id'>): Omit<UIMessage, 'id'> {
   if (!msg.parts.some((p) => p.type === 'reasoning' || p.type === 'step-start')) return msg;
-  return { ...msg, parts: msg.parts.filter((p) => p.type !== 'reasoning' && p.type !== 'step-start') };
+  return {
+    ...msg,
+    parts: msg.parts.filter((p) => p.type !== 'reasoning' && p.type !== 'step-start'),
+  };
 }
 
 /**
@@ -228,8 +231,7 @@ function attachmentToPart(
 }
 
 export function rowToUIMessage(row: StoredMessage, isGroup: boolean): Omit<UIMessage, 'id'> {
-  const prefix =
-    row.role === 'user' && isGroup ? speakerPrefix(row.senderName, row.isOwner) : '';
+  const prefix = row.role === 'user' && isGroup ? speakerPrefix(row.senderName, row.isOwner) : '';
   if (row.payload && typeof row.payload === 'object') {
     const msg = row.payload as UIMessage;
     if (prefix && msg.role === 'user') return prefixUserMessage(msg, prefix);

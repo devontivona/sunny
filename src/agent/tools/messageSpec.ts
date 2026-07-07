@@ -31,7 +31,10 @@ export const MESSAGE_SPEC = {
         'Who to message: a roster name (e.g. "Kate") or phone/email, OR a subagent id from ' +
           'delegate_task.',
       ),
-    text: z.string().min(1).describe('The message to send. For a person, make clear who it is from.'),
+    text: z
+      .string()
+      .min(1)
+      .describe('The message to send. For a person, make clear who it is from.'),
     image: z
       .string()
       .optional()

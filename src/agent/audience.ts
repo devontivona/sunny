@@ -12,10 +12,11 @@ import { normalize } from '../gateway/auth.js';
  *                the thread it came from, which is already the right person in a family.
  *  - person    → resolve a roster member to their bound DM at delivery time (cross-person sends).
  *  - parent    → report to the spawning run's inbox (attributed via from*).
- *  - household → no single recipient and NO terminal auto-delivery. Whether it reaches anyone is a
- *                grant question (D-RA14): a household run WOULD fan out to members via the `message`
- *                tool if endowed it, but the only household schedule today is the silent maintenance
- *                run (consolidation), which holds no messaging grant → is structurally silent.
+ *  - household → no single recipient and NO terminal auto-delivery (the run's result is recorded
+ *                only). It MAY still deliberately fan out to roster members via the `message` tool
+ *                (an AUDIENCE rule, not a grant — D-RA14 revised 2026-07-07): a household job that
+ *                wants to talk to household members can; the maintenance run (consolidation) simply
+ *                has nothing to send, so it stays silent in practice.
  */
 export type Audience =
   | { kind: 'thread'; threadId: string }
@@ -23,8 +24,8 @@ export type Audience =
   | { kind: 'parent'; threadId: string; fromId?: string; fromName?: string }
   | { kind: 'household' };
 
-/** One endowable capability (run-audiences D-RA5). Each grant maps to a concrete tool bundle
- *  (see `grantTools` in `workflows/runShell.ts`):
+/** One endowable capability (run-audiences D-RA5) — the AUTHORITY axis: what a run may DO.
+ *  Each grant maps to a concrete tool bundle (see `grantTools` in `workflows/runShell.ts`):
  *   - file_read     → file_read
  *   - memory_read   → read_topic, recall_history
  *   - runs_read     → list_runs
@@ -33,9 +34,10 @@ export type Audience =
  *   - memory_write  → memory_write
  *   - credentials   → credential_manage (vault discovery/registration)
  *   - mcp           → mcp_manage + the enabled MCP servers' live tools
- *   - message       → message (roster relay / subagent steer)
  *   - schedule      → schedule_create, cancel_run
- *   - delegate      → delegate_task */
+ *   - delegate      → delegate_task
+ *  How a run SPEAKS (its reply lane, `message` fan-out, send_image) is NOT a grant — it derives
+ *  from the run's AUDIENCE (masked by trust for conversations). See README "Capability model". */
 export type Grant =
   | 'file_read'
   | 'memory_read'
@@ -45,7 +47,6 @@ export type Grant =
   | 'memory_write'
   | 'credentials'
   | 'mcp'
-  | 'message'
   | 'schedule'
   | 'delegate';
 
@@ -90,7 +91,6 @@ export const TRUSTED_DM_AUTHORITY: Authority = [
   'bash',
   'file_write',
   'memory_write',
-  'message',
   'schedule',
   'delegate',
 ];

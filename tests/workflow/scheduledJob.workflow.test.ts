@@ -110,6 +110,73 @@ describe('runScheduledJob (workflow integration — real Local World)', () => {
     expect(sent?.threadId).toBe(kateThread); // delivered to Kate's thread, not imessage:owner
   });
 
+  it('audience: a household run can deliberately fan out to a roster member (message is its only voice)', async () => {
+    ctx = await setupTestRuntime({ family: [{ name: 'Kate', identities: ['+17193146820'] }] });
+    const { runId } = await seedScheduleRun('silent');
+    const kateThread = 'sendblue:owner:kate';
+    await ctx.store.appendInbound(
+      makeChannelEvent({ threadId: kateThread, senderId: '+17193146820', senderName: 'Kate', isOwner: false }),
+    );
+    setTurnModel([
+      {
+        type: 'tool-call',
+        toolName: 'message',
+        input: JSON.stringify({ recipient: 'Kate', text: 'Household heads-up: bins go out tonight' }),
+      },
+      { type: 'text', text: 'briefed the household' },
+    ]);
+
+    const run = await start(runScheduledJob, [
+      {
+        scheduleId: 's',
+        runId,
+        prompt: 'brief the household',
+        ownerName: 'Devon',
+        audience: { kind: 'household' },
+      },
+    ]);
+    await run.returnValue;
+    expect(await run.status).toBe('completed');
+
+    // The deliberate fan-out reached Kate exactly once; the terminal result was recorded, not sent.
+    const fanOuts = ctx.gateway.sent.filter(
+      (s) => s.text === 'Household heads-up: bins go out tonight',
+    );
+    expect(fanOuts).toHaveLength(1);
+    expect(fanOuts[0]?.threadId).toBe(kateThread);
+    expect(ctx.gateway.sent.some((s) => s.text === 'briefed the household')).toBe(false);
+  });
+
+  it('audience: a delivering run can send_image to its own audience thread', async () => {
+    ctx = await setupTestRuntime();
+    const { runId } = await seedScheduleRun('user');
+    setTurnModel([
+      {
+        type: 'tool-call',
+        toolName: 'send_image',
+        input: JSON.stringify({ pathOrUrl: '/tmp/chart.png', caption: 'your daily chart' }),
+      },
+      { type: 'text', text: 'Chart sent.' },
+    ]);
+
+    const run = await start(runScheduledJob, [
+      {
+        scheduleId: 's',
+        runId,
+        prompt: 'send the daily chart',
+        ownerName: 'Devon',
+        audience: { kind: 'thread', threadId: 'imessage:owner' },
+      },
+    ]);
+    await run.returnValue;
+    expect(await run.status).toBe('completed');
+
+    const img = ctx.gateway.sent.find((s) => s.attachment);
+    expect(img?.threadId).toBe('imessage:owner');
+    expect(img?.attachment).toEqual({ pathOrUrl: '/tmp/chart.png' });
+    expect(img?.text).toBe('your daily chart');
+  });
+
   it('authority: a run endowed host grants can act on the host (bash) — the craft-tagging gap', async () => {
     ctx = await setupTestRuntime();
     const { runId } = await seedScheduleRun('user');

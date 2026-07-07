@@ -373,8 +373,9 @@ function buildTools(ctx: {
       : {}),
     // One addressed messaging verb over the delivery bus (D-RA15): reach a roster person
     // (relay → their bound DM) OR steer one of your running subagents (→ its detached
-    // inbox). Unifies the former message_person + message_subagent. Trusted DMs only.
-    ...(has('message')
+    // inbox). Unifies the former message_person + message_subagent. AUDIENCE-axis, not a
+    // grant: a live-thread run speaks outward; the trust mask keeps it out of groups.
+    ...(trustedDm
       ? {
           message: tool({
             ...MESSAGE_SPEC,
@@ -938,4 +939,3 @@ async function cancelRunStep(
   }
   return `No run with id ${id} that you can cancel.`;
 }
-

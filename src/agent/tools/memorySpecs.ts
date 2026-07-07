@@ -44,11 +44,11 @@ export const MEMORY_TOOL_SPECS = {
   recall_history: {
     description:
       'Search past message history by keyword across ALL conversations — every thread, not just ' +
-      'this one (the owner\'s and family members\' chats alike). Use it to recall things beyond ' +
+      "this one (the owner's and family members' chats alike). Use it to recall things beyond " +
       'the recent window OR to cross-reference another conversation (e.g. someone mentions a ' +
-      'person or event you don\'t see here). Returns matching messages (newest first), each ' +
+      "person or event you don't see here). Returns matching messages (newest first), each " +
       'attributed with who said it and which chat it was in, for you to summarize. Use discretion ' +
-      'about repeating one person\'s private remarks to another.',
+      "about repeating one person's private remarks to another.",
     inputSchema: z.object({
       query: z.string().describe('Keywords to search for in past messages.'),
       limit: z

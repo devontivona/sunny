@@ -575,7 +575,11 @@ export async function mcpManageStep(args: McpManageInput): Promise<string> {
  *  mcp D-MCP6/7). Never throws — a flaky server degrades to an `ERROR …` result the model
  *  reads, instead of failing (and WDK-retrying) the run. Journaled — a replayed run
  *  never re-invokes a server tool. */
-export async function mcpCallStep(server: string, toolName: string, input: unknown): Promise<unknown> {
+export async function mcpCallStep(
+  server: string,
+  toolName: string,
+  input: unknown,
+): Promise<unknown> {
   'use step';
 
   const { getRuntime } = await import('../src/runtime.js');
