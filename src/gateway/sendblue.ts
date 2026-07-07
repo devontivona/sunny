@@ -5,7 +5,7 @@ import { createSendblueAdapter } from 'chat-adapter-sendblue';
 import { createMemoryState } from '@chat-adapter/state-memory';
 import type { SunnyConfig } from '../config/index.js';
 import { logger } from '../logger.js';
-import { Authorizer } from './auth.js';
+import { Authorizer, normalize } from './auth.js';
 import {
   contentTypeForName,
   isGenericBinaryType,
@@ -21,8 +21,9 @@ import {
   type OutboundMediaResult,
 } from './media.js';
 import type { ConversationStore } from './store.js';
+import { DeliveryTracker, isOutboundStatusCallback } from './deliveryTracker.js';
 import { runSerial } from './serial.js';
-import { isGroupThreadId } from './threadId.js';
+import { isGroupThreadId, sendblueDmThreadId } from './threadId.js';
 import type {
   ChannelCapabilities,
   ChannelEvent,
@@ -73,6 +74,12 @@ export class SendblueGateway implements Gateway {
    *  separate durable step that can run concurrently, and two near-simultaneous REST sends can
    *  arrive out of order. Chaining sends per thread guarantees in-order delivery. */
   private readonly sendChain = new Map<string, Promise<unknown>>();
+  /** Outbound delivery tracking (delivery-status-tracking): correlates Sendblue's async
+   *  status callbacks with tracked sends, retries failures, and repairs history. */
+  private readonly tracker: DeliveryTracker;
+  /** The webhook signing secret — checked here for intercepted status callbacks, exactly
+   *  as the adapter checks it for forwarded inbound traffic. */
+  private readonly webhookSecret: string;
   private inboundHandler: InboundHandler | null = null;
   private started = false;
 
@@ -124,6 +131,27 @@ export class SendblueGateway implements Gateway {
       state: createMemoryState(),
     });
 
+    this.webhookSecret = webhookSecret;
+    this.tracker = new DeliveryTracker({
+      store: this.store,
+      // Raw redelivery: the identical text over REST, serialized with the thread's other
+      // sends (in-order), with NO persist and NO re-tracking here — the tracker re-keys
+      // its existing row to the new handle itself.
+      resend: (threadId, text) =>
+        runSerial(this.sendChain, threadId, async () => {
+          const sent = await this.adapter.postMessage(threadId, text);
+          return (sent as { id?: string })?.id || null;
+        }),
+      notifyOwner: async (text) => {
+        const ownerId = this.config.owner.identities[0];
+        if (!ownerId) return;
+        const ownerThread =
+          (await this.store.findDmThreadForSender(normalize(ownerId))) ??
+          sendblueDmThreadId(fromNumber, normalize(ownerId));
+        await this.send(ownerThread, { text }, { persist: true });
+      },
+    });
+
     this.registerHandlers();
   }
 
@@ -139,7 +167,40 @@ export class SendblueGateway implements Gateway {
   }
 
   async handleWebhook(request: Request): Promise<Response> {
-    return this.chat.webhooks.sendblue(request);
+    // Outbound delivery-status callbacks (delivery-status-tracking): Sendblue reports each
+    // send's real outcome asynchronously on this same webhook. The adapter structurally
+    // ignores them — and crashed on their `service: null` — so intercept them at OUR route
+    // boundary (no adapter patching) and answer 200 immediately (a 500 makes Sendblue
+    // re-deliver the callback). Signature-checked with the same header the adapter uses.
+    // Everything else forwards to the chat SDK untouched (body re-materialized, since
+    // classification had to consume it).
+    if (request.headers.get('sb-signing-secret') !== this.webhookSecret) {
+      log.warn('webhook signature mismatch');
+      return new Response('Unauthorized', { status: 401 });
+    }
+    let bodyText: string;
+    try {
+      bodyText = await request.text();
+    } catch {
+      return new Response('Bad Request', { status: 400 });
+    }
+    let body: unknown = null;
+    try {
+      body = JSON.parse(bodyText);
+    } catch {
+      // not JSON — let the adapter produce its own 400
+    }
+    if (isOutboundStatusCallback(body)) {
+      void this.tracker.handleStatus(body); // never throws; don't block the 200
+      return new Response('OK', { status: 200 });
+    }
+    return this.chat.webhooks.sendblue(
+      new Request(request.url, {
+        method: request.method,
+        headers: request.headers,
+        body: bodyText,
+      }),
+    );
   }
 
   /** Deliver a message, SERIALIZED per thread (in-order), so back-to-back sends in one turn
@@ -208,6 +269,10 @@ export class SendblueGateway implements Gateway {
 
     const thread = this.activeThreads.get(threadId);
     let sentId: string;
+    // Sendblue's message_handle when the provider returned one — the correlation key for
+    // its async status callback. Media sends return none (sendMediaMessage is void), so
+    // they stay untracked (known limitation; text is the critical class).
+    let providerHandle: string | null = null;
     if (mediaUrl) {
       // Native MMS: Sendblue fetches the public media_url server-side (DM-only).
       // sendMediaMessage is on the Sendblue adapter, not the base `Adapter` seam.
@@ -220,13 +285,18 @@ export class SendblueGateway implements Gateway {
     } else if (thread) {
       // Reply within the current session — use the live thread handle.
       const sent = await thread.post(text);
-      sentId = sent?.id ?? randomUUID();
+      providerHandle = sent?.id || null;
+      sentId = providerHandle ?? randomUUID();
     } else {
       // Proactive send (no live thread this session, e.g. a scheduled run or a
       // durable job completing after a restart): Sendblue REST send by thread id.
       const sent = await this.adapter.postMessage(threadId, text);
-      sentId = (sent as { id?: string })?.id ?? randomUUID();
+      providerHandle = (sent as { id?: string })?.id || null;
+      sentId = providerHandle ?? randomUUID();
     }
+    // Track the send for delivery-status correlation (delivery-status-tracking).
+    // Best-effort by design — tracking must never fail or delay a delivered message.
+    if (providerHandle && text) await this.tracker.track(providerHandle, threadId, text);
     // Record the delivery time so the typing driver can suppress the indicator right
     // after a message lands (durable-main-loop typing fix).
     this.sentAt.set(threadId, Date.now());

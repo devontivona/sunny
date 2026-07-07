@@ -71,16 +71,41 @@ export function toModelMessages(
   const ui = window.map((row) =>
     stripReasoning(
       resolveMedia(
-        renderTranslatorParts(
-          rowToUIMessage(row, isGroup),
-          opts.translatorHistory ?? 'attributed',
-          opts.translatorSubject ?? 'the user',
+        renderDeliveryFailureParts(
+          renderTranslatorParts(
+            rowToUIMessage(row, isGroup),
+            opts.translatorHistory ?? 'attributed',
+            opts.translatorSubject ?? 'the user',
+          ),
         ),
         opts,
       ),
     ),
   );
   return convertToModelMessages(ui, { ignoreIncompleteToolCalls: true });
+}
+
+/**
+ * Render a persisted `data-delivery-failure` part (delivery-status-tracking: a send whose
+ * Sendblue status callbacks reported terminal failure after retries) as a bracketed text
+ * line, so future turns KNOW the preceding reply never reached the person — instead of
+ * "waiting" on an answer to a message nobody received (the Kate phantom-send incidents,
+ * Jul 05 + Jul 07 2026). Always rendered — an undelivered message is a fact the model must
+ * see, not an A/B arm.
+ */
+export function renderDeliveryFailureParts(msg: Omit<UIMessage, 'id'>): Omit<UIMessage, 'id'> {
+  if (!msg.parts.some((p) => p.type === 'data-delivery-failure')) return msg;
+  return {
+    ...msg,
+    parts: msg.parts.map((p) =>
+      p.type === 'data-delivery-failure'
+        ? ({
+            type: 'text',
+            text: `\n[${(p as { data?: { note?: string } }).data?.note ?? 'DELIVERY FAILURE: this message was never delivered'}]`,
+          } as UIMessage['parts'][number])
+        : p,
+    ),
+  };
 }
 
 /**

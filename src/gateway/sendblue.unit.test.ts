@@ -138,3 +138,45 @@ describe('doSend — persist failure after a successful send (R10-send)', () => 
     expect(appendOutbound.mock.calls[0]![1]).toBe('provider-123');
   });
 });
+
+describe('handleWebhook — outbound status interception (delivery-status-tracking)', () => {
+  const config = makeConfig();
+
+  function statusRequest(body: unknown, secret = 'whsec'): Request {
+    return new Request('https://sunny.example/webhooks/sendblue', {
+      method: 'POST',
+      headers: { 'sb-signing-secret': secret, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  }
+
+  it('routes an outbound success status to the tracker (adapter never sees it)', async () => {
+    const markOutboundDelivered = vi.fn(async () => {});
+    const store = { markOutboundDelivered } as unknown as ConversationStore;
+    const gw = new SendblueGateway({ config, store });
+
+    const res = await gw.handleWebhook(
+      statusRequest({ is_outbound: true, message_handle: 'h1', status: 'DELIVERED' }),
+    );
+    expect(res.status).toBe(200);
+    // handleStatus is fire-and-forget; give the microtask a beat.
+    await new Promise((r) => setTimeout(r, 10));
+    expect(markOutboundDelivered).toHaveBeenCalledWith('h1', 'DELIVERED');
+  });
+
+  it('rejects a bad signature before reading the body', async () => {
+    const gw = new SendblueGateway({ config, store: {} as ConversationStore });
+    const res = await gw.handleWebhook(
+      statusRequest({ is_outbound: true, message_handle: 'h1', status: 'ERROR' }, 'wrong'),
+    );
+    expect(res.status).toBe(401);
+  });
+
+  it('forwards non-status webhooks to the adapter with the body intact (typing indicator)', async () => {
+    const gw = new SendblueGateway({ config, store: {} as ConversationStore });
+    // A typing webhook is adapter-handled (debug log + 200) with no REST side effects —
+    // proving the re-materialized Request body survives the interception read.
+    const res = await gw.handleWebhook(statusRequest({ number: OWNER_PHONE, is_typing: true }));
+    expect(res.status).toBe(200);
+  });
+});
