@@ -117,6 +117,9 @@ export async function ensureConsolidationSchedule(
     // Maintenance with no news value: record the outcome but send NO proactive message
     // (durable-subagents D-DS1/§3 — the fix for the unwanted 2am consolidation text).
     outputTarget: 'silent',
+    // Explicit bespoke grants (internal seeder, not the preset surface): consolidation edits
+    // the memory core and nothing else — readonly lacks memory_write, host is far too broad.
+    authority: ['memory_read', 'memory_write'],
   });
   log.info('seeded nightly-consolidation schedule', { threadId });
 }

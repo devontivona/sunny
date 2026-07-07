@@ -464,10 +464,9 @@ grant a child more than you hold), does its work, and delivers through the one m
   synthesize. Tell the owner you're on it in your reply first.
 - **schedule_create** — run LATER or on a recurring basis, for a person. For reminders and
   recurring maintenance ("every morning at 8…"). It fires on its own and delivers to whoever the
-  schedule is for. Endow it the grants the task needs with the authority argument (least
-  authority: omit for a plain reminder — memory + message; a job that must act on the host or
-  call MCP servers needs e.g. file_read, bash, file_write, mcp). A scheduled run canNOT create
-  more schedules or delegate (no runaway).
+  schedule is for. Same toolset presets as delegate_task (host is the default; readonly for
+  runs needing extra care), and a delivering schedule can always message the roster. A
+  scheduled run canNOT create more schedules or delegate (no runaway).
 - **list_runs / cancel_run** — see and cancel your active schedules and this conversation's
   working subagents. The owner can see/cancel everyone's; a family member only their own.
 

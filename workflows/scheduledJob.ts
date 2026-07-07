@@ -11,12 +11,14 @@ import { deliver, finalAssistantText, grantTools, streamAgent } from './runShell
  * (D-DE1/2): each LLM call and tool call is a durable workflow step, so a crash mid-run resumes
  * from the last completed step instead of re-running the whole agent.
  *
- * The run's toolset is its stored AUTHORITY ({ audience, authority } — tool-access spec):
- * the grants the creating turn endowed at `schedule_create`, mapped through the shared
- * `grantTools` builder — so a maintenance schedule can hold host reach (bash/files/MCP) while
- * a plain reminder stays memory-only. Legacy/default rows (null authority) get the memory
- * tools + `message`. No `schedule`/`delegate` grants ever (anti-recursion, D-SC4 — a scheduled
- * run cannot create schedules or spawn children). Tool `execute`s are step-wrapped so a replay
+ * The run's toolset is its stored AUTHORITY ({ audience, authority } — tool-access spec): the
+ * grants the creating turn endowed at `schedule_create` (derived from the `toolset` preset —
+ * the same host/readonly vocabulary as delegate_task — attenuated against the creator), mapped
+ * through the shared `grantTools` builder. Legacy rows (null authority, pre-preset) get the
+ * memory tools. The `message` tool is AUDIENCE-inherent, not a grant: any delivering (non-
+ * household) schedule can relay to the roster, exactly as its terminal result reaches its own
+ * audience. No `schedule`/`delegate` grants ever (anti-recursion, D-SC4 — a scheduled run
+ * cannot create schedules or spawn children). Tool `execute`s are step-wrapped so a replay
  * never re-applies a non-idempotent action. The outcome is always recorded (`recordRun`); the
  * reply is reported to the schedule's audience via the shared bus — so a `household`
  * maintenance schedule (nightly memory consolidation) records its result but sends NO 2am text.
@@ -38,9 +40,9 @@ export interface ScheduledJobInput {
 /** Default model for a scheduled run; overridable per run (D-DS9). */
 const DEFAULT_SCHEDULED_MODEL = 'claude-opus-4-8';
 
-/** Legacy/default grants (rows created before `authority` existed, and the common reminder
- *  case): the memory tools + proactive roster messaging. */
-const DEFAULT_SCHEDULE_GRANTS = ['memory_read', 'memory_write', 'message'];
+/** Legacy grants (rows created before stored authority existed): the memory tools —
+ *  the old scheduled-run profile. New rows always store explicit grants. */
+const DEFAULT_SCHEDULE_GRANTS = ['memory_read', 'memory_write'];
 
 export async function runScheduledJob(input: ScheduledJobInput): Promise<void> {
   'use workflow';
@@ -70,11 +72,12 @@ export async function runScheduledJob(input: ScheduledJobInput): Promise<void> {
         mcpTools: setup.mcpTools,
       }),
       // Proactive fan-out (run-audiences D-RA10, Phase 3.1): a *delivering* scheduled run may
-      // reach OTHER roster members via the bus — rides the `message` grant AND a non-household
-      // audience. A household run without the grant is structurally silent (D-RA14). The run's
-      // OWN audience is reached by its terminal result — `message` is refused for the audience's
-      // own subject (no double-send).
-      ...(grants.includes('message') && input.audience.kind !== 'household'
+      // reach OTHER roster members via the bus. AUDIENCE-inherent, not a grant (roster-only,
+      // self-send refused) — messaging is part of the delivering profile the way send_image is
+      // part of the conversation's. A household run has no delivery lane at all and is
+      // structurally silent (D-RA14). The run's OWN audience is reached by its terminal result —
+      // `message` is refused for the audience's own subject (no double-send).
+      ...(input.audience.kind !== 'household'
         ? {
             message: tool({
               ...MESSAGE_SPEC,

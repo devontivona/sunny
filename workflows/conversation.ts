@@ -839,9 +839,11 @@ async function personRelayStepBody(
  * Self-scheduling steps (run-audiences Phase 1a; { audience, authority } — tool-access spec).
  * `'use step'`-wrapped so a durable replay never re-inserts (create appends a row) or re-deletes.
  * The fired schedule delivers back to `threadId` — the thread where it was created — and carries
- * an explicit AUTHORITY (the grants the fired run is endowed): requested grants must be a subset
- * of this turn's authority (monotone attenuation, D-RA5 — refused loudly, so a run that NAMED a
- * grant hears "no" instead of silently losing it). Timezone comes from config in the step.
+ * an explicit stored AUTHORITY derived from the `toolset` preset (the SAME vocabulary as
+ * delegate_task; host is the default), attenuated by intersection against this turn's authority
+ * (monotone, D-RA5) — so a family DM's host schedule simply comes up without the owner-facing
+ * registries. Presets never contain `schedule`/`delegate` (anti-recursion, D-SC4). Timezone
+ * comes from config in the step.
  */
 async function scheduleCreateStep(
   threadId: string,
@@ -852,14 +854,14 @@ async function scheduleCreateStep(
     prompt: string;
     label?: string;
     for?: string;
-    authority?: string[];
+    toolset?: 'host' | 'readonly';
   },
 ): Promise<string> {
   'use step';
 
   const { getRuntime } = await import('../src/runtime.js');
   const { createSchedule } = await import('../src/scheduler/index.js');
-  const { rosterMatch, isAuthoritySubset } = await import('../src/agent/audience.js');
+  const { rosterMatch, attenuate, authorityForToolset } = await import('../src/agent/audience.js');
   const { db, config } = await getRuntime();
 
   // "for" schedules this on behalf of ANOTHER family member (run-audiences #4): store an explicit
@@ -874,17 +876,13 @@ async function scheduleCreateStep(
     audience = `person:${name}`;
   }
 
-  // Monotone attenuation (D-RA5): the fired run may not hold grants this turn lacks. The spec's
-  // enum already excludes `schedule`/`delegate` (anti-recursion, D-SC4); this check is the
-  // authoritative gate either way.
-  if (args.authority && args.authority.length > 0) {
-    const creator = conversationAuthority(true, ownerPresent);
-    const allowed = creator.filter((g) => g !== 'schedule' && g !== 'delegate');
-    if (!isAuthoritySubset(args.authority, allowed)) {
-      const excess = args.authority.filter((g) => !allowed.includes(g));
-      return `ERROR: this conversation cannot endow: ${excess.join(', ')}. Grantable here: ${allowed.join(', ')}.`;
-    }
-  }
+  // Monotone attenuation (D-RA5): the preset's grants intersected with this turn's authority —
+  // the same semantics as delegate_task, one vocabulary across both spawn verbs. The stored
+  // grants make the row self-describing even if preset definitions later change.
+  const authority = attenuate(
+    authorityForToolset(args.toolset),
+    conversationAuthority(true, ownerPresent),
+  );
 
   try {
     const row = await createSchedule(db, {
@@ -895,7 +893,7 @@ async function scheduleCreateStep(
       timezone: config.timezone,
       label: args.label,
       audience,
-      authority: args.authority,
+      authority,
     });
     const forWhom = audience ? ` for ${audience.slice('person:'.length)}` : '';
     return `Scheduled ${row.id} (${row.kind})${forWhom}; next run ${row.nextRunAt?.toISOString() ?? 'n/a'}.`;

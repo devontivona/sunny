@@ -134,18 +134,18 @@ Higher-level capabilities SHALL be delivered as `SKILL.md` skills composed over 
 - **THEN** the website-builder skill produces a single-page HTML site using a bundled design style and the `devbox` skill to run/host it
 
 
-### Requirement: Spawn tools endow attenuated authority
-The run-creation tools (`delegate_task`, `schedule_create`) SHALL remain distinct verbs (for reliable model tool-selection), and every spawned run SHALL carry an explicit endowed authority — a set of grants, each mapping to a fixed tool bundle through ONE shared grant→tools builder used by every run profile. `schedule_create` SHALL accept `authority` as an explicit grant list (with `for` as the audience argument); `delegate_task` SHALL express authority through its `toolset` presets (`host` — the default, the full working bundle; `readonly` — reads only, for work needing extra care such as untrusted-content triage), each preset naming a fixed grant bundle. Endowment is monotone (a spawned run never exceeds its creator): an explicitly NAMED grant list exceeding the creator's authority SHALL be refused loudly; a PRESET request SHALL be attenuated by intersection with the creator's authority. A scheduled or delegated run SHALL never hold the `schedule` or `delegate` grants (anti-recursion). (As synced: the former `start_job` spawn verb was retired by `unify-background-work`; the former `none` toolset was retired 2026-07-07 — `readonly` is the containment preset.)
+### Requirement: Spawn tools endow attenuated authority through one preset vocabulary
+The run-creation tools (`delegate_task`, `schedule_create`) SHALL remain distinct verbs (for reliable model tool-selection) but SHALL share ONE model-facing authority vocabulary: the `toolset` presets (`host` — the default, the full working bundle; `readonly` — reads only, for work needing extra care such as untrusted-content triage), each naming a fixed grant bundle. Every spawned run SHALL carry an explicit STORED authority — a grant list derived from the preset at spawn, each grant mapping to a fixed tool bundle through ONE shared grant→tools builder used by every run profile (so stored rows stay self-describing if preset definitions later change, and internal callers MAY endow bespoke grant lists, e.g. the memory-only consolidation seed). Endowment is monotone (a spawned run never exceeds its creator): preset grants SHALL be attenuated by intersection with the creator's authority. A scheduled or delegated run SHALL never hold the `schedule` or `delegate` grants (anti-recursion), and a delivering scheduled run's roster `message` tool is audience-inherent, not a grant. (As synced: the former `start_job` spawn verb was retired by `unify-background-work`; the former `none` toolset was retired 2026-07-07 — `readonly` is the containment preset.)
 
-#### Scenario: Explicit over-broad authority request refused
-- **WHEN** `schedule_create` names an authority grant the creating run does not itself hold
-- **THEN** the creation is refused with the grantable set named in the refusal
+#### Scenario: One vocabulary across spawn verbs
+- **WHEN** Sunny delegates a subtask or creates a schedule
+- **THEN** both verbs accept the same `toolset` presets with the same default (`host`) and the same attenuation semantics
 
 #### Scenario: Preset attenuated by intersection
-- **WHEN** a `host` child is delegated from a run lacking some host grants (e.g. a family DM without the owner-facing registries)
-- **THEN** the child spawns with the preset's grants intersected with the parent's authority
+- **WHEN** a `host` run is spawned from a creator lacking some host grants (e.g. a family DM without the owner-facing registries)
+- **THEN** the spawned run holds the preset's grants intersected with the creator's authority
 
-#### Scenario: A fired schedule acts with its endowed authority
+#### Scenario: A fired schedule acts with its stored authority
 - **WHEN** a schedule endowed host grants (e.g. `bash`, `file_read`, `mcp`) fires
 - **THEN** the fired run holds exactly those grants' tool bundles (including live MCP server tools for `mcp`), and never the spawn verbs
 
