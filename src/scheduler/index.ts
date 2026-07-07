@@ -26,6 +26,9 @@ export interface CreateScheduleInput {
   /** Explicit audience (run-audiences #4), e.g. `person:Kate` — the run is for that party
    *  regardless of the creating thread. Null/omitted → derived from threadId + outputTarget. */
   audience?: string;
+  /** The grants the fired run is endowed ({ audience, authority }; D-RA5) — validated as a
+   *  subset of the creator's authority at the tool layer. Omitted → the memory default. */
+  authority?: string[];
 }
 
 /** Parse a duration like '45s', '30m', '2h', '1d' into milliseconds. */
@@ -70,6 +73,7 @@ export async function createSchedule(db: Db, input: CreateScheduleInput): Promis
       label: input.label ?? null,
       outputTarget: input.outputTarget ?? 'user',
       audience: input.audience ?? null,
+      authority: input.authority ?? null,
       nextRunAt,
       active: true,
     })
@@ -113,6 +117,9 @@ export async function ensureConsolidationSchedule(
     // Maintenance with no news value: record the outcome but send NO proactive message
     // (durable-subagents D-DS1/§3 — the fix for the unwanted 2am consolidation text).
     outputTarget: 'silent',
+    // Explicit bespoke grants (internal seeder, not the preset surface): consolidation edits
+    // the memory core and nothing else — readonly lacks memory_write, host is far too broad.
+    authority: ['memory_read', 'memory_write'],
   });
   log.info('seeded nightly-consolidation schedule', { threadId });
 }

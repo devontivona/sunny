@@ -349,8 +349,8 @@ export class DashboardData {
   }
 
   // --- Durable jobs (WDK runs) ---------------------------------------------
-  // Observe-only view of the Workflow DevKit world: background runs (scheduled jobs →
-  // runJob) and scheduled runs (runScheduledJob) are durable workflow runs recorded
+  // Observe-only view of the Workflow DevKit world: scheduled runs (runScheduledJob),
+  // subagents (runSubagent), and conversation turns are durable workflow runs recorded
   // in the `workflow.*` schema. The dashboard surfaces them so a job that hangs or
   // fails is visible (previously there was no signal anywhere). Read-only; the WDK
   // tables aren't in the app's drizzle schema, so this reads them with raw SQL.
@@ -549,9 +549,10 @@ function listSkillFiles(dir: string): string[] {
   return out.sort();
 }
 
-/** Humanize a WDK run name (`workflow//./workflows/job//runJob`) for display. */
+/** Humanize a WDK run name (`workflow//./workflows/scheduledJob//runScheduledJob`) for display. */
 function jobKind(name: string): string {
-  if (name.endsWith('runJob')) return 'Background job';
+  // Historical rows may still name the retired background-job engine (runJob).
+  if (name.endsWith('runJob')) return 'Background job (retired)';
   if (name.endsWith('runScheduledJob')) return 'Scheduled job';
   // Durable Tier-1 conversational runs (durable-main-loop) surface here as WDK runs
   // label them as conversations rather than jobs.

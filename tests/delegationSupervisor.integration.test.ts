@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConversationStore } from '../src/gateway/store.js';
 import { DelegationSupervisor, type ChildRunHandle } from '../src/agent/delegationSupervisor.js';
+import type { SubagentInput } from '../workflows/subagent.js';
 import {
   MAX_CONCURRENT_CHILDREN,
   activeChildCount,
@@ -33,7 +34,7 @@ describe('DelegationSupervisor', () => {
   /** A supervisor whose child-start is faked with a controllable returnValue. */
   function makeSupervisor(returnValue: Promise<unknown>, wake = vi.fn()) {
     const startSubagent = vi.fn(
-      async (): Promise<ChildRunHandle> => ({ runId: 'run-x', returnValue }),
+      async (_input: SubagentInput): Promise<ChildRunHandle> => ({ runId: 'run-x', returnValue }),
     );
     const sup = new DelegationSupervisor(tdb.db, store, startSubagent, wake);
     return { sup, startSubagent, wake };
@@ -109,8 +110,10 @@ describe('DelegationSupervisor', () => {
     expect((await getLinkByChildThread(tdb.db, 'subagent:cancelme'))?.status).toBe('cancelled');
   });
 
-  it('refuses a child whose authority exceeds the parent (monotone attenuation, D-RA5)', async () => {
-    // A restricted (readonly) parent cannot mint a `host` child — that would BROADEN authority.
+  it('attenuates a child preset against the parent authority (monotone attenuation, D-RA5)', async () => {
+    // A restricted (readonly) parent minting a `host` child does NOT broaden authority: the
+    // preset's grants are intersected with the parent's, so the child comes up with only what
+    // the parent can endow.
     const { sup, startSubagent } = makeSupervisor(Promise.resolve());
     const res = await sup.spawn({
       parentThreadId: PARENT,
@@ -119,8 +122,9 @@ describe('DelegationSupervisor', () => {
       toolset: 'host',
       parentAuthority: ['file_read'], // a readonly orchestrator's authority
     });
-    expect(res).toEqual({ error: 'authority' });
-    expect(startSubagent).not.toHaveBeenCalled();
+    expect('error' in res).toBe(false);
+    expect(startSubagent).toHaveBeenCalledOnce();
+    expect(startSubagent.mock.calls[0]?.[0]?.authority).toEqual(['file_read']);
   });
 
   it('a startSubagent failure frees the concurrency slot instead of leaking a running link (DelegSpawn)', async () => {

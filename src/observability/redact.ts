@@ -95,9 +95,7 @@ export function createRedactor(options: RedactorOptions = {}): Redactor {
   const secrets = [...new Set(options.secrets ?? [])]
     .filter((s) => s.length >= minLength)
     .sort((a, b) => b.length - a.length);
-  const literalRe = secrets.length
-    ? new RegExp(secrets.map(escapeRegExp).join('|'), 'g')
-    : null;
+  const literalRe = secrets.length ? new RegExp(secrets.map(escapeRegExp).join('|'), 'g') : null;
 
   function redactString(value: string): string {
     let out = value;

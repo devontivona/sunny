@@ -72,9 +72,7 @@ describe('steerMessageText', () => {
   it('does not prefix when there is no sender name, even in a group', () => {
     expect(steerMessageText('hey', undefined, true)).toBe('hey');
   });
-
 });
-
 
 describe('usageOf', () => {
   it('flattens AI-SDK usage to the persisted shape, defaulting missing fields to null', () => {
@@ -184,7 +182,10 @@ describe('renderTranslatorParts — read-time rendering of relayed progress upda
   it('attributed (default): renders each update as a bracketed text line naming the subject', async () => {
     const row = makeStoredMessage({ role: 'assistant', text: 'here is the answer', payload });
     const json = JSON.stringify(
-      await toModelMessages([row], false, { translatorHistory: 'attributed', translatorSubject: 'Devon' }),
+      await toModelMessages([row], false, {
+        translatorHistory: 'attributed',
+        translatorSubject: 'Devon',
+      }),
     );
     expect(json).toContain('progress update relayed to Devon');
     expect(json).toContain('on it — checking now');
@@ -194,7 +195,10 @@ describe('renderTranslatorParts — read-time rendering of relayed progress upda
   it('excluded: strips the updates entirely (the A/B arm)', async () => {
     const row = makeStoredMessage({ role: 'assistant', text: 'here is the answer', payload });
     const json = JSON.stringify(
-      await toModelMessages([row], false, { translatorHistory: 'excluded', translatorSubject: 'Devon' }),
+      await toModelMessages([row], false, {
+        translatorHistory: 'excluded',
+        translatorSubject: 'Devon',
+      }),
     );
     expect(json).not.toContain('on it — checking now');
     expect(json).not.toContain('progress update relayed');

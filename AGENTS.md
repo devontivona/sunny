@@ -163,10 +163,21 @@ Checklist (mirrored in `.github/pull_request_template.md`):
       delta pasted — or "N/A: no behavior change"
 - [ ] No silent coverage drop for the code this PR touches
 
+## Capability model (foundational)
+
+**Every run's tools are governed by two axes — authority (what it may DO: grants → tool
+bundles) × audience (how it may SPEAK: reply lane, `message`, `send_image`).** The tables
+defining both live in [README.md](README.md) → "Capability model — authority × audience";
+the grant vocabulary is `src/agent/audience.ts`, the one grant→tools builder is `grantTools`
+in `workflows/runShell.ts`, and the normative spec is `openspec/specs/tool-access/spec.md`.
+When adding or gating a tool, decide which axis it belongs to first — do not hand-wire
+per-profile exceptions.
+
 ## Layout
 
-- `src/agent/` — turn loop, dispatcher (serialization/steering), tools (`send_message`,
-  `start_job`, `schedule_*`, memory), model + prompt.
+- `src/agent/` — turn loop, dispatcher (serialization/steering), tool specs (memory,
+  schedule/runs, delegation, credentials/MCP registries), authority model (`audience.ts`),
+  model + prompt.
 - `src/gateway/` — normalized `Gateway` seam, Sendblue driver, conversation store, auth.
 - `src/memory/` — files-first memory soul (`~/.sunny/memory/`).
 - `src/scheduler/` — schedules table + ~60s ticker.

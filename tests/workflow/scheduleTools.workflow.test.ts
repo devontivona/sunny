@@ -174,6 +174,107 @@ describe('self-scheduling on a trusted-DM turn (run-audiences Phase 1a)', () => 
     expect(await listSchedules(ctx.db.db)).toHaveLength(0); // refused → nothing created
   });
 
+  it('authority: an owner-DM schedule defaults to the host preset, stored as grants on the row', async () => {
+    ctx = await setupTestRuntime();
+    const event = makeChannelEvent({ text: 'tag my craft docs every morning' });
+    await ctx.store.appendInbound(event);
+    setTurnModel([
+      {
+        type: 'tool-call',
+        toolName: 'schedule_create',
+        input: JSON.stringify({
+          kind: 'cron',
+          spec: '0 5 * * *',
+          prompt: 'Run the daily craft tagging job per skill:craft.',
+          label: 'craft-tagging',
+          // no toolset → host, the default (one vocabulary with delegate_task)
+        }),
+      },
+      { type: 'text', text: 'Scheduled with host access.' },
+    ]);
+
+    const run = await start(runConversation, [{ threadId: event.threadId }]);
+    await run.returnValue;
+    expect(await run.status).toBe('completed');
+
+    const rows = await listSchedules(ctx.db.db);
+    expect(rows).toHaveLength(1);
+    // Owner DM → the full host bundle, registries included.
+    expect(rows[0]?.authority).toEqual([
+      'file_read',
+      'memory_read',
+      'runs_read',
+      'bash',
+      'file_write',
+      'memory_write',
+      'credentials',
+      'mcp',
+    ]);
+  });
+
+  it('authority: a family DM host schedule is attenuated — no owner-facing registries', async () => {
+    const KATE = '+17195550000';
+    ctx = await setupTestRuntime({ family: [{ name: 'Kate', identities: [KATE] }] });
+    const event = makeChannelEvent({
+      threadId: 'sendblue:owner:kate',
+      senderId: KATE,
+      senderName: 'Kate',
+      isOwner: false,
+      text: 'set up a nightly job for me',
+    });
+    await ctx.store.appendInbound(event);
+    setTurnModel([
+      {
+        type: 'tool-call',
+        toolName: 'schedule_create',
+        input: JSON.stringify({
+          kind: 'cron',
+          spec: '0 2 * * *',
+          prompt: 'nightly tidy-up',
+          toolset: 'host',
+        }),
+      },
+      { type: 'text', text: 'Set.' },
+    ]);
+
+    const run = await start(runConversation, [{ threadId: event.threadId }]);
+    await run.returnValue;
+    expect(await run.status).toBe('completed');
+
+    const rows = await listSchedules(ctx.db.db);
+    expect(rows).toHaveLength(1);
+    // Host preset ∩ family-DM authority: everything except credentials/mcp (owner-DM only).
+    expect(rows[0]?.authority).toContain('bash');
+    expect(rows[0]?.authority).not.toContain('credentials');
+    expect(rows[0]?.authority).not.toContain('mcp');
+  });
+
+  it('authority: readonly preset stores only the read-side grants', async () => {
+    ctx = await setupTestRuntime();
+    const event = makeChannelEvent({ text: 'digest that sketchy newsletter every morning' });
+    await ctx.store.appendInbound(event);
+    setTurnModel([
+      {
+        type: 'tool-call',
+        toolName: 'schedule_create',
+        input: JSON.stringify({
+          kind: 'cron',
+          spec: '0 7 * * *',
+          prompt: 'Read and summarize the newsletter file.',
+          toolset: 'readonly',
+        }),
+      },
+      { type: 'text', text: 'Scheduled read-only.' },
+    ]);
+
+    const run = await start(runConversation, [{ threadId: event.threadId }]);
+    await run.returnValue;
+    expect(await run.status).toBe('completed');
+
+    const rows = await listSchedules(ctx.db.db);
+    expect(rows[0]?.authority).toEqual(['file_read', 'memory_read', 'runs_read']);
+  });
+
   it('list_runs shows the owner all schedules', async () => {
     ctx = await setupTestRuntime();
     const { createSchedule } = await import('../../src/scheduler/index.js');

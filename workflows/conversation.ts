@@ -1,23 +1,19 @@
 import type { LanguageModelUsage, ModelMessage, SystemModelMessage } from '../src/agent/aiTypes.js';
-import { jsonSchema, tool } from '@ai-sdk/provider-utils';
+import { tool } from '@ai-sdk/provider-utils';
 import type { SharedV4ProviderOptions } from '@ai-sdk/provider';
 import type { MockResponseDescriptor } from '../src/agent/mockModel.js';
 import { buildTurnModel } from '../src/agent/turnModel.js';
-import { z } from 'zod';
-import { BASH_TOOL_SPECS } from '../src/agent/tools/bashSpecs.js';
-import { FILE_TOOL_SPECS } from '../src/agent/tools/fileSpecs.js';
-import { MEMORY_TOOL_SPECS } from '../src/agent/tools/memorySpecs.js';
 import { SEND_IMAGE_SPEC } from '../src/agent/tools/sendImageSpec.js';
 import { MESSAGE_SPEC } from '../src/agent/tools/messageSpec.js';
 import { RUNS_TOOL_SPECS, scheduleToolSpecs } from '../src/agent/tools/scheduleSpecs.js';
-import {
-  CREDENTIAL_MANAGE_SPEC,
-  type CredentialManageInput,
-} from '../src/agent/tools/credentialManageSpecs.js';
-import { MCP_MANAGE_SPEC, type McpManageInput } from '../src/agent/tools/mcpManageSpecs.js';
 import type { McpToolDef } from '../src/mcp/turnTools.js';
 import { DELEGATE_TASK_SPEC, type ChildModelName } from '../src/agent/tools/delegationSpecs.js';
-import { TRUSTED_DM_AUTHORITY } from '../src/agent/audience.js';
+import {
+  GROUP_AUTHORITY,
+  OWNER_DM_AUTHORITY,
+  TRUSTED_DM_AUTHORITY,
+  type Authority,
+} from '../src/agent/audience.js';
 import type { ChildToolset } from './subagent.js';
 import { isGroupThreadId } from '../src/gateway/threadId.js';
 import {
@@ -31,7 +27,7 @@ import {
   usageOf,
   type Delivery,
 } from '../src/agent/delivery.js';
-import { bashStep, fileEditStep, fileReadStep, fileWriteStep, streamAgent } from './runShell.js';
+import { grantTools, listRunsStep, streamAgent } from './runShell.js';
 
 /**
  * Tier-1 durable conversational turn (durable-main-loop). ONE run = ONE turn (design D1,
@@ -317,11 +313,22 @@ async function finalizeTurn(args: {
   return false;
 }
 
-/** Tools for a durable conversational turn (D6). The host/delegation tools are trusted-DM-only
- *  (owner OR family — gateway auth admits only trusted senders to a DM; multiplayer-family D2);
- *  groups stay tool-limited regardless of trust (design D5). Editing the owner-only core files
- *  (USER.md, SUNNY.md) is gated on `ownerPresent`. Every side-effecting `execute` is a `'use step'`
- *  so a replay never re-applies it (and a delivered bubble never re-sends). */
+/** A conversation turn's authority (run-audiences D-RA5): group turns hold memory only (design
+ *  D5); trusted DMs (owner OR family) add host reach + spawning; owner DMs add the owner-facing
+ *  registries (credentials/mcp). The grant-mapped tools come from the SHARED `grantTools`
+ *  builder, so this is also the exact spawn-derivation root for schedules and subagents. */
+function conversationAuthority(trustedDm: boolean, ownerPresent: boolean): Authority {
+  if (!trustedDm) return GROUP_AUTHORITY;
+  return ownerPresent ? OWNER_DM_AUTHORITY : TRUSTED_DM_AUTHORITY;
+}
+
+/** Tools for a durable conversational turn (D6). Grant-mapped tools (memory, host, registries,
+ *  live MCP) come from the shared `grantTools` builder driven by the turn's authority; the
+ *  conversation-specific verbs (send_image, message, delegate_task, schedule_create, cancel_run)
+ *  are registered here with turn-local executes, gated by the same authority. Editing the
+ *  owner-only core files (USER.md, SUNNY.md) is gated on `ownerPresent`. Every side-effecting
+ *  `execute` is a `'use step'` so a replay never re-applies it (and a delivered bubble never
+ *  re-sends). */
 function buildTools(ctx: {
   threadId: string;
   ownerName: string;
@@ -333,6 +340,9 @@ function buildTools(ctx: {
 }) {
   const { threadId, ownerName, trustedDm, ownerPresent, timezone, subjectName, mcpTools } = ctx;
   const scheduleSpecs = scheduleToolSpecs(timezone);
+  const authority = conversationAuthority(trustedDm, ownerPresent);
+  const subject = subjectName ?? ownerName;
+  const has = (g: string) => authority.includes(g);
   return {
     // The reply IS the final text (delivered in finalizeTurn); silence is the <no-reply/>
     // sentinel reply (no tool — silence-by-text goes WITH the trained end-with-text prior;
@@ -341,106 +351,53 @@ function buildTools(ctx: {
       ...SEND_IMAGE_SPEC,
       execute: ({ pathOrUrl, caption }) => sendStep(threadId, caption ?? '', pathOrUrl),
     }),
-    memory_write: tool({
-      ...MEMORY_TOOL_SPECS.memory_write,
-      execute: (args) => memWriteStep({ ...args, ownerPresent }),
-    }),
-    read_topic: tool({
-      ...MEMORY_TOOL_SPECS.read_topic,
-      execute: ({ name }) => readTopicStep(name),
-    }),
-    recall_history: tool({
-      ...MEMORY_TOOL_SPECS.recall_history,
-      execute: ({ query, limit }) => recallStep(query, limit),
+    // Grant-mapped tools (memory / runs_read / host / credentials / mcp + live MCP server
+    // tools). Live MCP defs are discovered in `setupTurn` for the owner-DM turn only
+    // (attended-only) — everywhere else `mcpTools` is undefined by construction.
+    ...grantTools(authority, {
+      ownerScope: ownerPresent,
+      runs: { threadId, subject },
+      mcpTools,
     }),
     // Delegation (durable-subagents): spawn an isolated child that reports back, and steer one
     // that is still working. Non-blocking — a child's report arrives as a later inbound the
     // router folds into a fresh turn (D-DS2/3/4). Trusted DMs only (delegation acts with host reach).
-    ...(trustedDm
+    ...(has('delegate')
       ? {
           delegate_task: tool({
             ...DELEGATE_TASK_SPEC,
             execute: ({ task, label, toolset, model }) =>
-              delegateStep(threadId, { task, label, toolset, model }),
+              delegateStep(threadId, authority, ownerPresent, { task, label, toolset, model }),
           }),
-          // One addressed messaging verb over the delivery bus (D-RA15): reach a roster person
-          // (relay → their bound DM) OR steer one of your running subagents (→ its detached
-          // inbox). Unifies the former message_person + message_subagent. Trusted DMs only.
+        }
+      : {}),
+    // One addressed messaging verb over the delivery bus (D-RA15): reach a roster person
+    // (relay → their bound DM) OR steer one of your running subagents (→ its detached
+    // inbox). Unifies the former message_person + message_subagent. AUDIENCE-axis, not a
+    // grant: a live-thread run speaks outward; the trust mask keeps it out of groups.
+    ...(trustedDm
+      ? {
           message: tool({
             ...MESSAGE_SPEC,
             execute: ({ recipient, text, image }) => messageStep(threadId, recipient, text, image),
           }),
-          // Self-scheduling (scheduling D-SC3; run-audiences Phase 1a). Trusted DMs only (owner
-          // OR family — the durable-main-loop migration dropped these entirely, the regression
-          // this restores). A fired schedule delivers back to THIS thread by default. Scheduled
-          // runs never get these tools (anti-recursion, D-SC4). Each execute is a `'use step'`
-          // so a replay never double-inserts / double-deletes.
+        }
+      : {}),
+    // Self-scheduling (scheduling D-SC3; run-audiences Phase 1a) + run cancellation
+    // (run-audiences Phase 3.2). Trusted DMs only. A fired schedule delivers back to THIS
+    // thread by default and its authority is attenuated against this turn's (never `schedule`/
+    // `delegate` — anti-recursion, D-SC4). Each execute is a `'use step'` so a replay never
+    // double-inserts / double-deletes.
+    ...(has('schedule')
+      ? {
           schedule_create: tool({
             ...scheduleSpecs.schedule_create,
-            execute: (args) => scheduleCreateStep(threadId, args),
-          }),
-          // Unified run lifecycle (run-audiences Phase 3.2): inspect + cancel schedules AND
-          // this conversation's running subagents, ownership-scoped (owner sees all; a family
-          // member only their own). Replaces schedule_list / schedule_delete.
-          list_runs: tool({
-            ...RUNS_TOOL_SPECS.list_runs,
-            execute: () => listRunsStep(threadId, ownerPresent, subjectName ?? ownerName),
+            execute: (args) => scheduleCreateStep(threadId, ownerPresent, args),
           }),
           cancel_run: tool({
             ...RUNS_TOOL_SPECS.cancel_run,
-            execute: ({ id }) =>
-              cancelRunStep(id, threadId, ownerPresent, subjectName ?? ownerName),
+            execute: ({ id }) => cancelRunStep(id, threadId, ownerPresent, subject),
           }),
-        }
-      : {}),
-    // Credential registry (credentials D-CR5) — owner-DM only (credentials are owner-facing,
-    // stricter than the trusted-DM gate: family must not enumerate the vault or rewire
-    // name→reference mappings). The in-process loop registered this on owner DMs; the
-    // durable-main-loop migration dropped it (2026-07-06 regression: Sunny couldn't
-    // discover/register vault items even though bash `credentials` injection — which
-    // resolves the names this tool registers — kept working). `'use step'`-wrapped like
-    // every side-effecting execute, so a replay never re-registers.
-    ...(trustedDm && ownerPresent
-      ? {
-          credential_manage: tool({
-            ...CREDENTIAL_MANAGE_SPEC,
-            execute: (args) => credentialManageStep(args),
-          }),
-          // MCP server registry (mcp D-MCP4) — the add → probe → test → enable lifecycle,
-          // sibling of credential_manage (owner-DM only) and dropped by the same migration.
-          // No consent driver is passed: an OAuth server's authorization URL comes back in
-          // the tool RESULT text and Sunny relays it (the old wiring's posture too).
-          mcp_manage: tool({
-            ...MCP_MANAGE_SPEC,
-            execute: (args) => mcpManageStep(args),
-          }),
-        }
-      : {}),
-    // Live MCP server tools (mcp D-MCP6/7) — attended-only: discovered in `setupTurn` for
-    // the owner-DM turn (empty everywhere else, incl. jobs/scheduled/children by
-    // construction — their profiles never discover). Namespaced `<server>__<tool>` to
-    // avoid clobbering native tools; the schema is the server's own JSON Schema; execute
-    // is the journaled per-call step (connect → call → close on the host), so a replayed
-    // turn never re-invokes a server tool. Results are untrusted content.
-    ...Object.fromEntries(
-      (mcpTools ?? []).map((d) => [
-        `${d.server}__${d.name}`,
-        tool({
-          description: d.description,
-          inputSchema: jsonSchema<Record<string, unknown>>(d.inputSchema),
-          execute: (args) => mcpCallStep(d.server, d.name, args),
-        }),
-      ]),
-    ),
-    // Host tools: trusted DMs only — real host access (D-TA2), mirroring the in-process loop.
-    // file_write/file_edit ride the same gate as bash (coding-agent-upgrade): they are file
-    // mutation primitives, not extra privilege — bash could already write anywhere.
-    ...(trustedDm
-      ? {
-          bash: tool({ ...BASH_TOOL_SPECS.bash, execute: (a) => bashStep(a) }),
-          file_read: tool({ ...BASH_TOOL_SPECS.file_read, execute: (a) => fileReadStep(a) }),
-          file_write: tool({ ...FILE_TOOL_SPECS.file_write, execute: (a) => fileWriteStep(a) }),
-          file_edit: tool({ ...FILE_TOOL_SPECS.file_edit, execute: (a) => fileEditStep(a) }),
         }
       : {}),
   };
@@ -598,7 +555,7 @@ async function recoverDelivery(
     ReturnType<typeof import('../src/runtime.js').getRuntime>
   > & { recoverOverride?: (notes: string) => string };
   try {
-    // Test seam (mirrors translateOverride/stubJobs): workflow tests stub the composed
+    // Test seam (mirrors translateOverride): workflow tests stub the composed
     // text so the backstop path is exercised hermetically, without a live model call.
     if (rt.recoverOverride) return rt.recoverOverride(notes);
     const { getUtilityModel } = await import('../src/agent/model.js');
@@ -645,7 +602,7 @@ async function publishTranslatorLiveStep(threadId: string, text: string): Promis
  * ('' — silence is the translator's default). Journaled, so a replay reuses the composed
  * text; the SEND is a separate memoized step (never re-relays). Best-effort by design: a
  * translator failure must never fail the turn, so errors collapse to silence.
- * `translateOverride` on the runtime is the test seam (mirrors `stubJobs`).
+ * `translateOverride` on the runtime is the test seam.
  */
 async function translateStep(
   threadId: string,
@@ -763,6 +720,8 @@ async function noteUnanswered(threadId: string): Promise<void> {
  */
 async function delegateStep(
   parentThreadId: string,
+  parentAuthority: Authority,
+  ownerScope: boolean,
   args: { task: string; label?: string; toolset?: ChildToolset; model?: ChildModelName },
 ): Promise<string> {
   'use step';
@@ -779,15 +738,13 @@ async function delegateStep(
     model: resolveChildModel(args.model),
     depth: 1,
     orchestrator: false,
-    // Delegation is trusted-DM-only, so the parent holds the full authority (D-RA5); the child's
-    // toolset grants are attenuated against it at spawn.
-    parentAuthority: TRUSTED_DM_AUTHORITY,
+    // The child's preset grants are attenuated (intersected) against THIS turn's authority at
+    // spawn (D-RA5) — so a host child of a family DM never gets the owner-facing registries.
+    parentAuthority,
+    ownerScope,
   });
   if ('error' in res) {
     if (res.error === 'depth_cap') return 'Delegation refused: max delegation depth reached.';
-    if (res.error === 'authority') {
-      return 'Delegation refused: the requested tools exceed what this conversation is allowed.';
-    }
     return 'Delegation refused: already at the concurrent-subagent limit (3). Wait for one to finish.';
   }
   return (
@@ -879,105 +836,33 @@ async function personRelayStepBody(
   return image ? `Sent to ${member.name} (with image).` : `Sent to ${member.name}.`;
 }
 
-async function memWriteStep(args: {
-  file: string;
-  action: 'add' | 'replace' | 'remove';
-  content?: string;
-  target?: string;
-  /** Owner-only carve-out (multiplayer-family D2): the owner-only core files (USER.md, SUNNY.md)
-   *  may only be edited when the owner is present. Undefined (legacy callers) is permissive. */
-  ownerPresent?: boolean;
-}): Promise<string> {
-  'use step';
-
-  const { getRuntime } = await import('../src/runtime.js');
-  const { execMemoryWrite } = await import('../src/agent/tools/memory.js');
-  const { config } = await getRuntime();
-  // USER (the owner's profile) and SUNNY (Sunny's operating notes) are owner-only: family must not
-  // rewrite the owner's model or reprogram Sunny's conduct. Family can still write people:<id>,
-  // topic docs, and INDEX.
-  const fileKey = args.file.trim().toUpperCase();
-  if (args.ownerPresent === false && (fileKey === 'USER' || fileKey === 'SUNNY')) {
-    return (
-      `ERROR: editing ${fileKey}.md is restricted to the owner. ` +
-      `Record durable facts about another person with file "people:<id>" instead.`
-    );
-  }
-  const { file, action, content, target } = args;
-  return execMemoryWrite(config, { file, action, content, target });
-}
-
-async function readTopicStep(name: string): Promise<string> {
-  'use step';
-
-  const { getRuntime } = await import('../src/runtime.js');
-  const { execReadTopic } = await import('../src/agent/tools/memory.js');
-  const { config } = await getRuntime();
-  return execReadTopic(config, name);
-}
-
-/** Credential-registry actions (list/discover/register) as a durable step. The resolver comes
- *  from env exactly like `bashStep`'s injection path, so "register" verifies against the SAME
- *  1Password client the bash `credentials` argument resolves through. Journaled — a replayed
- *  turn never re-registers. */
-async function credentialManageStep(args: CredentialManageInput): Promise<string> {
-  'use step';
-
-  const { getRuntime } = await import('../src/runtime.js');
-  const { execCredentialManage } = await import('../src/agent/tools/credentialManage.js');
-  const { resolverFromEnv } = await import('../src/credentials/index.js');
-  const { config } = await getRuntime();
-  return execCredentialManage(config, resolverFromEnv() ?? undefined, args);
-}
-
-/** MCP-registry actions (add/probe/test/list/enable/disable/remove) as a durable step —
- *  `credential_manage`'s sibling. No consent driver: an OAuth authorization URL is returned
- *  in the result text for Sunny to relay. Journaled — a replayed turn never re-adds. */
-async function mcpManageStep(args: McpManageInput): Promise<string> {
-  'use step';
-
-  const { getRuntime } = await import('../src/runtime.js');
-  const { execMcpManage } = await import('../src/agent/tools/mcpManage.js');
-  const { resolverFromEnv } = await import('../src/credentials/index.js');
-  const { config } = await getRuntime();
-  return execMcpManage(config, resolverFromEnv() ?? undefined, {}, args);
-}
-
-/** One MCP tool invocation as a durable step (connect → call → close on the host;
- *  mcp D-MCP6/7). Never throws — a flaky server degrades to an `ERROR …` result the model
- *  reads, instead of failing (and WDK-retrying) the turn. Journaled — a replayed turn
- *  never re-invokes a server tool. */
-async function mcpCallStep(server: string, toolName: string, input: unknown): Promise<unknown> {
-  'use step';
-
-  const { getRuntime } = await import('../src/runtime.js');
-  const { callMcpTool } = await import('../src/mcp/turnTools.js');
-  const { resolverFromEnv } = await import('../src/credentials/index.js');
-  const { config } = await getRuntime();
-  return callMcpTool(config, resolverFromEnv() ?? undefined, server, toolName, input);
-}
-
 /**
- * Self-scheduling steps (run-audiences Phase 1a). `'use step'`-wrapped so a durable replay never
- * re-inserts (create appends a row) or re-deletes. The fired schedule delivers back to
- * `threadId` — the thread where it was created — using the existing `outputTarget` model
- * (Phase 2 migrates delivery to the audience/bus). Timezone comes from config in the step.
+ * Self-scheduling steps (run-audiences Phase 1a; { audience, authority } — tool-access spec).
+ * `'use step'`-wrapped so a durable replay never re-inserts (create appends a row) or re-deletes.
+ * The fired schedule delivers back to `threadId` — the thread where it was created — and carries
+ * an explicit stored AUTHORITY derived from the `toolset` preset (the SAME vocabulary as
+ * delegate_task; host is the default), attenuated by intersection against this turn's authority
+ * (monotone, D-RA5) — so a family DM's host schedule simply comes up without the owner-facing
+ * registries. Presets never contain `schedule`/`delegate` (anti-recursion, D-SC4). Timezone
+ * comes from config in the step.
  */
 async function scheduleCreateStep(
   threadId: string,
+  ownerPresent: boolean,
   args: {
     kind: 'once' | 'interval' | 'cron';
     spec: string;
     prompt: string;
     label?: string;
     for?: string;
+    toolset?: 'host' | 'readonly';
   },
 ): Promise<string> {
   'use step';
 
   const { getRuntime } = await import('../src/runtime.js');
   const { createSchedule } = await import('../src/scheduler/index.js');
-  const { rosterMatch } = await import('../src/agent/audience.js');
+  const { rosterMatch, attenuate, authorityForToolset } = await import('../src/agent/audience.js');
   const { db, config } = await getRuntime();
 
   // "for" schedules this on behalf of ANOTHER family member (run-audiences #4): store an explicit
@@ -992,6 +877,14 @@ async function scheduleCreateStep(
     audience = `person:${name}`;
   }
 
+  // Monotone attenuation (D-RA5): the preset's grants intersected with this turn's authority —
+  // the same semantics as delegate_task, one vocabulary across both spawn verbs. The stored
+  // grants make the row self-describing even if preset definitions later change.
+  const authority = attenuate(
+    authorityForToolset(args.toolset),
+    conversationAuthority(true, ownerPresent),
+  );
+
   try {
     const row = await createSchedule(db, {
       kind: args.kind,
@@ -1001,52 +894,13 @@ async function scheduleCreateStep(
       timezone: config.timezone,
       label: args.label,
       audience,
+      authority,
     });
     const forWhom = audience ? ` for ${audience.slice('person:'.length)}` : '';
     return `Scheduled ${row.id} (${row.kind})${forWhom}; next run ${row.nextRunAt?.toISOString() ?? 'n/a'}.`;
   } catch (err) {
     return `ERROR: ${err instanceof Error ? err.message : String(err)}`;
   }
-}
-
-/**
- * List the durable runs the caller can see (run-audiences Phase 3.2): active schedules they own
- * plus this conversation's running subagents. The owner (present in the thread) sees ALL schedules;
- * a family member sees only schedules whose audience subject is them. `'use step'` — pure read.
- */
-async function listRunsStep(
-  threadId: string,
-  ownerPresent: boolean,
-  callerSubject: string,
-): Promise<string> {
-  'use step';
-
-  const { getRuntime } = await import('../src/runtime.js');
-  const { listSchedules } = await import('../src/scheduler/index.js');
-  const { listRunningLinks } = await import('../src/agent/delegation.js');
-  const { subjectName, scheduleAudience } = await import('../src/agent/audience.js');
-  const { db, config } = await getRuntime();
-
-  const scheds = await listSchedules(db);
-  const visible = ownerPresent
-    ? scheds
-    : scheds.filter((s) => subjectName(scheduleAudience(s), config) === callerSubject);
-  const children = (await listRunningLinks(db)).filter((l) => l.parentThreadId === threadId);
-
-  const lines: string[] = [];
-  if (visible.length > 0) {
-    lines.push('Schedules:');
-    for (const s of visible) {
-      lines.push(
-        `  ${s.id} [${s.kind} ${s.spec}]${s.label ? ` "${s.label}"` : ''} next ${s.nextRunAt?.toISOString() ?? 'n/a'}: ${s.prompt.slice(0, 50)}`,
-      );
-    }
-  }
-  if (children.length > 0) {
-    lines.push('Subagents (working):');
-    for (const l of children) lines.push(`  ${l.childThreadId} — ${l.task.slice(0, 50)}`);
-  }
-  return lines.length > 0 ? lines.join('\n') : '(no active runs)';
 }
 
 /**
@@ -1084,13 +938,4 @@ async function cancelRunStep(
     return `Cancelled subagent ${id}; it will stop reporting to this conversation.`;
   }
   return `No run with id ${id} that you can cancel.`;
-}
-
-async function recallStep(query: string, limit?: number): Promise<string> {
-  'use step';
-
-  const { getRuntime } = await import('../src/runtime.js');
-  const { execRecall } = await import('../src/agent/tools/memory.js');
-  const { store, config } = await getRuntime();
-  return execRecall(store, config, query, limit);
 }

@@ -4,12 +4,23 @@ import type {
   ModelMessage,
 } from '../src/agent/aiTypes.js';
 import { WorkflowAgent } from '@ai-sdk/workflow';
+import { jsonSchema, tool } from '@ai-sdk/provider-utils';
 import { getWritable } from 'workflow';
 import { steerMessageText } from '../src/agent/delivery.js';
 import { AGENT_STEP_LIMIT } from '../src/agent/limits.js';
+import { BASH_TOOL_SPECS } from '../src/agent/tools/bashSpecs.js';
 import type { BashToolInput, FileReadToolInput } from '../src/agent/tools/bashSpecs.js';
+import { FILE_TOOL_SPECS } from '../src/agent/tools/fileSpecs.js';
 import type { FileEditToolInput, FileWriteToolInput } from '../src/agent/tools/fileSpecs.js';
-import type { Audience } from '../src/agent/audience.js';
+import { MEMORY_TOOL_SPECS } from '../src/agent/tools/memorySpecs.js';
+import { RUNS_TOOL_SPECS } from '../src/agent/tools/scheduleSpecs.js';
+import {
+  CREDENTIAL_MANAGE_SPEC,
+  type CredentialManageInput,
+} from '../src/agent/tools/credentialManageSpecs.js';
+import { MCP_MANAGE_SPEC, type McpManageInput } from '../src/agent/tools/mcpManageSpecs.js';
+import type { McpToolDef } from '../src/mcp/turnTools.js';
+import type { Audience, Authority } from '../src/agent/audience.js';
 
 /**
  * Shared durable-run shell (durable-subagents D-DS11/D-DS14). The conversational turn, background
@@ -444,4 +455,234 @@ export async function fileEditStep(args: FileEditToolInput): Promise<string> {
 
   const { editFileSafe } = await import('../src/agent/tools/bash.js');
   return editFileSafe(args.path, args.old_string, args.new_string, args.replace_all ?? false);
+}
+
+/** Write to the memory core as a durable step (shared memory execute). `ownerScope` gates the
+ *  owner-only core files (USER.md, SUNNY.md; multiplayer-family D2): false refuses those edits,
+ *  true (an owner-scoped run) permits them. A replay never re-applies (add appends). */
+export async function memoryWriteStep(args: {
+  file: string;
+  action: 'add' | 'replace' | 'remove';
+  content?: string;
+  target?: string;
+  ownerScope: boolean;
+}): Promise<string> {
+  'use step';
+
+  const { getRuntime } = await import('../src/runtime.js');
+  const { execMemoryWrite } = await import('../src/agent/tools/memory.js');
+  const { config } = await getRuntime();
+  const fileKey = args.file.trim().toUpperCase();
+  if (!args.ownerScope && (fileKey === 'USER' || fileKey === 'SUNNY')) {
+    return (
+      `ERROR: editing ${fileKey}.md is restricted to the owner. ` +
+      `Record durable facts about another person with file "people:<id>" instead.`
+    );
+  }
+  const { file, action, content, target } = args;
+  return execMemoryWrite(config, { file, action, content, target });
+}
+
+/** Read a memory topic doc as a durable step (shared memory execute). */
+export async function readTopicStep(name: string): Promise<string> {
+  'use step';
+
+  const { getRuntime } = await import('../src/runtime.js');
+  const { execReadTopic } = await import('../src/agent/tools/memory.js');
+  const { config } = await getRuntime();
+  return execReadTopic(config, name);
+}
+
+/** Search conversation history as a durable step (shared memory execute). */
+export async function recallStep(query: string, limit?: number): Promise<string> {
+  'use step';
+
+  const { getRuntime } = await import('../src/runtime.js');
+  const { execRecall } = await import('../src/agent/tools/memory.js');
+  const { store, config } = await getRuntime();
+  return execRecall(store, config, query, limit);
+}
+
+/**
+ * List the durable runs the caller can see (run-audiences Phase 3.2): active schedules they own
+ * plus `threadId`'s running subagents. An owner-scoped caller sees ALL schedules; anyone else only
+ * schedules whose audience subject is them. `'use step'` — pure read. Shared across profiles
+ * (the conversation's `list_runs` and any run holding the `runs_read` grant).
+ */
+export async function listRunsStep(
+  threadId: string,
+  ownerScope: boolean,
+  callerSubject: string,
+): Promise<string> {
+  'use step';
+
+  const { getRuntime } = await import('../src/runtime.js');
+  const { listSchedules } = await import('../src/scheduler/index.js');
+  const { listRunningLinks } = await import('../src/agent/delegation.js');
+  const { subjectName, scheduleAudience } = await import('../src/agent/audience.js');
+  const { db, config } = await getRuntime();
+
+  const scheds = await listSchedules(db);
+  const visible = ownerScope
+    ? scheds
+    : scheds.filter((s) => subjectName(scheduleAudience(s), config) === callerSubject);
+  const children = (await listRunningLinks(db)).filter((l) => l.parentThreadId === threadId);
+
+  const lines: string[] = [];
+  if (visible.length > 0) {
+    lines.push('Schedules:');
+    for (const s of visible) {
+      lines.push(
+        `  ${s.id} [${s.kind} ${s.spec}]${s.label ? ` "${s.label}"` : ''} next ${s.nextRunAt?.toISOString() ?? 'n/a'}: ${s.prompt.slice(0, 50)}`,
+      );
+    }
+  }
+  if (children.length > 0) {
+    lines.push('Subagents (working):');
+    for (const l of children) lines.push(`  ${l.childThreadId} — ${l.task.slice(0, 50)}`);
+  }
+  return lines.length > 0 ? lines.join('\n') : '(no active runs)';
+}
+
+/** Credential-registry actions (list/discover/register) as a durable step. The resolver comes
+ *  from env exactly like `bashStep`'s injection path, so "register" verifies against the SAME
+ *  1Password client the bash `credentials` argument resolves through. Journaled — a replayed
+ *  run never re-registers. */
+export async function credentialManageStep(args: CredentialManageInput): Promise<string> {
+  'use step';
+
+  const { getRuntime } = await import('../src/runtime.js');
+  const { execCredentialManage } = await import('../src/agent/tools/credentialManage.js');
+  const { resolverFromEnv } = await import('../src/credentials/index.js');
+  const { config } = await getRuntime();
+  return execCredentialManage(config, resolverFromEnv() ?? undefined, args);
+}
+
+/** MCP-registry actions (add/probe/test/list/enable/disable/remove) as a durable step —
+ *  `credential_manage`'s sibling. No consent driver: an OAuth authorization URL is returned
+ *  in the result text for Sunny to relay. Journaled — a replayed run never re-adds. */
+export async function mcpManageStep(args: McpManageInput): Promise<string> {
+  'use step';
+
+  const { getRuntime } = await import('../src/runtime.js');
+  const { execMcpManage } = await import('../src/agent/tools/mcpManage.js');
+  const { resolverFromEnv } = await import('../src/credentials/index.js');
+  const { config } = await getRuntime();
+  return execMcpManage(config, resolverFromEnv() ?? undefined, {}, args);
+}
+
+/** One MCP tool invocation as a durable step (connect → call → close on the host;
+ *  mcp D-MCP6/7). Never throws — a flaky server degrades to an `ERROR …` result the model
+ *  reads, instead of failing (and WDK-retrying) the run. Journaled — a replayed run
+ *  never re-invokes a server tool. */
+export async function mcpCallStep(
+  server: string,
+  toolName: string,
+  input: unknown,
+): Promise<unknown> {
+  'use step';
+
+  const { getRuntime } = await import('../src/runtime.js');
+  const { callMcpTool } = await import('../src/mcp/turnTools.js');
+  const { resolverFromEnv } = await import('../src/credentials/index.js');
+  const { config } = await getRuntime();
+  return callMcpTool(config, resolverFromEnv() ?? undefined, server, toolName, input);
+}
+
+/** Context `grantTools` needs beyond the grant list itself. */
+export interface GrantToolsCtx {
+  /** May this run edit the owner-only core files (USER.md/SUNNY.md)? Conversation turns pass
+   *  `ownerPresent`; spawned runs inherit their creator's scope. */
+  ownerScope: boolean;
+  /** `list_runs` scoping (`runs_read`): the thread whose subagents are visible + the caller's
+   *  canonical subject name. */
+  runs?: { threadId: string; subject: string };
+  /** Live MCP server tool defs discovered in the profile's setup step (`mcp` grant) — plain
+   *  data, so it journals across the step boundary. */
+  mcpTools?: McpToolDef[];
+}
+
+/**
+ * The grant → tool-bundle mapping (run-audiences D-RA5) — ONE builder shared by every run
+ * profile, so "what does grant X let a run do" can never drift between the conversation, a
+ * subagent, and a scheduled run. Covers the profile-generic grants only; profile-specific verbs
+ * (send_image, message, delegate_task, schedule_create, cancel_run) are registered by their
+ * profiles with profile-local executes. Every execute is a journaled `'use step'`.
+ */
+export function grantTools(grants: Authority, ctx: GrantToolsCtx) {
+  const has = (g: string) => grants.includes(g);
+  return {
+    ...(has('memory_read')
+      ? {
+          read_topic: tool({
+            ...MEMORY_TOOL_SPECS.read_topic,
+            execute: ({ name }: { name: string }) => readTopicStep(name),
+          }),
+          recall_history: tool({
+            ...MEMORY_TOOL_SPECS.recall_history,
+            execute: ({ query, limit }: { query: string; limit?: number }) =>
+              recallStep(query, limit),
+          }),
+        }
+      : {}),
+    ...(has('memory_write')
+      ? {
+          memory_write: tool({
+            ...MEMORY_TOOL_SPECS.memory_write,
+            execute: (args: {
+              file: string;
+              action: 'add' | 'replace' | 'remove';
+              content?: string;
+              target?: string;
+            }) => memoryWriteStep({ ...args, ownerScope: ctx.ownerScope }),
+          }),
+        }
+      : {}),
+    ...(has('runs_read') && ctx.runs
+      ? {
+          list_runs: tool({
+            ...RUNS_TOOL_SPECS.list_runs,
+            execute: () => listRunsStep(ctx.runs!.threadId, ctx.ownerScope, ctx.runs!.subject),
+          }),
+        }
+      : {}),
+    ...(has('file_read')
+      ? { file_read: tool({ ...BASH_TOOL_SPECS.file_read, execute: (a) => fileReadStep(a) }) }
+      : {}),
+    ...(has('bash')
+      ? { bash: tool({ ...BASH_TOOL_SPECS.bash, execute: (a) => bashStep(a) }) }
+      : {}),
+    ...(has('file_write')
+      ? {
+          file_write: tool({ ...FILE_TOOL_SPECS.file_write, execute: (a) => fileWriteStep(a) }),
+          file_edit: tool({ ...FILE_TOOL_SPECS.file_edit, execute: (a) => fileEditStep(a) }),
+        }
+      : {}),
+    ...(has('credentials')
+      ? {
+          credential_manage: tool({
+            ...CREDENTIAL_MANAGE_SPEC,
+            execute: (args) => credentialManageStep(args),
+          }),
+        }
+      : {}),
+    ...(has('mcp')
+      ? {
+          mcp_manage: tool({ ...MCP_MANAGE_SPEC, execute: (args) => mcpManageStep(args) }),
+          // Live MCP server tools (mcp D-MCP6/7), namespaced `<server>__<tool>` to avoid
+          // clobbering native tools; the schema is the server's own JSON Schema; results are
+          // untrusted content.
+          ...Object.fromEntries(
+            (ctx.mcpTools ?? []).map((d) => [
+              `${d.server}__${d.name}`,
+              tool({
+                description: d.description,
+                inputSchema: jsonSchema<Record<string, unknown>>(d.inputSchema),
+                execute: (args) => mcpCallStep(d.server, d.name, args),
+              }),
+            ]),
+          ),
+        }
+      : {}),
+  };
 }

@@ -42,6 +42,17 @@ export function scheduleToolSpecs(timezone: string) {
               'fired run acts for and is delivered to THEM, not you. Omit to schedule for the ' +
               'current person. Roster members only.',
           ),
+        toolset: z
+          .enum(['host', 'readonly'])
+          .optional()
+          .describe(
+            'Toolset preset for the fired run — the same vocabulary as delegate_task: "host" ' +
+              '(the default — full working set: bash, file tools, memory, registries, live MCP ' +
+              'server tools; never broader than yours) or "readonly" (reads only — reserve for ' +
+              'runs needing extra care, e.g. recurring digestion of untrusted content). A ' +
+              'delivering schedule can always message the roster; a scheduled run can never ' +
+              'schedule or delegate.',
+          ),
       }),
     },
   };
@@ -57,16 +68,18 @@ export const RUNS_TOOL_SPECS = {
   list_runs: {
     description:
       'List the durable runs you can see: your active schedules and any subagents currently ' +
-      'working for this conversation. The owner sees everyone\'s; a family member sees their own. ' +
+      "working for this conversation. The owner sees everyone's; a family member sees their own. " +
       'Each row shows an id you can pass to cancel_run.',
     inputSchema: z.object({}),
   },
   cancel_run: {
     description:
       'Cancel a durable run by its id (from list_runs): deletes a schedule, or stops a running ' +
-      "subagent of this conversation. You can only cancel runs you own (the owner can cancel any).",
+      'subagent of this conversation. You can only cancel runs you own (the owner can cancel any).',
     inputSchema: z.object({
-      id: z.string().describe('The run id to cancel (a schedule id or a subagent id from list_runs).'),
+      id: z
+        .string()
+        .describe('The run id to cancel (a schedule id or a subagent id from list_runs).'),
     }),
   },
 } as const;

@@ -43,8 +43,6 @@ describe('buildSystemPrompt', () => {
     expect(before).not.toBe(after);
   });
 
-
-
   it('text mode: text-as-reply prompt (narration welcome, dangling-promise guard, send_image; no send_message)', () => {
     const p = buildSystemPrompt(config, core({ user: '- Name: Devon' }));
     expect(p).toContain('Your reply IS the message');
@@ -67,8 +65,6 @@ describe('buildSystemPrompt', () => {
     expect(p).toContain('the ONLY way to say nothing');
     expect(p).not.toContain('stay_silent');
   });
-
-
 
   it('is byte-identical when the people context is empty (owner-only cache preserved)', () => {
     const c = core({ user: '- Name: Devon' });
@@ -122,11 +118,13 @@ describe('buildJobPrompt', () => {
     expect(p).not.toContain('Record durable facts with memory_write');
   });
 
-  it('an autonomous (memory-only) job gets memory guidance but no host tools or skills', () => {
+  it('an autonomous (memory-only) job gets memory guidance + the skills index, but no host tools', () => {
     const p = buildJobPrompt(config, core(), skills, { autonomous: true, memoryTools: true });
     expect(p).toContain('Record durable facts with memory_write');
     expect(p).toContain('Reply with nothing if there is nothing worth sending.');
-    expect(p).not.toContain('=== SKILLS');
+    // Every run profile carries the full skills index (2026-07-07) — even memory-only runs.
+    expect(p).toContain('=== SKILLS');
+    // But the prompt never tells a run to use a tool it doesn't hold.
     expect(p).not.toContain('- bash:');
   });
 

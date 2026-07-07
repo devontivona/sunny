@@ -27,4 +27,3 @@ export const SEND_IMAGE_SPEC = {
     caption: z.string().optional().describe('Optional short caption delivered with the image.'),
   }),
 } as const;
-

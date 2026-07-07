@@ -1,23 +1,11 @@
-import { tool } from '@ai-sdk/provider-utils';
 import { buildTurnModel, type MockResponseDescriptor } from '../src/agent/turnModel.js';
-import {
-  BASH_TOOL_SPECS,
-  type BashToolInput,
-  type FileReadToolInput,
-} from '../src/agent/tools/bashSpecs.js';
-import {
-  FILE_TOOL_SPECS,
-  type FileEditToolInput,
-  type FileWriteToolInput,
-} from '../src/agent/tools/fileSpecs.js';
+import { authorityForToolset } from '../src/agent/audience.js';
+import type { McpToolDef } from '../src/mcp/turnTools.js';
 import { extractReportBlocks, stripNoReport } from '../src/agent/delivery.js';
 import {
-  bashStep,
   deliver,
-  fileEditStep,
-  fileReadStep,
-  fileWriteStep,
   finalAssistantText,
+  grantTools,
   markAnsweredStep,
   streamAgent,
 } from './runShell.js';
@@ -25,19 +13,20 @@ import {
 /**
  * Delegated child run — the subagent PROFILE of the shared run shell (durable-subagents
  * D-DS2/D-DS4/D-DS5/D-DS7). Started by the delegation supervisor; runs in its OWN isolated
- * context with its OWN inbox thread (`childThreadId`, D-DS12), a least-privilege toolset (a
- * subset of the parent's), and `output_target = parent`. Its speech is TEXT (subagent
- * text-unification): the FINAL assistant text IS the report, delivered terminally to the
- * parent's inbox via the shared bus; mid-task progress is explicit `<report>…</report>` blocks
- * delivered at step boundaries while the child keeps working; a `<no-report/>` sentinel final
- * delivers nothing. Run-to-completion (D-DS7): it does the task, reports, and ends; while in
- * flight it folds parent→child steers via `loadSteers` (D-DS4). The supervisor watches its
- * `returnValue` for terminal failure (D-DS6).
+ * context with its OWN inbox thread (`childThreadId`, D-DS12), a least-privilege toolset (its
+ * grants are the toolset preset's, attenuated against the parent's authority at spawn — D-RA5),
+ * and `output_target = parent`. Its speech is TEXT (subagent text-unification): the FINAL
+ * assistant text IS the report, delivered terminally to the parent's inbox via the shared bus;
+ * mid-task progress is explicit `<report>…</report>` blocks delivered at step boundaries while
+ * the child keeps working; a `<no-report/>` sentinel final delivers nothing. Run-to-completion
+ * (D-DS7): it does the task, reports, and ends; while in flight it folds parent→child steers via
+ * `loadSteers` (D-DS4). The supervisor watches its `returnValue` for terminal failure (D-DS6).
  */
 
-/** Least-privilege toolset presets (D-DS5). A child is never broader than its parent; an
- *  untrusted-content child gets `readonly`/`none` (no host mutation, no credentials). */
-export type ChildToolset = 'host' | 'readonly' | 'none';
+/** Least-privilege toolset presets (D-DS5): `host` (the default — full grant bundle, attenuated
+ *  by the parent) or `readonly` (reads only — reserve for work that must be handled with extra
+ *  care, e.g. triaging untrusted content). */
+export type ChildToolset = 'host' | 'readonly';
 
 export interface SubagentInput {
   /** The child's own inbox thread (where parent→child steers arrive). */
@@ -46,8 +35,14 @@ export interface SubagentInput {
   parentThreadId: string;
   /** The four-part brief (objective, format, sources, boundaries — design Skill §2). */
   task: string;
-  /** Least-privilege toolset (D-DS5); defaults to `readonly`. */
+  /** Least-privilege toolset (D-DS5); defaults to `host`. */
   toolset?: ChildToolset;
+  /** The child's grants, already attenuated against the parent's authority by the supervisor
+   *  (D-RA5). Omitted (direct/test callers) → the toolset preset's full bundle. */
+  authority?: string[];
+  /** Whether the spawning context may edit the owner-core files (USER.md/SUNNY.md) — inherited,
+   *  never broader than the parent's. Defaults false (restrictive). */
+  ownerScope?: boolean;
   /** Model id (D-DS9); defaults to a cheaper child model. */
   model?: string;
   /** How the child identifies itself to the parent (the sender prefix on its reports). */
@@ -61,12 +56,17 @@ const DEFAULT_CHILD_MODEL = 'claude-sonnet-5';
 export async function runSubagent(input: SubagentInput): Promise<void> {
   'use workflow';
 
-  const setup = await buildSetup(input.model ?? DEFAULT_CHILD_MODEL, input.label ?? 'subagent');
+  const grants = input.authority ?? authorityForToolset(input.toolset);
+  const setup = await buildSetup(
+    input.model ?? DEFAULT_CHILD_MODEL,
+    input.label ?? 'subagent',
+    grants,
+  );
 
-  // Steerable run (D-DS4): fold parent→child steers (`message_subagent`) that arrive on the
-  // child's own inbox thread, exactly like owner double-text steering on the conversation. The
-  // child's inbox starts empty (its brief is the initial message, not a stored window), so the
-  // base exclude set is empty — only what we fold.
+  // Steerable run (D-DS4): fold parent→child steers (`message`) that arrive on the child's own
+  // inbox thread, exactly like owner double-text steering on the conversation. The child's inbox
+  // starts empty (its brief is the initial message, not a stored window), so the base exclude
+  // set is empty — only what we fold.
   const parentAudience = {
     kind: 'parent',
     threadId: input.parentThreadId,
@@ -80,7 +80,15 @@ export async function runSubagent(input: SubagentInput): Promise<void> {
       sessionId: input.parentThreadId,
     }),
     instructions: setup.instructions,
-    tools: buildChildTools(input),
+    // The child's whole toolset is its grants through the SHARED builder (D-DS5) — no
+    // profile-specific verbs: it has no `message` (it speaks via report text), no
+    // `delegate_task` (no sub-delegation, D-DS8), no scheduling (D-SC4). `runs` scopes
+    // `list_runs` to the parent's conversation (its siblings).
+    tools: grantTools(grants, {
+      ownerScope: input.ownerScope ?? false,
+      runs: { threadId: input.parentThreadId, subject: input.label ?? 'subagent' },
+      mcpTools: setup.mcpTools,
+    }),
     providerOptions: {
       anthropic: { thinking: { type: 'adaptive', display: 'omitted' }, effort: 'high' },
     },
@@ -91,9 +99,9 @@ export async function runSubagent(input: SubagentInput): Promise<void> {
   });
 
   // Terminal report (subagent text-unification): the child's FINAL text IS its report —
-  // the same shape as a Tier-2 job. Blocks in the final text were never seen by the
-  // step-boundary scan (no prepareStep follows the last step), so deliver them here, then
-  // the remaining text as the report. A bare <no-report/> sentinel delivers nothing (the
+  // the same shape as a scheduled run's deliverable. Blocks in the final text were never seen
+  // by the step-boundary scan (no prepareStep follows the last step), so deliver them here,
+  // then the remaining text as the report. A bare <no-report/> sentinel delivers nothing (the
   // deliberate no-op). An empty final WITHOUT the sentinel falls back to the raw interim
   // narration (a parent-agent reads messy notes better than a placeholder; no model pass),
   // then the fixed notice. If the parent `cancel_run`'d this child mid-flight (link no
@@ -146,60 +154,46 @@ async function linkRunningStep(childThreadId: string): Promise<boolean> {
   return link?.status === 'running';
 }
 
-/** Least-privilege child tools (D-DS5). The child SPEAKS in text (final report + <report>
- *  blocks), so there is no report tool — the toolset preset is the whole toolset, and `none`
- *  (untrusted-content containment) is genuinely tool-less. A non-orchestrator child has NO
- *  `delegate_task` (no sub-delegation, D-DS8). */
-function buildChildTools(input: SubagentInput): Parameters<typeof streamAgent>[0]['tools'] {
-  const toolset = input.toolset ?? 'readonly';
-  if (toolset === 'none') return {};
-  if (toolset === 'readonly') {
-    return {
-      file_read: tool({
-        ...BASH_TOOL_SPECS.file_read,
-        execute: (a: FileReadToolInput) => fileReadStep(a),
-      }),
-    };
-  }
-  // host: full host tools (still a subset of the parent; D-DS5). Includes the file mutation
-  // primitives (coding-agent-upgrade) — a host child can own a whole coding task end-to-end.
-  return {
-    bash: tool({ ...BASH_TOOL_SPECS.bash, execute: (a: BashToolInput) => bashStep(a) }),
-    file_read: tool({
-      ...BASH_TOOL_SPECS.file_read,
-      execute: (a: FileReadToolInput) => fileReadStep(a),
-    }),
-    file_write: tool({
-      ...FILE_TOOL_SPECS.file_write,
-      execute: (a: FileWriteToolInput) => fileWriteStep(a),
-    }),
-    file_edit: tool({
-      ...FILE_TOOL_SPECS.file_edit,
-      execute: (a: FileEditToolInput) => fileEditStep(a),
-    }),
-  };
-}
-
 interface ChildSetup {
   instructions: string;
   modelId: string;
+  /** Live MCP server tool defs — discovered here only when the child holds the `mcp` grant
+   *  (i.e. a host child of an owner-scoped parent); plain data, journals across the boundary. */
+  mcpTools?: McpToolDef[];
   testModelResponses?: MockResponseDescriptor[];
 }
 
 /** Build the child's instructions + model config once, in a step. The child is told it is a
- *  delegated subagent reporting to an orchestrator (its ROLE is visible; the transport is not). */
-async function buildSetup(modelId: string, label: string): Promise<ChildSetup> {
+ *  delegated subagent reporting to an orchestrator (its ROLE is visible; the transport is not).
+ *  Includes the full SKILLS index — a child acts on skills exactly like every other profile.
+ *  When the child holds the `mcp` grant, the enabled MCP servers' tools are discovered here
+ *  (journaled defs; failures log and degrade to no tools). */
+async function buildSetup(modelId: string, label: string, grants: string[]): Promise<ChildSetup> {
   'use step';
 
   const { getRuntime } = await import('../src/runtime.js');
   const { loadCore, memoryPaths } = await import('../src/memory/index.js');
+  const { loadAllSkills, renderSkillIndex } = await import('../src/skills/index.js');
   const { buildSubagentPrompt } = await import('../src/agent/prompt.js');
   const { testModelResponses } = await import('../src/agent/turnModel.js');
   const { config } = await getRuntime();
   const core = loadCore(memoryPaths(config.runtimeDir));
+  const skillsIndex = renderSkillIndex(loadAllSkills(config), config.skills);
+
+  let mcpTools: McpToolDef[] | undefined;
+  if (grants.includes('mcp')) {
+    const { discoverMcpToolDefs } = await import('../src/mcp/turnTools.js');
+    const { resolverFromEnv } = await import('../src/credentials/index.js');
+    const { logger } = await import('../src/logger.js');
+    mcpTools = await discoverMcpToolDefs(config, resolverFromEnv() ?? undefined, (text) => {
+      logger('subagent').warn('mcp notice (child run)', { text });
+    });
+  }
+
   return {
-    instructions: buildSubagentPrompt(config, core, label),
+    instructions: buildSubagentPrompt(config, core, label, skillsIndex),
     modelId,
+    mcpTools,
     testModelResponses: testModelResponses(),
   };
 }

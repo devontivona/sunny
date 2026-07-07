@@ -89,7 +89,9 @@ export async function completeLink(
   await db
     .update(subagentLinks)
     .set({ status, completedAt: new Date() })
-    .where(and(eq(subagentLinks.childThreadId, childThreadId), eq(subagentLinks.status, 'running')));
+    .where(
+      and(eq(subagentLinks.childThreadId, childThreadId), eq(subagentLinks.status, 'running')),
+    );
 }
 
 /** How many of a parent's children are still running — the concurrency gate (D-DS8). */

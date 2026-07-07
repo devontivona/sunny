@@ -223,6 +223,8 @@ async function start(): Promise<Runtime> {
             // explicit `person:` (scheduled FOR someone), else its creating thread, else
             // `household` (record-only) for a silent maintenance schedule.
             audience: scheduleAudience(schedule),
+            // The grants the run is endowed ({ audience, authority }); null → the memory default.
+            authority: schedule.authority ?? undefined,
           },
         ]);
         // Observe the terminal outcome (SchedRun): the workflow marks its OWN schedule_runs row

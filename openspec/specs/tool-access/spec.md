@@ -134,19 +134,23 @@ Higher-level capabilities SHALL be delivered as `SKILL.md` skills composed over 
 - **THEN** the website-builder skill produces a single-page HTML site using a bundled design style and the `devbox` skill to run/host it
 
 
-### Requirement: Spawn tools share an audience + authority argument shape
-The run-creation tools (`delegate_task`, `schedule_create`) SHALL remain distinct verbs (for reliable model tool-selection) but SHALL accept a common `{ audience, authority }` argument shape, where `authority` is the subset of the creating run's grants to endow (subsuming `delegate_task`'s prior `toolset` argument). A spawn call SHALL be refused if the requested `authority` is not a subset of the creating run's authority. (As synced: the former `start_job` spawn verb was retired by `unify-background-work` — delegation is the one now-firing async primitive, scheduling the later/recurring one.)
+### Requirement: Spawn tools endow attenuated authority through one preset vocabulary
+The run-creation tools (`delegate_task`, `schedule_create`) SHALL remain distinct verbs (for reliable model tool-selection) but SHALL share ONE model-facing authority vocabulary: the `toolset` presets (`host` — the default, the full working bundle; `readonly` — reads only, for work needing extra care such as untrusted-content triage), each naming a fixed grant bundle. Every spawned run SHALL carry an explicit STORED authority — a grant list derived from the preset at spawn, each grant mapping to a fixed tool bundle through ONE shared grant→tools builder used by every run profile (so stored rows stay self-describing if preset definitions later change, and internal callers MAY endow bespoke grant lists, e.g. the memory-only consolidation seed). Endowment is monotone (a spawned run never exceeds its creator): preset grants SHALL be attenuated by intersection with the creator's authority. A scheduled or delegated run SHALL never hold the `schedule` or `delegate` grants (anti-recursion). Grants cover only what a run may DO (the authority axis); how a run SPEAKS — its reply lane, the roster `message` tool, `send_image` — SHALL derive from its audience (the audience axis; see *Messaging tools* below), never from a grant. (As synced: the former `start_job` spawn verb was retired by `unify-background-work`; the former `none` toolset was retired 2026-07-07 — `readonly` is the containment preset.)
 
-#### Scenario: Shared shape across spawn verbs
+#### Scenario: One vocabulary across spawn verbs
 - **WHEN** Sunny delegates a subtask or creates a schedule
-- **THEN** each spawn verb accepts the same `audience` and `authority` arguments, differing only in when it fires
+- **THEN** both verbs accept the same `toolset` presets with the same default (`host`) and the same attenuation semantics
 
-#### Scenario: Over-broad authority request refused
-- **WHEN** a spawn requests an authority grant the creating run does not itself hold
-- **THEN** the spawn is refused
+#### Scenario: Preset attenuated by intersection
+- **WHEN** a `host` run is spawned from a creator lacking some host grants (e.g. a family DM without the owner-facing registries)
+- **THEN** the spawned run holds the preset's grants intersected with the creator's authority
 
-### Requirement: Messaging tools — one reply verb, one addressed verb, over the bus
-Outward messaging SHALL be exposed as one reply lane and one addressed tool, both delivering through the single delivery bus. The reply lane is the run's own TEXT (as synced: text-as-reply replaced the former `send_message` tool — the text a run ends on IS the reply), resolved from the run's Audience with no address argument. The one addressed `message(recipient, text)` tool SHALL send to a named other entity whose `recipient` resolves against {roster people} ∪ {the run's currently-running subagents}; it subsumes the former `message_person` (relay to a roster member) and `message_subagent` (steer a running child) — the same bus operation to a different mailbox. Arbitrary (non-roster, non-subagent) recipients SHALL be refused.
+#### Scenario: A fired schedule acts with its stored authority
+- **WHEN** a schedule endowed host grants (e.g. `bash`, `file_read`, `mcp`) fires
+- **THEN** the fired run holds exactly those grants' tool bundles (including live MCP server tools for `mcp`), and never the spawn verbs
+
+### Requirement: Messaging tools — one reply verb, one addressed verb, derived from the audience
+Outward messaging SHALL be exposed as one reply lane and one addressed tool, both delivering through the single delivery bus, and their availability SHALL derive from the run's AUDIENCE (masked by trust), never from an authority grant. The reply lane is the run's own TEXT (as synced: text-as-reply replaced the former `send_message` tool — the text a run ends on IS the reply), resolved from the run's Audience with no address argument; a `household` audience records the text without sending, and a `parent` audience delivers it to the orchestrator's inbox. The one addressed `message(recipient, text)` tool SHALL send to a named other entity whose `recipient` resolves against {roster people} ∪ {the run's currently-running subagents}; it subsumes the former `message_person` and `message_subagent` — the same bus operation to a different mailbox. Availability by audience: live-thread conversation turns hold it when trusted (never groups); EVERY scheduled run holds it — a delivering run is refused its own subject (the terminal result reaches them; no double-send), and a `household` run may message any roster member (fan-out is its only voice); a `parent`-audience run (subagent) SHALL NOT hold it — it speaks only upward via report text. `send_image` follows the same axis: available to live-thread turns and delivering (thread/person) scheduled runs, addressed to the run's own audience. Arbitrary (non-roster, non-subagent) recipients SHALL be refused.
 
 #### Scenario: Reply needs no address
 - **WHEN** Sunny replies to whoever it is currently serving

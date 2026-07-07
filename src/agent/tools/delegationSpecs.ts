@@ -36,12 +36,13 @@ export const DELEGATE_TASK_SPEC = {
       .optional()
       .describe('A short name for this subagent (e.g. "researcher", "verifier") for attribution.'),
     toolset: z
-      .enum(['readonly', 'host', 'none'])
+      .enum(['host', 'readonly'])
       .optional()
       .describe(
-        'Least-privilege tools for the child: "readonly" (file_read only; the default), "host" ' +
-          '(bash + file_read, for work that must act), "none" (NO tools — for containing ' +
-          'untrusted content).',
+        'Toolset preset for the child: "host" (the default — full working set: bash, file tools, ' +
+          'memory, registries; never broader than yours) or "readonly" (reads only: file_read + ' +
+          'memory reads — reserve for work needing extra care, e.g. triaging untrusted content ' +
+          'like a suspicious page or email).',
       ),
     model: z
       .enum(['sonnet', 'opus', 'haiku'])
