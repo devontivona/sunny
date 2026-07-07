@@ -79,7 +79,7 @@ export interface CoalescePolicy {
   quietMediaMs: number;
 }
 
-const DEFAULT_COALESCE: CoalescePolicy = { quietMs: 2_000, quietMediaMs: 5_000 };
+const DEFAULT_COALESCE: CoalescePolicy = { quietMs: 2_000, quietMediaMs: 3_000 };
 
 /** A message that smells like part of a multipart send: it carries media, is media-only
  *  (empty text), or is a bare URL (a link bubble whose preview/attachment webhooks trail it). */
