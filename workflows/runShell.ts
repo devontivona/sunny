@@ -372,8 +372,14 @@ async function notifyOwnerUndeliverable(
 /**
  * Read messages that arrived on `threadId` that the run hasn't folded yet (D-DS4 steering),
  * excluding ids already seen. Shared by the conversation turn (owner double-text) and a child
- * run (parent→child steer via `message_subagent`) — both fold the same way via `loadSteers`.
+ * run (parent→child steer via `message`) — both fold the same way via `loadSteers`.
  * A `'use step'`, so it's deterministic on replay.
+ *
+ * MEDIA-bearing arrivals are NOT returned (multipart-coalesce, 2026-07-07): the fold is
+ * text-only, so folding an image would consume it unseen — the model never gets the bytes,
+ * but `foldedIds` marks it answered. Left unfolded, it stays unanswered and the router's next
+ * turn reads it from the window with the media properly inlined. (The filter lives INSIDE the
+ * step so the journal records exactly what was folded.)
  */
 export async function loadSteersStep(
   threadId: string,
@@ -383,7 +389,10 @@ export async function loadSteersStep(
 
   const { getRuntime } = await import('../src/runtime.js');
   const { store } = await getRuntime();
-  return store.unansweredSteers(threadId, excludeIds);
+  const steers = await store.unansweredSteers(threadId, excludeIds);
+  return steers
+    .filter((s) => !s.hasMedia)
+    .map(({ messageId, text, senderName }) => ({ messageId, text, senderName }));
 }
 
 /** Mark a thread's inbound messages answered (the watermark) — shared across profiles. */

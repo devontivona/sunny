@@ -62,6 +62,32 @@ const DEFAULT_RETRY: TurnRetryPolicy = {
   backoffMs: (n) => Math.min(500 * 2 ** (n - 1), 30_000),
 };
 
+/**
+ * Inbound coalescing (multipart-coalesce, 2026-07-07). One iMessage composer action
+ * (text + link + image) arrives from Sendblue as SEPARATE webhooks, 0.5–5s apart
+ * (confirmed in the Jul 06 firecrawl-link incident: one send → four RECEIVED webhooks over
+ * 12s). Without a quiet period the first part starts a turn and the model answers a
+ * fragment. So the worker waits for the thread to go QUIET before starting a turn: each
+ * new arrival extends the wait. The window is longer when the newest part carries media or
+ * a bare URL — the signature of a multipart send whose siblings are still in flight —
+ * and short for plain text so ordinary messages pay minimal latency.
+ */
+export interface CoalescePolicy {
+  /** Quiet period after a plain-text inbound. */
+  quietMs: number;
+  /** Quiet period when the newest inbound has attachments or is link-ish (multipart likely). */
+  quietMediaMs: number;
+}
+
+const DEFAULT_COALESCE: CoalescePolicy = { quietMs: 2_000, quietMediaMs: 5_000 };
+
+/** A message that smells like part of a multipart send: it carries media, is media-only
+ *  (empty text), or is a bare URL (a link bubble whose preview/attachment webhooks trail it). */
+function multipartish(event: ChannelEvent): boolean {
+  const text = event.text.trim();
+  return event.attachments.length > 0 || text === '' || /^https?:\/\/\S+$/.test(text);
+}
+
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
@@ -83,6 +109,10 @@ export class DurableTurnRouter {
   /** Threads that received inbound while their worker was finishing (re-check signal). */
   private readonly dirty = new Set<string>();
   private readonly lastTyped = new Map<string, number>();
+  /** The newest live inbound per thread (multipart-coalesce): when it landed and how long
+   *  the thread must be quiet before a turn starts. In-memory only — recovery/wake paths
+   *  have no entry and start immediately. */
+  private readonly lastInbound = new Map<string, { at: number; quietMs: number }>();
 
   constructor(
     private readonly gateway: Gateway,
@@ -93,6 +123,8 @@ export class DurableTurnRouter {
     /** How the worker bounds a repeatedly-failing turn (R7). Injectable so tests can use a tiny
      *  backoff; production uses {@link DEFAULT_RETRY}. */
     private readonly retry: TurnRetryPolicy = DEFAULT_RETRY,
+    /** Quiet-period lengths (multipart-coalesce). Injectable so tests use tiny windows. */
+    private readonly coalesce: CoalescePolicy = DEFAULT_COALESCE,
   ) {}
 
   /** Route one inbound (already persisted + deduped by the gateway): ensure this thread's
@@ -102,6 +134,13 @@ export class DurableTurnRouter {
    *  instead of after the turn settles. */
   route(event: ChannelEvent): void {
     getLiveBus().publishThreadInbound(event.threadId);
+    // Multipart-coalesce: remember when this inbound landed and how long the thread should
+    // stay quiet before a turn starts. Each arrival OVERWRITES the entry, so a trickle of
+    // split webhooks keeps extending the wait until the whole send has landed.
+    this.lastInbound.set(event.threadId, {
+      at: Date.now(),
+      quietMs: multipartish(event) ? this.coalesce.quietMediaMs : this.coalesce.quietMs,
+    });
     this.ensureWorker(event.threadId);
   }
 
@@ -177,6 +216,10 @@ export class DurableTurnRouter {
         // forever — each fresh run re-sends the already-delivered bubbles + burns model spend.
         let consecutiveFailures = 0;
         while (await this.store.hasUnansweredInbound(threadId)) {
+          // Multipart-coalesce: wait for the thread to go quiet before starting the turn, so
+          // the split webhooks of one composer send land in ONE prompt window. Re-reads the
+          // entry each pass — a part arriving during the wait extends it.
+          await this.awaitQuiet(threadId);
           const ok = await this.runTurn(threadId);
           if (ok) {
             consecutiveFailures = 0;
@@ -200,6 +243,18 @@ export class DurableTurnRouter {
     } catch (err) {
       this.processing.delete(threadId);
       log.error('conversation worker crashed', { threadId, err: String(err) });
+    }
+  }
+
+  /** Wait until the thread's newest inbound is at least its quiet period old
+   *  (multipart-coalesce). No entry (recovery / out-of-band wake) → no wait. */
+  private async awaitQuiet(threadId: string): Promise<void> {
+    for (;;) {
+      const entry = this.lastInbound.get(threadId);
+      if (!entry) return;
+      const remaining = entry.at + entry.quietMs - Date.now();
+      if (remaining <= 0) return;
+      await delay(remaining);
     }
   }
 

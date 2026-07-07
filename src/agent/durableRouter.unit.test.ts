@@ -36,6 +36,16 @@ const META = {
   turnWatchdogMs: 600_000,
 };
 
+/** Serial-worker tests opt out of the inbound quiet period (multipart-coalesce) — the
+ *  coalescing behavior itself is pinned in its own describe block below. */
+const NO_COALESCE = { quietMs: 0, quietMediaMs: 0 };
+
+const makeRouter = (
+  gateway: FakeGateway,
+  store: ConstructorParameters<typeof DurableTurnRouter>[1],
+  coalesce = NO_COALESCE,
+) => new DurableTurnRouter(gateway, store, META, undefined, undefined, coalesce);
+
 describe('DurableTurnRouter (serial worker)', () => {
   let gateway: FakeGateway;
 
@@ -60,7 +70,7 @@ describe('DurableTurnRouter (serial worker)', () => {
     vi.mocked(start).mockResolvedValue(run as never);
     const store = fakeStore([true]); // unanswered once, then false
 
-    new DurableTurnRouter(gateway, store, META).route(makeChannelEvent());
+    makeRouter(gateway, store).route(makeChannelEvent());
     await vi.waitFor(() => expect(start).toHaveBeenCalledTimes(1));
     release();
     // After the run, the worker re-checks and exits (no second run).
@@ -82,7 +92,7 @@ describe('DurableTurnRouter (serial worker)', () => {
     });
     const store = fakeStore([true, true, true]); // three turns, then stop
 
-    new DurableTurnRouter(gateway, store, META).route(makeChannelEvent());
+    makeRouter(gateway, store).route(makeChannelEvent());
     await vi.waitFor(() => expect(start).toHaveBeenCalledTimes(1));
     // Release each run in order; the worker should start the next only after the prior resolves.
     for (const h of handles) {
@@ -97,7 +107,7 @@ describe('DurableTurnRouter (serial worker)', () => {
     const { run, release } = fakeRun('r1');
     vi.mocked(start).mockResolvedValue(run as never);
     const store = fakeStore([true]); // only one unanswered turn exists
-    const router = new DurableTurnRouter(gateway, store, META);
+    const router = makeRouter(gateway, store);
 
     const event = makeChannelEvent();
     router.route(event);
@@ -108,5 +118,70 @@ describe('DurableTurnRouter (serial worker)', () => {
     await new Promise((r) => setTimeout(r, 20));
     // The second route set `dirty`, the worker re-checked the store, found nothing new, exited.
     expect(start).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('DurableTurnRouter (multipart-coalesce)', () => {
+  let gateway: FakeGateway;
+
+  beforeEach(() => {
+    gateway = new FakeGateway();
+    vi.mocked(getRun).mockReturnValue({
+      getReadable: () => ({
+        getReader: () => ({
+          read: vi.fn().mockResolvedValue({ done: true }),
+          cancel: vi.fn().mockResolvedValue(undefined),
+          releaseLock: vi.fn(),
+        }),
+      }),
+      status: Promise.resolve('completed'),
+    } as never);
+  });
+  afterEach(() => vi.clearAllMocks());
+
+  it('waits for the quiet period before starting a turn, and a trickle of parts extends it', async () => {
+    const { run, release } = fakeRun('r1');
+    vi.mocked(start).mockResolvedValue(run as never);
+    const store = fakeStore([true]);
+    const router = makeRouter(gateway, store, { quietMs: 80, quietMediaMs: 200 });
+
+    router.route(makeChannelEvent({ text: 'part one' }));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(start).not.toHaveBeenCalled(); // still inside part one's quiet window
+    router.route(makeChannelEvent({ text: 'part two' })); // extends the window
+    await new Promise((r) => setTimeout(r, 50));
+    expect(start).not.toHaveBeenCalled(); // part two reset the clock
+
+    await vi.waitFor(() => expect(start).toHaveBeenCalledTimes(1), { timeout: 500 });
+    release();
+    // One coalesced turn — the second part never spawned its own run.
+    await new Promise((r) => setTimeout(r, 20));
+    expect(start).toHaveBeenCalledTimes(1);
+  });
+
+  it('media / bare-URL / empty-text parts get the LONGER quiet window (multipart signature)', async () => {
+    const { run, release } = fakeRun('r1');
+    vi.mocked(start).mockResolvedValue(run as never);
+    const store = fakeStore([true]);
+    const router = makeRouter(gateway, store, { quietMs: 30, quietMediaMs: 220 });
+
+    // A bare link bubble — its preview/attachment webhooks typically trail by seconds.
+    router.route(makeChannelEvent({ text: 'https://example.com/thing' }));
+    await new Promise((r) => setTimeout(r, 120));
+    expect(start).not.toHaveBeenCalled(); // beyond quietMs, still inside quietMediaMs
+
+    await vi.waitFor(() => expect(start).toHaveBeenCalledTimes(1), { timeout: 500 });
+    release();
+  });
+
+  it('recovery/wake paths (no live inbound entry) start immediately', async () => {
+    const { run, release } = fakeRun('r1');
+    vi.mocked(start).mockResolvedValue(run as never);
+    const store = fakeStore([true]);
+    const router = makeRouter(gateway, store, { quietMs: 5_000, quietMediaMs: 5_000 });
+
+    router.wake(makeChannelEvent().threadId); // out-of-band wake — no quiet entry
+    await vi.waitFor(() => expect(start).toHaveBeenCalledTimes(1), { timeout: 300 });
+    release();
   });
 });
