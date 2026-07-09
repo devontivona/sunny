@@ -4,6 +4,7 @@ import type { SharedV4ProviderOptions } from '@ai-sdk/provider';
 import type { MockResponseDescriptor } from '../src/agent/mockModel.js';
 import { buildTurnModel } from '../src/agent/turnModel.js';
 import { SEND_IMAGE_SPEC } from '../src/agent/tools/sendImageSpec.js';
+import { WAIT_SPEC } from '../src/agent/tools/waitSpec.js';
 import { MESSAGE_SPEC } from '../src/agent/tools/messageSpec.js';
 import { RUNS_TOOL_SPECS, scheduleToolSpecs } from '../src/agent/tools/scheduleSpecs.js';
 import type { McpToolDef } from '../src/mcp/turnTools.js';
@@ -351,6 +352,15 @@ function buildTools(ctx: {
       ...SEND_IMAGE_SPEC,
       execute: ({ pathOrUrl, caption }) => sendStep(threadId, caption ?? '', pathOrUrl),
     }),
+    // In-turn wait (multipart-coalesce, model-level half): the model pauses when the latest
+    // message references content that hasn't arrived ("put this on my calendar" + the link
+    // still being pasted); whatever lands during the sleep folds into the NEXT step via the
+    // standard steering fold (text AND media). Flow control, not privilege — every
+    // conversation thread gets it, groups included.
+    wait: tool({
+      ...WAIT_SPEC,
+      execute: ({ seconds }) => waitStep(seconds),
+    }),
     // Grant-mapped tools (memory / runs_read / host / credentials / mcp + live MCP server
     // tools). Live MCP defs are discovered in `setupTurn` for the owner-DM turn only
     // (attended-only) — everywhere else `mcpTools` is undefined by construction.
@@ -517,6 +527,24 @@ async function loadPending(threadId: string, isGroup: boolean): Promise<PendingT
   const windowUserIds = window.filter((m) => m.role === 'user').map((m) => m.messageId);
   const hasUnanswered = await store.hasUnansweredInbound(threadId);
   return { messages, windowUserIds, hasUnanswered };
+}
+
+/**
+ * Sleep briefly inside the turn (the `wait` tool; multipart-coalesce model-level half).
+ * A durable step: on replay the journaled result is reused — no re-sleep. Bounded to
+ * [1, 30]s (default 10) so a confused model can't park the turn; the turn watchdog and
+ * step limit bound the worst case regardless. After the step, `prepareStep`'s standard
+ * steering fold surfaces whatever arrived while sleeping — text and media alike.
+ */
+async function waitStep(seconds?: number): Promise<string> {
+  'use step';
+
+  const s = Math.max(1, Math.min(30, seconds ?? 10));
+  await new Promise((resolve) => setTimeout(resolve, s * 1000));
+  return (
+    `Waited ${s}s. Any messages that arrived in the meantime appear after this — reply to ` +
+    `the complete picture. If nothing new arrived, reply to what you have.`
+  );
 }
 
 /** Deliver a message by threadId (REST send via the gateway; D2). Memoized as a step so a

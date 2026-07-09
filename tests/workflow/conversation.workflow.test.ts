@@ -190,6 +190,31 @@ describe('runConversation (workflow integration — real Local World)', () => {
     expect(await ctx.store.hasUnansweredInbound(a.threadId)).toBe(false);
   });
 
+  it('wait tool: a trailing multipart part arriving DURING the wait folds into the same turn', async () => {
+    ctx = await setupTestRuntime();
+    const a = makeChannelEvent({ text: 'Can you put this on my calendar?' });
+    await ctx.store.appendInbound(a);
+    // Model: sees the forward reference, calls wait (2s), then replies once with the full
+    // picture. The link part is injected WHILE the wait step sleeps — genuinely mid-turn —
+    // and must fold into the step after the wait (multipart-coalesce, model-level half).
+    setTurnModel([
+      { type: 'tool-call', toolName: 'wait', input: '{"seconds":2}' },
+      { type: 'text', text: 'On the calendar 🎋' },
+    ]);
+
+    const run = await start(runConversation, [{ threadId: a.threadId }]);
+    // Inject the trailing part while the turn is inside its wait step.
+    await new Promise((r) => setTimeout(r, 500));
+    const b = makeChannelEvent({ text: 'https://example.com/savor-japan' });
+    await ctx.store.appendInbound(b);
+    await run.returnValue;
+    expect(await run.status).toBe('completed');
+
+    expect(ctx.gateway.texts()).toEqual(['On the calendar 🎋']); // one reply, no "what do you mean?"
+    // BOTH parts answered by this single turn (window + the steer folded after the wait).
+    expect(await ctx.store.hasUnansweredInbound(a.threadId)).toBe(false);
+  });
+
   it('family DM: routes a person-fact to people:<id>, never the owner USER.md (multiplayer-family)', async () => {
     const KATE = '+17193146820';
     ctx = await setupTestRuntime({
