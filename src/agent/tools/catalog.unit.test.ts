@@ -11,6 +11,7 @@ describe('toolCatalog', () => {
     expect(new Set(names)).toEqual(
       new Set([
         'send_image',
+        'wait',
         'memory_write',
         'read_topic',
         'recall_history',

@@ -28,6 +28,10 @@ function imessageNorms(owner: string): string[] {
   return [
     `Keep responses to a few short messages at most unless ${owner} asks for depth. Match`,
     `iMessage norms: plain text, no markdown formatting, no long bulleted essays.`,
+    `iMessage sends often arrive in parts: text first, a link or photo trailing seconds later.`,
+    `If the latest message references content you don't see yet ("this", "this link", a photo`,
+    `being sent), call the wait tool — the rest folds into your context — rather than asking`,
+    `what they mean.`,
   ];
 }
 

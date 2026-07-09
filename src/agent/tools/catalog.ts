@@ -3,6 +3,7 @@ import type { Db } from '../../db/client.js';
 import type { ConversationStore } from '../../gateway/store.js';
 import type { SunnyConfig } from '../../config/index.js';
 import { SEND_IMAGE_SPEC } from './sendImageSpec.js';
+import { WAIT_SPEC } from './waitSpec.js';
 import { DELEGATE_TASK_SPEC } from './delegationSpecs.js';
 import { MESSAGE_SPEC } from './messageSpec.js';
 import { createScheduleTools } from './schedule.js';
@@ -94,6 +95,7 @@ export function toolCatalog(config: SunnyConfig): ToolCatalogEntry[] {
   // every turn; scheduling/credentials/mcp/host tools are trusted-DM-only (owner OR family).
   const broad: Record<string, ToolLike> = {
     send_image: SEND_IMAGE_SPEC,
+    wait: WAIT_SPEC,
     ...createMemoryTools(config, inertStore),
   };
   const ownerOnly: Record<string, ToolLike> = {
