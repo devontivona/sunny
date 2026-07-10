@@ -115,6 +115,11 @@ export class LoopbackGateway implements Gateway {
     message: OutboundMessage,
     opts?: { persist?: boolean },
   ): Promise<SendResult> {
+    // Loopback has no media transport: a REQUIRED attachment aborts (nothing sent),
+    // matching the Sendblue invariant so send_image tests see the honest failure.
+    if (message.attachment?.required) {
+      return { mediaError: 'the loopback test channel cannot deliver images' };
+    }
     const seq = ++this.seq;
     this.outbox.push({ seq, threadId, text: message.text, at: Date.now() });
     this.sentAt.set(threadId, Date.now());

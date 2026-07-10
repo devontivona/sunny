@@ -190,8 +190,8 @@ function loadTextFile(path: string): { text: string } | { error: string } {
       return {
         error:
           `ERROR: "${path}" looks like a binary file (${buf.length} bytes), not text — not read. ` +
-          `If it's a PDF/image the user sent, it's already available as an attachment; refer to that ` +
-          `instead of reading the raw file.`,
+          `If it's an image, open it with view_image to actually see it. If it's a PDF/image the ` +
+          `user sent, it's already available as an attachment; refer to that.`,
       };
     }
     return { text: buf.toString('utf8') };

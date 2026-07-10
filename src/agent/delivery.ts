@@ -81,12 +81,13 @@ export function assistantUIMessageFromResponse(
         // only this turn's generated messages; this guard guarantees a valid row regardless.
         if (seenToolCallIds.has(id)) continue;
         seenToolCallIds.add(id);
+        const toolType = `tool-${p.toolName as string}`;
         parts.push({
-          type: `tool-${p.toolName as string}`,
+          type: toolType,
           toolCallId: id,
           state: 'output-available',
           input: p.input,
-          output: outputs.has(id) ? outputs.get(id) : 'ok',
+          output: persistableToolOutput(toolType, outputs.has(id) ? outputs.get(id) : 'ok'),
         } as UIMessage['parts'][number]);
       }
       // reasoning / file parts intentionally dropped (see doc above).
@@ -102,6 +103,27 @@ function unwrapToolOutput(output: unknown): unknown {
     return (output as { value: unknown }).value;
   }
   return output;
+}
+
+/** Tool parts whose live result is vision CONTENT (image-send-integrity): the loop shows
+ *  the model the image via `toModelOutput`, so their unwrapped output is a content-part
+ *  array carrying base64. */
+const IMAGE_RESULT_TOOL_PARTS = new Set(['tool-send_image', 'tool-view_image']);
+
+/**
+ * Rebuild a compact, durable output for an image-bearing tool part before it is persisted
+ * (image-send-integrity write boundary): storing the content array would put the base64
+ * preview in the row — jsonb bloat, and every recent-window replay would re-bill it as
+ * tokens. History keeps the text parts (which name the image's on-disk path, so a later
+ * turn can view_image it again) plus an `imageShown` marker; the pixels are turn-ephemeral.
+ */
+function persistableToolOutput(partType: string, output: unknown): unknown {
+  if (!IMAGE_RESULT_TOOL_PARTS.has(partType) || !Array.isArray(output)) return output;
+  const note = (output as Array<{ type?: string; text?: string }>)
+    .filter((p) => p?.type === 'text' && typeof p.text === 'string')
+    .map((p) => p.text)
+    .join('\n');
+  return { imageShown: true, note };
 }
 
 /** All `text` parts of a turn, joined and trimmed (a legacy turn's private scratch;

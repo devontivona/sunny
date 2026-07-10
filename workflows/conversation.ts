@@ -3,7 +3,7 @@ import { tool } from '@ai-sdk/provider-utils';
 import type { SharedV4ProviderOptions } from '@ai-sdk/provider';
 import type { MockResponseDescriptor } from '../src/agent/mockModel.js';
 import { buildTurnModel } from '../src/agent/turnModel.js';
-import { SEND_IMAGE_SPEC } from '../src/agent/tools/sendImageSpec.js';
+import { SEND_IMAGE_SPEC, type SendImageOutput } from '../src/agent/tools/sendImageSpec.js';
 import { WAIT_SPEC } from '../src/agent/tools/waitSpec.js';
 import { MESSAGE_SPEC } from '../src/agent/tools/messageSpec.js';
 import { RUNS_TOOL_SPECS, scheduleToolSpecs } from '../src/agent/tools/scheduleSpecs.js';
@@ -350,8 +350,13 @@ function buildTools(ctx: {
     // see NO_REPLY_SENTINEL). send_image is the one outbound-media verb.
     send_image: tool({
       ...SEND_IMAGE_SPEC,
-      execute: ({ pathOrUrl, caption }) => sendStep(threadId, caption ?? '', pathOrUrl),
+      // Params typed explicitly: with `toModelOutput` in the spec, tool()'s overload
+      // inference can no longer derive them from the zod schema.
+      execute: ({ pathOrUrl, caption }: { pathOrUrl: string; caption?: string }) =>
+        sendStep(threadId, caption ?? '', pathOrUrl),
     }),
+    // view_image (self-vision, image-send-integrity) is NOT registered here: it rides the
+    // `file_read` grant in `grantTools` — every run that can read files can see images.
     // In-turn wait (multipart-coalesce, model-level half): the model pauses when the latest
     // message references content that hasn't arrived ("put this on my calendar" + the link
     // still being pasted); whatever lands during the sleep folds into the NEXT step via the
@@ -548,22 +553,44 @@ async function waitStep(seconds?: number): Promise<string> {
 }
 
 /** Deliver a message by threadId (REST send via the gateway; D2). Memoized as a step so a
- *  replayed turn does NOT re-send. Returns the media outcome for the persisted turn. */
+ *  replayed turn does NOT re-send. Returns the media outcome for the persisted turn.
+ *
+ *  Image sends (image-send-integrity, 2026-07-10) are REQUIRED media: the gateway waits
+ *  for the file to be ready and otherwise aborts the whole send (no caption-only text —
+ *  the Jul 10 spam incident), and this step reports the failure as a structured
+ *  `not_sent` the tool surfaces as an error instead of the old lying bare 'delivered'.
+ *  A delivered image comes back with a downscaled `preview` so the model SEES what the
+ *  user received (`sendImageToModelOutput`); the preview is stripped at persist. */
 async function sendStep(
   threadId: string,
   text: string,
   image?: string,
-): Promise<{ status: string; media?: unknown } | string> {
+): Promise<SendImageOutput | string> {
   'use step';
 
   const { getRuntime } = await import('../src/runtime.js');
   const { gateway } = await getRuntime();
   const result = await gateway.send(
     threadId,
-    { text, ...(image ? { attachment: { pathOrUrl: image } } : {}) },
+    { text, ...(image ? { attachment: { pathOrUrl: image, required: true } } : {}) },
     { persist: false },
   );
-  return result?.media ? { status: 'delivered', media: result.media } : 'delivered';
+  if (!image) return 'delivered';
+  if (result?.mediaError || !result?.media) {
+    return {
+      status: 'not_sent',
+      error:
+        `${result?.mediaError ?? 'this channel cannot deliver images'}. Nothing was sent — ` +
+        `not even the caption. If the image is still being generated, finish writing the ` +
+        `file and confirm it exists before calling send_image again (view_image shows you ` +
+        `the finished file).`,
+    };
+  }
+  const media = result.media;
+  const { previewFromFile } = await import('../src/agent/tools/imagePreview.js');
+  const hosted = media as { path?: string; mediaType?: string };
+  const preview = hosted.path ? previewFromFile(hosted.path, hosted.mediaType) : null;
+  return { status: 'delivered', media, ...(preview ? { preview } : {}) };
 }
 
 /** Abnormal-turn-end backstop as a step: when a turn ends without reply text (step limit /
@@ -855,12 +882,20 @@ async function personRelayStepBody(
   }
 
   // An optional image rides along as a single outbound attachment, exactly like send_image's
-  // path; the gateway hosts/sends + persists it (degrading to text in group threads).
-  await gateway.send(
+  // path: REQUIRED media (image-send-integrity) — if the file isn't ready the whole send is
+  // aborted and reported, never silently degraded to a text that claims an image.
+  const result = await gateway.send(
     threadId,
-    { text, ...(image ? { attachment: { pathOrUrl: image } } : {}) },
+    { text, ...(image ? { attachment: { pathOrUrl: image, required: true } } : {}) },
     { persist: true },
   );
+  if (image && (result?.mediaError || !result?.media)) {
+    return (
+      `NOT sent to ${member.name}: ${result?.mediaError ?? 'the channel could not attach the image'}. ` +
+      `Nothing was delivered (not even the text). Fix the image (view_image shows you the ` +
+      `finished file) and retry, or resend without the image.`
+    );
+  }
   return image ? `Sent to ${member.name} (with image).` : `Sent to ${member.name}.`;
 }
 

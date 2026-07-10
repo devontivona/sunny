@@ -26,6 +26,7 @@ describe('toolCatalog', () => {
         'file_read',
         'file_write',
         'file_edit',
+        'view_image',
       ]),
     );
     expect(names).toEqual([...names].sort((a, b) => a.localeCompare(b)));

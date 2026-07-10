@@ -10,6 +10,7 @@ import { AGENT_STEP_LIMIT } from '../src/agent/limits.js';
 import { BASH_TOOL_SPECS } from '../src/agent/tools/bashSpecs.js';
 import type { BashToolInput, FileReadToolInput } from '../src/agent/tools/bashSpecs.js';
 import { FILE_TOOL_SPECS } from '../src/agent/tools/fileSpecs.js';
+import { VIEW_IMAGE_SPEC, type ViewImageOutput } from '../src/agent/tools/viewImageSpec.js';
 import type { FileEditToolInput, FileWriteToolInput } from '../src/agent/tools/fileSpecs.js';
 import { MEMORY_TOOL_SPECS } from '../src/agent/tools/memorySpecs.js';
 import { RUNS_TOOL_SPECS } from '../src/agent/tools/scheduleSpecs.js';
@@ -444,6 +445,16 @@ export async function fileReadStep(args: FileReadToolInput): Promise<string> {
   });
 }
 
+/** `view_image` execution (image-send-integrity): read + downscale a local image so the tool
+ *  result shows it to the model as vision content (`viewImageToModelOutput`). Memoized — a
+ *  replay reuses the journaled output; the persist boundary strips the preview bytes. */
+export async function viewImageStep(path: string): Promise<ViewImageOutput> {
+  'use step';
+
+  const { readImageForViewing } = await import('../src/agent/tools/imagePreview.js');
+  return readImageForViewing(path);
+}
+
 /** Create/overwrite a host file as a durable step (shared host-tool execute). */
 export async function fileWriteStep(args: FileWriteToolInput): Promise<string> {
   'use step';
@@ -650,7 +661,15 @@ export function grantTools(grants: Authority, ctx: GrantToolsCtx) {
         }
       : {}),
     ...(has('file_read')
-      ? { file_read: tool({ ...BASH_TOOL_SPECS.file_read, execute: (a) => fileReadStep(a) }) }
+      ? {
+          file_read: tool({ ...BASH_TOOL_SPECS.file_read, execute: (a) => fileReadStep(a) }),
+          // Self-vision rides file-reading (image-send-integrity): any run that can read
+          // files can SEE a local image — file_read itself is text-only.
+          view_image: tool({
+            ...VIEW_IMAGE_SPEC,
+            execute: ({ path }: { path: string }) => viewImageStep(path),
+          }),
+        }
       : {}),
     ...(has('bash')
       ? { bash: tool({ ...BASH_TOOL_SPECS.bash, execute: (a) => bashStep(a) }) }

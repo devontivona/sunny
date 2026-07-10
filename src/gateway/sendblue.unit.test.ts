@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SendblueGateway, normalizeDateSent } from './sendblue.js';
+import { MEDIA } from './media.js';
 import type { ConversationStore } from './store.js';
 import type { ChannelEvent } from './types.js';
 import { makeConfig, OWNER_PHONE, OWNER_THREAD } from '../../tests/factories.js';
@@ -178,5 +179,65 @@ describe('handleWebhook — outbound status interception (delivery-status-tracki
     // proving the re-materialized Request body survives the interception read.
     const res = await gw.handleWebhook(statusRequest({ number: OWNER_PHONE, is_typing: true }));
     expect(res.status).toBe(200);
+  });
+});
+
+describe('doSend — required attachment (image-send-integrity)', () => {
+  const config = makeConfig();
+
+  // Shrink the readiness gate so the missing-file test doesn't wait the production 10s.
+  const media = MEDIA as unknown as { outboundReadyTimeoutMs: number; outboundReadyPollMs: number };
+  let savedTimeout: number;
+  let savedPoll: number;
+
+  beforeEach(() => {
+    savedTimeout = media.outboundReadyTimeoutMs;
+    savedPoll = media.outboundReadyPollMs;
+    media.outboundReadyTimeoutMs = 200;
+    media.outboundReadyPollMs = 30;
+  });
+
+  afterEach(() => {
+    media.outboundReadyTimeoutMs = savedTimeout;
+    media.outboundReadyPollMs = savedPoll;
+  });
+
+  it('aborts the WHOLE send when the file never appears — no caption-only text (Jul 10 spam)', async () => {
+    const appendOutbound = vi.fn(async () => undefined);
+    const store = { appendOutbound } as unknown as ConversationStore;
+    const gw = new SendblueGateway({ config, store });
+    const post = vi.fn(async () => ({ id: 'provider-1' }));
+    (gw as unknown as { activeThreads: Map<string, unknown> }).activeThreads.set(OWNER_THREAD, {
+      post,
+    });
+
+    const result = await gw.send(OWNER_THREAD, {
+      text: 'the caption',
+      attachment: { pathOrUrl: '/nonexistent/scene.jpg', required: true },
+    });
+
+    expect(result.mediaError).toMatch(/no file exists/);
+    expect(result.messageId).toBeUndefined();
+    expect(post).not.toHaveBeenCalled(); // nothing was texted — not even the caption
+    expect(appendOutbound).not.toHaveBeenCalled();
+  });
+
+  it('still degrades a NON-required attachment to text (D-MM2), but reports the drop', async () => {
+    const store = { appendOutbound: vi.fn(async () => undefined) } as unknown as ConversationStore;
+    const gw = new SendblueGateway({ config, store });
+    const post = vi.fn(async () => ({ id: 'provider-2' }));
+    (gw as unknown as { activeThreads: Map<string, unknown> }).activeThreads.set(OWNER_THREAD, {
+      post,
+    });
+
+    const result = await gw.send(
+      OWNER_THREAD,
+      { text: 'reply text', attachment: { pathOrUrl: '/nonexistent/x.jpg' } },
+      { persist: false },
+    );
+
+    expect(post).toHaveBeenCalledWith('reply text'); // the text still went out
+    expect(result.media).toBeUndefined();
+    expect(result.mediaError).toMatch(/no file exists/);
   });
 });

@@ -76,6 +76,11 @@ export const MEDIA = {
   imageRecodeThreshold: 1024 * 1024,
   /** Public outbox lifetime — Sendblue fetches within seconds + a few retries. */
   outboxTtlMs: 24 * 60 * 60 * 1000,
+  /** How long an outbound send waits for its local file to be ready (image-send-integrity):
+   * absorbs the write-vs-send race of concurrent tool calls plus a generation tail. */
+  outboundReadyTimeoutMs: 10_000,
+  /** Poll cadence for the readiness gate (two consecutive equal sizes = stable). */
+  outboundReadyPollMs: 250,
 } as const;
 
 // --- type mapping ----------------------------------------------------------
@@ -434,6 +439,73 @@ export function cleanupOutbox(
   return removed;
 }
 
+// --- outbound readiness (image-send-integrity, 2026-07-10) ------------------
+
+/** Why a local outbound file was judged not ready to send. */
+export class MediaNotReadyError extends Error {}
+
+/**
+ * Wait until a local outbound file is actually READY to send: it exists, is
+ * non-empty, its size is stable across two consecutive polls (a writer is not
+ * mid-flush), and — when its name claims an image type — its magic bytes agree.
+ *
+ * Why this exists (2026-07-10, Devon's thread): the model emits the bash call
+ * that writes an image and the send_image call for the same path in ONE
+ * assistant step, and the AI SDK executes a step's tool calls concurrently —
+ * so the send raced the write and lost by milliseconds (7 caption-only texts
+ * in one afternoon, every one an ENOENT swallowed into "delivered"). No
+ * model-side behavior can fix that ordering; the gate absorbs it here.
+ *
+ * Resolves with the file's bytes (the caller was about to read them anyway) or
+ * throws `MediaNotReadyError` with a model-actionable message after `timeoutMs`.
+ */
+export async function waitForStableFile(
+  path: string,
+  opts: { timeoutMs?: number; pollMs?: number } = {},
+): Promise<Buffer> {
+  const timeoutMs = opts.timeoutMs ?? MEDIA.outboundReadyTimeoutMs;
+  const pollMs = opts.pollMs ?? MEDIA.outboundReadyPollMs;
+  const deadline = Date.now() + timeoutMs;
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const sizeOf = (): number | null => {
+    try {
+      const st = statSync(path);
+      return st.isFile() ? st.size : null;
+    } catch {
+      return null;
+    }
+  };
+
+  let last = sizeOf();
+  for (;;) {
+    await sleep(last === null ? pollMs : Math.min(pollMs, 100));
+    const size = sizeOf();
+    if (size !== null && size > 0 && size === last) {
+      const bytes = readFileSync(path);
+      // A file whose extension claims an image must sniff as one — catches a
+      // half-written header or a tool that errored into a text/JSON body.
+      const claimed = contentTypeForName(path);
+      if (!claimed.startsWith('image/') || sniffMediaType(bytes).startsWith('image/')) {
+        return bytes;
+      }
+    }
+    if (Date.now() >= deadline) {
+      if (size === null) {
+        throw new MediaNotReadyError(
+          `no file exists at ${path} (waited ${Math.round(timeoutMs / 1000)}s). ` +
+            `Generate/save the image first and confirm it is on disk before sending.`,
+        );
+      }
+      throw new MediaNotReadyError(
+        size === 0
+          ? `the file at ${path} is empty (waited ${Math.round(timeoutMs / 1000)}s).`
+          : `the file at ${path} does not contain valid image data (waited ${Math.round(timeoutMs / 1000)}s).`,
+      );
+    }
+    last = size;
+  }
+}
+
 // --- outbound planning (D-MM5/6/7) -----------------------------------------
 
 /** A single image attached to an outbound message: a local path or a URL. */
@@ -441,6 +513,11 @@ export interface OutboundAttachment {
   /** A local file path Sunny produced, or an http(s) URL to pass through. */
   pathOrUrl: string;
   mimeType?: string;
+  /** The attachment IS the message (send_image / message-with-image): if it can't be
+   *  resolved, abort the whole send — never degrade to a caption-only text (the Jul 10
+   *  "spamming me with caption texts and no image" incident) — and report the failure
+   *  in `SendResult.mediaError` so the calling tool can surface a real error. */
+  required?: boolean;
 }
 
 export type OutboundPlan =
