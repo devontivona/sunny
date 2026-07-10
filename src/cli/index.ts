@@ -19,9 +19,9 @@ import { parseArgs } from 'node:util';
 const USAGE = `usage: sunny <command>
 
 commands:
-  dream digest                         print everything since the last dream watermark
-  dream lint                           print the INDEX<->topics consistency report (detection
+  memory lint                          print the INDEX<->topics consistency report (detection
                                        only — fix findings via memory_write, re-run until clean)
+  dream digest                         print everything since the last dream watermark
   dream compact --thread <threadId> --boundary <messageId> (--summary <text> | --summary-file <path>)
                                        write one thread's compaction summary (validated)
   dream advance --thread <threadId> --message <messageId>
@@ -45,27 +45,32 @@ async function main(): Promise<void> {
       /* malformed .env — fall through to the explicit check below */
     }
   }
-  if (!process.env.DATABASE_URL) {
-    fail('DATABASE_URL is not set (and no repo .env supplied it) — the CLI needs Postgres.');
-  }
-
   const [group, command, ...rest] = process.argv.slice(2);
-  if (group !== 'dream' || !command) fail(USAGE);
+  if (!group || !command) fail(USAGE);
 
   const { loadConfig } = await import('../config/index.js');
+  const config = loadConfig();
+
+  // `memory` group — file-tree checks, no database.
+  if (group === 'memory') {
+    if (command !== 'lint') fail(USAGE);
+    const memory = await import('./memory.js');
+    process.stdout.write(`${memory.lint(config)}\n`);
+    return;
+  }
+
+  if (group !== 'dream') fail(USAGE);
+  if (!process.env.DATABASE_URL) {
+    fail('DATABASE_URL is not set (and no repo .env supplied it) — dream commands need Postgres.');
+  }
   const { createDb } = await import('../db/client.js');
   const dream = await import('./dream.js');
-  const config = loadConfig();
   const { db, pool } = createDb(process.env.DATABASE_URL);
 
   try {
     switch (command) {
       case 'digest': {
         process.stdout.write(`${await dream.digest(db, config)}\n`);
-        break;
-      }
-      case 'lint': {
-        process.stdout.write(`${dream.lint(config)}\n`);
         break;
       }
       case 'compact': {
