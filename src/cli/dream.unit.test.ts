@@ -8,6 +8,7 @@ import {
   spokenHead,
   suggestBoundary,
   toolTraceLines,
+  whoOf,
   type DigestInput,
   type ThreadSection,
 } from './dream.js';
@@ -22,6 +23,7 @@ function row(over: Partial<ThreadSection['rows'][number]> = {}): ThreadSection['
     role: 'user',
     senderId: '+15551230000',
     senderName: 'Devon',
+    isOwner: true,
     text: 'hello there',
     payload: null,
     createdAt: T0,
@@ -56,10 +58,24 @@ describe('renderDigest', () => {
   it('renders attribution, ids, and the exact advance command', () => {
     const out = renderDigest(input());
     expect(out).toContain('[id:m1]');
-    expect(out).toContain('Devon');
+    expect(out).toContain('Devon (owner)');
     expect(out).toContain(
       "npx tsx src/cli/index.ts dream advance --thread 'sendblue:a:b' --message 'm1'",
     );
+  });
+
+  it('attribution routes memory deterministically: owner tag vs people handle (whoOf)', () => {
+    expect(
+      whoOf({ role: 'user', senderId: '+15551230000', senderName: 'Devon', isOwner: true }),
+    ).toBe('Devon (owner)');
+    // A non-owner participant carries the people-doc handle the dream writes facts to —
+    // the same personId derivation the runtime uses for people:<id> docs.
+    expect(
+      whoOf({ role: 'user', senderId: '+17193146820', senderName: 'Kate', isOwner: false }),
+    ).toBe('Kate [people:17193146820]');
+    expect(
+      whoOf({ role: 'assistant', senderId: 'sunny', senderName: 'Sunny', isOwner: false }),
+    ).toBe('Sunny');
   });
 
   it('marks a capped span PARTIAL (oldest-first cover)', () => {

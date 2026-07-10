@@ -124,8 +124,11 @@ export async function ensureDreamSchedule(db: Db, threadId: string, tz: string):
     // Maintenance with no news value: record the outcome but send NO proactive message.
     outputTarget: 'silent',
     // Bespoke grants (internal seeder, not the preset surface): memory duties + the bash/
-    // file_read needed to run `sunny dream` and read the skill. No spawn/registry grants.
-    authority: ['memory_read', 'memory_write', 'bash', 'file_read'],
+    // file_read needed to run `sunny dream` and read skills, + file_write so the dream can
+    // author/update a skill (procedures graduate out of memory via the skill-authoring
+    // skill — file_write adds ergonomics, not privilege, since bash can already write).
+    // No spawn/registry grants.
+    authority: ['memory_read', 'memory_write', 'bash', 'file_read', 'file_write'],
   });
   log.info('seeded dreaming schedule', { threadId });
 }
