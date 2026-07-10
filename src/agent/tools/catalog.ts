@@ -3,6 +3,7 @@ import type { Db } from '../../db/client.js';
 import type { ConversationStore } from '../../gateway/store.js';
 import type { SunnyConfig } from '../../config/index.js';
 import { SEND_IMAGE_SPEC } from './sendImageSpec.js';
+import { VIEW_IMAGE_SPEC } from './viewImageSpec.js';
 import { WAIT_SPEC } from './waitSpec.js';
 import { DELEGATE_TASK_SPEC } from './delegationSpecs.js';
 import { MESSAGE_SPEC } from './messageSpec.js';
@@ -106,6 +107,8 @@ export function toolCatalog(config: SunnyConfig): ToolCatalogEntry[] {
     ...createCredentialTools(config, undefined),
     ...createMcpTools(config, undefined),
     ...createBashTools(config, undefined),
+    // Rides the `file_read` grant (trusted DMs; image-send-integrity) — see grantTools.
+    view_image: VIEW_IMAGE_SPEC,
   };
 
   const entries: ToolCatalogEntry[] = [

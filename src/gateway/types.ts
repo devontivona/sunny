@@ -74,6 +74,10 @@ export interface OutboundMessage {
 export interface SendResult {
   messageId?: string;
   media?: OutboundMediaResult;
+  /** Why the attachment was not delivered (image-send-integrity). On a `required`
+   *  attachment the send was ABORTED (no `messageId` — nothing was texted); otherwise
+   *  the text went out without media (the legacy D-MM2 degrade, now reported). */
+  mediaError?: string;
 }
 
 /** Per-channel capability flags for feature-detection + graceful degradation (D-MG3). */

@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   attachmentRefsOf,
   cleanupOutbox,
@@ -7,10 +10,12 @@ import {
   isGenericBinaryType,
   isValidOutboxName,
   kindForMediaType,
+  MediaNotReadyError,
   modelIngestKind,
   sniffMediaType,
   planOutbound,
   renderableMedia,
+  waitForStableFile,
   type AttachmentRef,
   type CleanupFs,
 } from './media.js';
@@ -258,5 +263,156 @@ describe('cleanupOutbox (short-TTL sweep, D-MM4)', () => {
   it('is a no-op on an empty/missing outbox', () => {
     const fs: CleanupFs = { list: () => [], mtimeMs: () => 0, remove: () => {} };
     expect(cleanupOutbox('/rt', 1, 1, fs)).toBe(0);
+  });
+});
+
+describe('waitForStableFile (image-send-integrity readiness gate)', () => {
+  // Minimal valid PNG signature + a byte of "body" — enough for the magic-byte sniff.
+  const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'sunny-gate-'));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('resolves with the bytes once a late write lands (the concurrent-tool race)', async () => {
+    const path = join(dir, 'late.png');
+    // The send fires first; the "generator" writes ~150ms later — the Jul 10 shape.
+    setTimeout(() => writeFileSync(path, PNG), 150);
+    const bytes = await waitForStableFile(path, { timeoutMs: 3000, pollMs: 40 });
+    expect(bytes.equals(PNG)).toBe(true);
+  });
+
+  it('throws MediaNotReadyError naming the path when no file ever appears', async () => {
+    const path = join(dir, 'never.png');
+    await expect(waitForStableFile(path, { timeoutMs: 250, pollMs: 40 })).rejects.toThrow(
+      MediaNotReadyError,
+    );
+    await expect(waitForStableFile(path, { timeoutMs: 250, pollMs: 40 })).rejects.toThrow(
+      /no file exists at .*never\.png/,
+    );
+  });
+
+  it('rejects an empty file (a started-but-dead write)', async () => {
+    const path = join(dir, 'empty.png');
+    writeFileSync(path, Buffer.alloc(0));
+    await expect(waitForStableFile(path, { timeoutMs: 250, pollMs: 40 })).rejects.toThrow(
+      /is empty/,
+    );
+  });
+
+  it('rejects a file whose extension claims an image but whose bytes are not one', async () => {
+    const path = join(dir, 'fake.jpg');
+    writeFileSync(path, Buffer.from('<html>error page</html>'));
+    await expect(waitForStableFile(path, { timeoutMs: 300, pollMs: 40 })).rejects.toThrow(
+      /does not contain valid image data/,
+    );
+  });
+
+  it('waits out a still-growing file and returns the final bytes', async () => {
+    const path = join(dir, 'grow.png');
+    writeFileSync(path, PNG.subarray(0, 4)); // half a header — a write in progress
+    setTimeout(() => writeFileSync(path, PNG), 120);
+    const bytes = await waitForStableFile(path, { timeoutMs: 3000, pollMs: 40 });
+    expect(bytes.equals(PNG)).toBe(true);
+  });
+
+  it('accepts a non-image extension without sniffing (send_image is used for PDFs too)', async () => {
+    const path = join(dir, 'doc.pdf');
+    writeFileSync(path, Buffer.from('%PDF-1.4 ...'));
+    const bytes = await waitForStableFile(path, { timeoutMs: 1000, pollMs: 40 });
+    expect(bytes.toString()).toContain('%PDF');
+  });
+});
+
+describe('renderableMedia — send_image parts (image-send-integrity dashboard fix)', () => {
+  it('renders a compacted send_image row from its lifted mediaPath', () => {
+    const payload = {
+      role: 'assistant',
+      parts: [
+        {
+          type: 'tool-send_image',
+          input: { pathOrUrl: '/home/sunny/scene.jpg' },
+          output: {
+            imageShown: true,
+            note: 'Image delivered (scene.jpg, saved at /m/outbound/tok.jpg). Verify:',
+            mediaPath: '/m/outbound/tok.jpg',
+          },
+        },
+      ],
+    };
+    expect(renderableMedia(payload)).toEqual([
+      {
+        disk: '/m/outbound/tok.jpg',
+        url: null,
+        mediaType: 'image/jpeg',
+        kind: 'image',
+        name: 'tok.jpg',
+      },
+    ]);
+  });
+
+  it('renders a legacy (pre-compaction) send_image row from its full media object', () => {
+    const payload = {
+      role: 'assistant',
+      parts: [
+        {
+          type: 'tool-send_image',
+          input: { pathOrUrl: '/home/sunny/scene.jpg' },
+          output: {
+            status: 'delivered',
+            media: {
+              path: '/m/outbound/old.jpg',
+              mediaType: 'image/jpeg',
+              kind: 'image',
+              name: 'scene.jpg',
+            },
+          },
+        },
+      ],
+    };
+    expect(renderableMedia(payload)).toEqual([
+      {
+        disk: '/m/outbound/old.jpg',
+        url: null,
+        mediaType: 'image/jpeg',
+        kind: 'image',
+        name: 'scene.jpg',
+      },
+    ]);
+  });
+
+  it('renders a URL-passthrough send_image row from its compacted text output', () => {
+    const payload = {
+      role: 'assistant',
+      parts: [
+        {
+          type: 'tool-send_image',
+          input: { pathOrUrl: 'https://x/y.png' },
+          output: 'Image delivered (y.png, from https://x/y.png).',
+        },
+      ],
+    };
+    expect(renderableMedia(payload)).toEqual([
+      { disk: null, url: 'https://x/y.png', mediaType: 'image/*', kind: 'image', name: 'y.png' },
+    ]);
+  });
+
+  it('renders nothing for a failed send (error string output)', () => {
+    const payload = {
+      role: 'assistant',
+      parts: [
+        {
+          type: 'tool-send_image',
+          input: { pathOrUrl: '/x.jpg' },
+          output: 'IMAGE NOT SENT: no file exists at /x.jpg',
+        },
+      ],
+    };
+    expect(renderableMedia(payload)).toEqual([]);
   });
 });

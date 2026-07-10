@@ -17,6 +17,7 @@ import {
   publicBaseUrl,
   publishOutbox,
   sniffMediaType,
+  waitForStableFile,
   type AttachmentRef,
   type OutboundMediaResult,
 } from './media.js';
@@ -223,10 +224,17 @@ export class SendblueGateway implements Gateway {
     // a DM, a hosted public link in a group, a URL passed straight through, or
     // dropped (text-only) if the channel lacks media support.
     const plan = planOutbound(message.attachment, { media: this.capabilities.media, isGroup });
+    // Required attachment on a channel that dropped it at planning (no media support):
+    // abort before anything is texted — the invariant is "required ⇒ image delivered OR
+    // nothing delivered", so the tool's failure report is always literally true.
+    if (message.attachment?.required && plan.kind === 'text') {
+      return { mediaError: 'this channel cannot deliver images' };
+    }
 
     let text = message.text;
     let mediaUrl: string | undefined;
     let media: OutboundMediaResult | undefined;
+    let mediaError: string | undefined;
     try {
       if (plan.kind === 'url') {
         mediaUrl = plan.url; // existing URL — no hosting (D-MM4)
@@ -237,7 +245,10 @@ export class SendblueGateway implements Gateway {
           name: plan.url.split('/').pop() || 'image',
         };
       } else if (plan.kind === 'host') {
-        const hosted = this.hostLocalFile(plan.pathOrUrl, plan.mimeType);
+        // Wait for the file to actually be ready (image-send-integrity): the model's
+        // write and its send race when both are tool calls of one assistant step.
+        const bytes = await waitForStableFile(plan.pathOrUrl);
+        const hosted = this.hostLocalFile(plan.pathOrUrl, plan.mimeType, bytes);
         mediaUrl = hosted.publicUrl;
         media = hosted.media;
       } else if (plan.kind === 'link') {
@@ -251,13 +262,26 @@ export class SendblueGateway implements Gateway {
             name: plan.pathOrUrl.split('/').pop() || 'image',
           };
         } else {
-          const hosted = this.hostLocalFile(plan.pathOrUrl, plan.mimeType);
+          const bytes = await waitForStableFile(plan.pathOrUrl);
+          const hosted = this.hostLocalFile(plan.pathOrUrl, plan.mimeType, bytes);
           text = [message.text, hosted.publicUrl].filter(Boolean).join('\n');
           media = hosted.media;
         }
       }
     } catch (err) {
-      // A bad image path must not ghost the text — deliver the text anyway (D-MM2).
+      mediaError = err instanceof Error ? err.message : String(err);
+      // A required attachment IS the message (send_image): abort the whole send —
+      // a caption-only text pretending to carry an image is worse than no send
+      // (the Jul 10 spam incident). The caller surfaces `mediaError` to the model.
+      if (message.attachment?.required) {
+        log.warn('required outbound attachment failed; send aborted', {
+          threadId,
+          err: String(err),
+        });
+        return { mediaError };
+      }
+      // A bad image path must not ghost the text — deliver the text anyway (D-MM2),
+      // but REPORT the drop so the caller never records "(with image)" for it.
       log.warn('outbound attachment failed; sending text only', {
         threadId,
         err: String(err),
@@ -326,7 +350,7 @@ export class SendblueGateway implements Gateway {
       media: media ? ('path' in media ? 'hosted' : 'url') : 'none',
     });
     if (logContent()) log.info('outbound content', { threadId, text });
-    return { messageId: sentId, media };
+    return { messageId: sentId, media, ...(mediaError ? { mediaError } : {}) };
   }
 
   /**
@@ -337,8 +361,9 @@ export class SendblueGateway implements Gateway {
   private hostLocalFile(
     path: string,
     mimeType?: string,
+    preRead?: Buffer,
   ): { publicUrl: string; media: OutboundMediaResult } {
-    const bytes = readFileSync(path);
+    const bytes = preRead ?? readFileSync(path);
     const mediaType = mimeType ?? contentTypeForName(path);
     const token = outboundToken();
     const durablePath = persistOutbound(this.config.runtimeDir, token, bytes, mediaType);

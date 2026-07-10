@@ -270,3 +270,104 @@ describe('assistantUIMessageFromResponse', () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 });
+
+describe('image tool result persistence (image-send-integrity write boundary)', () => {
+  const contentOutput: import('@ai-sdk/provider-utils').ToolResultOutput = {
+    type: 'content',
+    value: [
+      { type: 'text', text: 'Image delivered (scene.jpg, saved at /m/outbound/tok.jpg). Verify:' },
+      { type: 'file', data: { type: 'data', data: 'aGVsbG8=' }, mediaType: 'image/jpeg' },
+    ],
+  };
+
+  function turnWith(toolName: string) {
+    const messages: ModelMessage[] = [
+      {
+        role: 'assistant',
+        content: [
+          { type: 'tool-call', toolCallId: 'c1', toolName, input: { pathOrUrl: '/x.jpg' } },
+        ],
+      },
+      {
+        role: 'tool',
+        content: [{ type: 'tool-result', toolCallId: 'c1', toolName, output: contentOutput }],
+      },
+    ];
+    return assistantUIMessageFromResponse(messages)!;
+  }
+
+  it('replaces send_image vision content with a compact note + renderable mediaPath', () => {
+    const part = turnWith('send_image').parts.find((p) => p.type === 'tool-send_image') as any;
+    expect(part.output).toEqual({
+      imageShown: true,
+      note: 'Image delivered (scene.jpg, saved at /m/outbound/tok.jpg). Verify:',
+      // Lifted from the lead so the dashboard can render what was sent (renderableMedia).
+      mediaPath: '/m/outbound/tok.jpg',
+    });
+    expect(JSON.stringify(part.output)).not.toContain('aGVsbG8=');
+  });
+
+  it('replaces view_image vision content with a compact note (no mediaPath — source file)', () => {
+    const part = turnWith('view_image').parts.find((p) => p.type === 'tool-view_image') as any;
+    expect(part.output).toEqual({
+      imageShown: true,
+      note: 'Image delivered (scene.jpg, saved at /m/outbound/tok.jpg). Verify:',
+    });
+    expect(JSON.stringify(part.output)).not.toContain('aGVsbG8=');
+  });
+
+  it('leaves other tools with content-array outputs untouched', () => {
+    const messages: ModelMessage[] = [
+      {
+        role: 'assistant',
+        content: [{ type: 'tool-call', toolCallId: 'c2', toolName: 'some_mcp_tool', input: {} }],
+      },
+      {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId: 'c2',
+            toolName: 'some_mcp_tool',
+            output: contentOutput,
+          },
+        ],
+      },
+    ];
+    const part = assistantUIMessageFromResponse(messages)!.parts.find(
+      (p) => p.type === 'tool-some_mcp_tool',
+    ) as any;
+    expect(part.output).toEqual(contentOutput.value);
+  });
+
+  it('passes a structured (non-content) send_image failure through unchanged', () => {
+    const messages: ModelMessage[] = [
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool-call',
+            toolCallId: 'c3',
+            toolName: 'send_image',
+            input: { pathOrUrl: '/x' },
+          },
+        ],
+      },
+      {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId: 'c3',
+            toolName: 'send_image',
+            output: { type: 'error-text', value: 'IMAGE NOT SENT: no file exists at /x' },
+          },
+        ],
+      },
+    ];
+    const part = assistantUIMessageFromResponse(messages)!.parts.find(
+      (p) => p.type === 'tool-send_image',
+    ) as any;
+    expect(part.output).toBe('IMAGE NOT SENT: no file exists at /x');
+  });
+});
