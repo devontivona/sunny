@@ -35,6 +35,11 @@ Conversation window assembly SHALL, when a thread has a compaction summary, buil
 - **WHEN** a turn starts on a thread with a compaction summary
 - **THEN** the model prompt contains the summary followed by only the post-watermark messages verbatim
 
+#### Scenario: Boundary is exact — no overlap, no gap
+- **WHEN** the window is assembled for a compacted thread
+- **THEN** every stored row is either covered by the summary (at-or-before the watermark tuple) or replayed verbatim (strictly after it), with the same ordering used on both sides of the comparison
+- **AND** the verbatim tail is derived from the thread's single live watermark, never independently selected
+
 #### Scenario: Uncompacted thread unchanged
 - **WHEN** a turn starts on a thread with no compaction summary
 - **THEN** the window behaves exactly as before the overlay existed
