@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   estimateRowTokens,
   IDLE_MARKER,
+  lint,
   lintIndex,
   renderDigest,
+  renderLintReport,
   renderThreadSection,
   spokenHead,
   suggestBoundary,
@@ -40,7 +42,7 @@ function input(over: Partial<DigestInput> = {}): DigestInput {
     now: at(120),
     watermark: null,
     threads: [section()],
-    indexLint: { missingFromIndex: [], staleIndexLines: [] },
+    indexLint: { missingFromIndex: [], staleIndexLines: [], stubLines: [] },
     partial: false,
     coveredThrough: { threadId: 'sendblue:a:b', messageId: 'm1', createdAt: T0 },
     tokenTarget: 100_000,
@@ -84,12 +86,21 @@ describe('renderDigest', () => {
     expect(out).toContain('OLDEST content first');
   });
 
-  it('renders the INDEX lint diff in both directions', () => {
+  it('renders the INDEX lint diff in both directions plus stub upgrades', () => {
     const out = renderDigest(
-      input({ indexLint: { missingFromIndex: ['orphan-topic'], staleIndexLines: ['gone-topic'] } }),
+      input({
+        indexLint: {
+          missingFromIndex: ['orphan-topic'],
+          staleIndexLines: ['gone-topic'],
+          stubLines: ['half-topic'],
+        },
+      }),
     );
     expect(out).toContain('topic doc with NO INDEX line (add one): orphan-topic');
     expect(out).toContain('INDEX line with NO topic doc (remove or fix): gone-topic');
+    expect(out).toContain(
+      'stub INDEX line (replace the placeholder with a real description): half-topic',
+    );
   });
 });
 
@@ -207,17 +218,58 @@ describe('suggestBoundary', () => {
   });
 });
 
-describe('lintIndex', () => {
+describe('lintIndex + renderLintReport', () => {
   it('reports both directions of drift', () => {
     const lint = lintIndex('- travel: trips\n- gone: stale line\n', ['travel', 'orphan']);
     expect(lint.missingFromIndex).toEqual(['orphan']);
     expect(lint.staleIndexLines).toEqual(['gone']);
+    expect(lint.stubLines).toEqual([]);
+  });
+
+  it('flags auto-added stub lines needing a real description (not as stale)', () => {
+    const lint = lintIndex('- travel: trips\n- comet: (stub — auto-added; describe this topic)\n', [
+      'travel',
+      'comet',
+    ]);
+    expect(lint.stubLines).toEqual(['comet']);
+    expect(lint.staleIndexLines).toEqual([]);
+    expect(lint.missingFromIndex).toEqual([]);
   });
 
   it('is clean when INDEX matches topics', () => {
     const lint = lintIndex('- travel: trips\n', ['travel']);
-    expect(lint.missingFromIndex).toEqual([]);
-    expect(lint.staleIndexLines).toEqual([]);
+    expect(lint).toEqual({ missingFromIndex: [], staleIndexLines: [], stubLines: [] });
+    expect(renderLintReport(lint)).toContain('consistent — clean');
+  });
+
+  it('renderLintReport emits one actionable line per finding', () => {
+    const report = renderLintReport({
+      missingFromIndex: ['a'],
+      staleIndexLines: ['b'],
+      stubLines: ['c'],
+    });
+    expect(report.split('\n')).toHaveLength(3);
+    expect(report).not.toContain('clean');
+  });
+});
+
+describe('lint (from-disk verify-after-fix loop)', () => {
+  it('reads the live memory tree and reports clean after the drift is fixed', async () => {
+    const { makeConfig } = await import('../../tests/factories.js');
+    const { memoryPaths } = await import('../../src/memory/index.js');
+    const { mkdirSync, writeFileSync } = await import('node:fs');
+    const config = makeConfig();
+    const paths = memoryPaths(config.runtimeDir);
+    mkdirSync(paths.topicsDir, { recursive: true });
+    writeFileSync(paths.topic('orphan'), 'body\n');
+    writeFileSync(paths.INDEX, '- gone: stale\n');
+
+    const dirty = lint(config);
+    expect(dirty).toContain('topic doc with NO INDEX line (add one): orphan');
+    expect(dirty).toContain('INDEX line with NO topic doc (remove or fix): gone');
+
+    writeFileSync(paths.INDEX, '- orphan: real description of the orphan doc\n');
+    expect(lint(config)).toContain('consistent — clean');
   });
 });
 
