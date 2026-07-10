@@ -66,6 +66,20 @@ describe('buildSystemPrompt', () => {
     expect(p).not.toContain('stay_silent');
   });
 
+  it('media guidance: attachments persist + how to re-read; never claims unreachable (context-lifecycle)', () => {
+    const p = buildSystemPrompt(config, core());
+    expect(p).toContain('saved PERMANENTLY on disk');
+    expect(p).toContain('re-read it instead of asking for a re-send');
+    // The old learned-helplessness phrasing is gone.
+    expect(p).not.toContain('you have NO tool to open it');
+  });
+
+  it('memory guidance: recall returns snippets with ids + recall_expand deep-fetch (context-lifecycle)', () => {
+    const p = buildSystemPrompt(config, core());
+    expect(p).toContain('match SNIPPETS');
+    expect(p).toContain('recall_expand');
+  });
+
   it('is byte-identical when the people context is empty (owner-only cache preserved)', () => {
     const c = core({ user: '- Name: Devon' });
     const plain = buildSystemPrompt(config, c);

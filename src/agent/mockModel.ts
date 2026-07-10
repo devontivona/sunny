@@ -23,12 +23,24 @@ export type MockResponseDescriptor =
    *  mode's interim notes — the translator's source material), then the call. */
   | { type: 'tool-call'; toolName: string; input: string; text?: string };
 
+/** Test seam: every prompt the mock receives is appended to this global array (steps run in
+ *  real Node, so workflow tests can read what the model actually SAW — e.g. that a compacted
+ *  thread replays summary-first with only post-watermark rows). Reset by the test harness. */
+export const TEST_PROMPT_CAPTURE_KEY = Symbol.for('sunny.test.capturedPrompts');
+
+function capturePrompt(prompt: unknown): void {
+  const g = globalThis as Record<symbol, unknown>;
+  const list = (g[TEST_PROMPT_CAPTURE_KEY] ??= []) as unknown[];
+  list.push(prompt);
+}
+
 /** Build the inner `MockLanguageModelV4` (separate fn so the `new` is not a step closure local —
  *  SWC plugin workaround, vercel/workflow#1365). Picks the response by assistant-message count. */
 function buildInner(responses: MockResponseDescriptor[]): MockLanguageModelV4 {
   return new MockLanguageModelV4({
     modelId: 'mock-model',
     doStream: async (options: { prompt: Array<{ role: string }> }) => {
+      capturePrompt(options.prompt);
       const idx = Math.min(
         options.prompt.filter((m) => m.role === 'assistant').length,
         responses.length - 1,

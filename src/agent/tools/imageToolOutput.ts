@@ -27,6 +27,14 @@ export interface InlineImagePreview {
 export const PREVIEW_STRIPPED_NOTE =
   'the image was shown here during the original turn; call view_image on the path to see it again';
 
+/** Extract the durable on-disk path a delivered-image lead names (`…, saved at <path>)`).
+ *  The lead is authored by `sendImageToModelOutput`, so the format is ours on both ends;
+ *  the persist boundary uses this to keep a renderable `mediaPath` on the compacted
+ *  output (the dashboard renders sent images from it — see `renderableMedia`). */
+export function savedPathFrom(text: string): string | null {
+  return /, saved at ([^)]+)\)/.exec(text)?.[1] ?? null;
+}
+
 /** Content-part list for a tool result that carries an image preview. */
 export function imageContent(lead: string, preview: InlineImagePreview): ToolResultOutput {
   return {

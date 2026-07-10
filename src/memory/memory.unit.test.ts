@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   applyMemoryWrite,
   ensureAndLoadPeople,
+  indexHasTopicLine,
   MemoryOverflowError,
   memoryPaths,
   personId,
@@ -132,6 +133,58 @@ describe('applyMemoryWrite — computeNext semantics', () => {
   });
 });
 
+describe('topic-INDEX invariant (context-lifecycle)', () => {
+  it('a fresh topic write appends a stub INDEX line in the same write', async () => {
+    const config = makeConfig();
+    const res = await applyMemoryWrite(config, {
+      file: 'topic:comet-financial',
+      action: 'add',
+      content: 'advisor notes',
+    });
+    expect(res).toMatch(/INDEX line added for "comet-financial"/);
+    const index = readFileSync(memoryPaths(config.runtimeDir).INDEX, 'utf8');
+    expect(index).toContain('- comet-financial: (stub');
+  });
+
+  it('an existing INDEX line is left untouched (no duplicate stub)', async () => {
+    const config = makeConfig();
+    await applyMemoryWrite(config, {
+      file: 'INDEX',
+      action: 'add',
+      content: '- travel-plans: upcoming trips, bookings',
+    });
+    await applyMemoryWrite(config, {
+      file: 'topic:Travel Plans',
+      action: 'add',
+      content: 'flight booked',
+    });
+    const index = readFileSync(memoryPaths(config.runtimeDir).INDEX, 'utf8');
+    expect(index).toBe('- travel-plans: upcoming trips, bookings\n');
+  });
+
+  it('slug matching is token-bounded — `work` does not match `network`', () => {
+    expect(indexHasTopicLine('- network: infra notes', 'work')).toBe(false);
+    expect(indexHasTopicLine('- work: job stuff', 'work')).toBe(true);
+    expect(indexHasTopicLine('see topics/work.md', 'work')).toBe(true);
+  });
+
+  it('INDEX at cap: the stub is skipped (best-effort) and the topic write still succeeds', async () => {
+    const config = makeConfig({
+      memory: { userMaxChars: 8000, sunnyMaxChars: 6000, indexMaxChars: 30 },
+    });
+    await applyMemoryWrite(config, { file: 'INDEX', action: 'add', content: 'x'.repeat(25) });
+    const res = await applyMemoryWrite(config, {
+      file: 'topic:big-topic',
+      action: 'add',
+      content: 'body',
+    });
+    expect(res).toMatch(/ok: add on topics\/big-topic\.md/);
+    expect(res).toMatch(/WARNING: INDEX\.md is at its cap/);
+    const index = readFileSync(memoryPaths(config.runtimeDir).INDEX, 'utf8');
+    expect(index).not.toContain('big-topic');
+  });
+});
+
 describe('core-file overflow', () => {
   it('throws MemoryOverflowError when a capped core file exceeds its cap', async () => {
     const config = makeConfig({
@@ -241,7 +294,7 @@ describe('execRecall — cross-thread attribution (multiplayer-family)', () => {
   const dm = (num: string) => `sendblue:${b64('+16452438873')}:${b64(num)}`;
   const group = `sendblue:${b64('+16452438873')}:g:${b64('grp1')}`;
 
-  function fakeStore(hits: Array<Partial<import('../gateway/store.js').StoredMessage>>) {
+  function fakeStore(hits: Array<Partial<import('../gateway/store.js').RecallHit>>) {
     return {
       recall: async () =>
         hits.map((h) => ({
@@ -251,6 +304,7 @@ describe('execRecall — cross-thread attribution (multiplayer-family)', () => {
           senderId: KATE,
           senderName: 'Kate',
           text: 'hi',
+          snippet: h.text ?? 'hi',
           payload: null,
           timestamp: new Date('2026-06-28T00:00:00Z'),
           isOwner: false,
@@ -274,14 +328,132 @@ describe('execRecall — cross-thread attribution (multiplayer-family)', () => {
       config,
       'kate',
     );
-    expect(out).toContain('Kate (in the chat with Kate): met you today');
-    expect(out).toContain('Devon (in the chat with Devon): you met Kate!');
-    expect(out).toContain('(in a group chat): in the group');
+    expect(out).toContain('Kate (in the chat with Kate) [id:x]: met you today');
+    expect(out).toContain('Devon (in the chat with Devon) [id:x]: you met Kate!');
+    expect(out).toContain('(in a group chat) [id:x]: in the group');
+  });
+
+  it('renders attachment names + saved paths on a hit (attachment permanence)', async () => {
+    const config = makeConfig({
+      owner: { name: 'Devon', identities: [OWNER] },
+      family: [{ name: 'Kate', identities: [KATE] }],
+    });
+    const { execRecall } = await import('../agent/tools/memory.js');
+    const out = await execRecall(
+      fakeStore([
+        {
+          text: 'here is the statement',
+          payload: {
+            parts: [
+              { type: 'text', text: 'here is the statement' },
+              {
+                type: 'data-attachment',
+                data: {
+                  path: '/home/x/.sunny/media/inbound/x/0.pdf',
+                  mediaType: 'application/pdf',
+                  kind: 'file',
+                  name: 'statement.pdf',
+                  size: 1234,
+                  direction: 'inbound',
+                },
+              },
+            ],
+          },
+        },
+      ]),
+      config,
+      'statement',
+    );
+    expect(out).toContain('attachment: statement.pdf (application/pdf)');
+    expect(out).toContain('saved at /home/x/.sunny/media/inbound/x/0.pdf');
   });
 
   it('returns a no-match message when nothing is found', async () => {
     const config = makeConfig();
     const { execRecall } = await import('../agent/tools/memory.js');
     expect(await execRecall(fakeStore([]), config, 'zzz')).toMatch(/no past messages match/);
+  });
+});
+
+describe('execRecallExpand — deep-fetch one row (context-lifecycle)', () => {
+  const KATE = '+17193146820';
+  const b64 = (s: string) => Buffer.from(s, 'utf8').toString('base64url');
+  const dm = (num: string) => `sendblue:${b64('+16452438873')}:${b64(num)}`;
+
+  function storeWith(row: Partial<import('../gateway/store.js').StoredMessage> | null) {
+    return {
+      messageById: async () =>
+        row && {
+          messageId: 'x',
+          threadId: dm(KATE),
+          role: 'assistant' as const,
+          senderId: 'sunny',
+          senderName: 'Sunny',
+          text: 'flat text',
+          payload: null,
+          timestamp: new Date('2026-06-28T00:00:00Z'),
+          isOwner: false,
+          ...row,
+        },
+    } as unknown as import('../gateway/store.js').ConversationStore;
+  }
+
+  it('renders the full row: text, tool calls with outputs, attachment paths', async () => {
+    const config = makeConfig();
+    const { execRecallExpand } = await import('../agent/tools/memory.js');
+    const out = await execRecallExpand(
+      storeWith({
+        payload: {
+          parts: [
+            { type: 'text', text: 'read your statement' },
+            {
+              type: 'tool-bash',
+              toolCallId: 'c1',
+              state: 'output-available',
+              input: { command: 'pdftotext statement.pdf -' },
+              output: 'total due: $412.50',
+            },
+            {
+              type: 'data-attachment',
+              data: { name: 'statement.pdf', mediaType: 'application/pdf', path: '/m/in/x/0.pdf' },
+            },
+          ],
+        },
+      }),
+      config,
+      'x',
+    );
+    expect(out).toContain('[id:x]');
+    expect(out).toContain('read your statement');
+    expect(out).toContain('[tool bash]');
+    expect(out).toContain('total due: $412.50');
+    expect(out).toContain('attachment: statement.pdf (application/pdf) — saved at /m/in/x/0.pdf');
+  });
+
+  it('caps the rendered row length (~20k)', async () => {
+    const config = makeConfig();
+    const { execRecallExpand } = await import('../agent/tools/memory.js');
+    const out = await execRecallExpand(
+      storeWith({
+        payload: {
+          parts: Array.from({ length: 20 }, (_, i) => ({
+            type: 'text',
+            text: `${i} ${'y'.repeat(4000)}`,
+          })),
+        },
+      }),
+      config,
+      'x',
+    );
+    expect(out.length).toBeLessThan(21_000);
+    expect(out).toContain('truncated at');
+  });
+
+  it('reports an unknown id actionably', async () => {
+    const config = makeConfig();
+    const { execRecallExpand } = await import('../agent/tools/memory.js');
+    expect(await execRecallExpand(storeWith(null), config, 'nope')).toMatch(
+      /no stored message with id/,
+    );
   });
 });

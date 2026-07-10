@@ -40,9 +40,14 @@ export function sendImageToModelOutput({
   }
   const media = output.media as { name?: string; path?: string; url?: string } | undefined;
   const label = media?.name ?? media?.url ?? 'image';
-  // Name the durable copy in the TEXT so it survives the persist boundary (history keeps
-  // only the text parts — see `persistableToolOutput`) and a later turn can view_image it.
-  const where = media?.path ? `, saved at ${media.path}` : '';
+  // Name the durable copy (or passthrough URL) in the TEXT so it survives the persist
+  // boundary (history keeps only the text parts — see `persistableToolOutput`, which
+  // also lifts the path back out for dashboard rendering) and a later turn can view it.
+  const where = media?.path
+    ? `, saved at ${media.path}`
+    : media?.url && media.url !== label
+      ? `, from ${media.url}`
+      : '';
   if (output.preview) {
     return imageContent(
       `Image delivered (${label}${where}). Below is EXACTLY what was sent — verify it is ` +

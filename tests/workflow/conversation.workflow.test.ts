@@ -2,9 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { sql } from 'drizzle-orm';
 import { start } from 'workflow/api';
 import { runConversation } from '../../workflows/conversation.js';
 import {
+  capturedPrompts,
   replyOnce,
   setTurnModel,
   setupTestRuntime,
@@ -148,6 +150,55 @@ describe('runConversation (workflow integration — real Local World)', () => {
     const allToolIds = assistantTurns.flatMap(toolIdsOf);
     expect(allToolIds.filter((id) => id === 'toolu_PRIOR_UNIQUE')).toHaveLength(1);
     expect(new Set(allToolIds).size).toBe(allToolIds.length); // no duplicate tool_use ids anywhere
+  });
+
+  it('compacted thread: the prompt is summary-first + only post-watermark rows; marks only real ids (context-lifecycle)', async () => {
+    ctx = await setupTestRuntime();
+    const threadId = makeChannelEvent({}).threadId;
+
+    // An older, ANSWERED exchange that the dream compacted away.
+    const old = makeChannelEvent({ threadId, text: 'remind me about the tax filing' });
+    await ctx.store.appendInbound(old);
+    await ctx.store.markProcessedMany('imessage', [old.messageId]);
+    await ctx.store.appendTurn(
+      threadId,
+      { id: 'old-turn', role: 'assistant', parts: [{ type: 'text', text: 'filed jointly in April' }] },
+      'filed jointly in April',
+    );
+    // Compact at the assistant turn — the boundary tuple is copied in SQL from the row
+    // (exactly what `sunny dream compact` does), so covered/replayed is precision-exact.
+    const win = await ctx.store.recentWindow(threadId);
+    const boundary = win.at(-1)!;
+    expect(boundary.role).toBe('assistant');
+    await ctx.db.db.execute(sql`
+      INSERT INTO thread_compactions (thread_id, boundary_created_at, boundary_message_id, summary)
+      SELECT thread_id, created_at, message_id, ${'Earlier: taxes discussed — filed jointly in April.'}
+      FROM messages WHERE thread_id = ${threadId} AND message_id = ${boundary.messageId}
+    `);
+
+    // A fresh inbound after the watermark.
+    const fresh = makeChannelEvent({ threadId, text: 'and when is the next estimated payment?' });
+    await ctx.store.appendInbound(fresh);
+    setTurnModel(replyOnce('September 15th'));
+
+    const run = await start(runConversation, [{ threadId }]);
+    await run.returnValue;
+    expect(await run.status).toBe('completed');
+    expect(ctx.gateway.texts()).toEqual(['September 15th']);
+
+    // What the model actually SAW (captured from the mock): the first conversation message
+    // is the summary block (data-framed), the compacted rows are absent, the fresh row present.
+    const prompt = capturedPrompts()[0]!;
+    const flat = JSON.stringify(prompt);
+    const conversation = prompt.filter((m) => m.role !== 'system');
+    expect(JSON.stringify(conversation[0])).toContain('COMPACTED CONVERSATION HISTORY');
+    expect(flat).toContain('Earlier: taxes discussed — filed jointly in April.');
+    expect(flat).toContain('and when is the next estimated payment?');
+    expect(flat).not.toContain('remind me about the tax filing'); // covered rows do not replay
+
+    // markAnswered marked ONLY the real fresh id — the summary block carries no message ids.
+    expect(await ctx.store.hasUnansweredInbound(threadId)).toBe(false);
+    expect((await ctx.store.findUnprocessedInbound()).map((e) => e.messageId)).toEqual([]);
   });
 
   it('is a no-op when there is no unanswered inbound', async () => {

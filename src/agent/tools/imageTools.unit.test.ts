@@ -44,14 +44,14 @@ describe('sendImageToModelOutput', () => {
     });
   });
 
-  it('degrades to text (still naming the media) when no preview could be built', () => {
+  it('degrades to text naming the passthrough URL when no preview could be built', () => {
     const out: SendImageOutput = {
       status: 'delivered',
       media: { url: 'https://x/y.png', mediaType: 'image/*', name: 'y.png' },
     };
     expect(sendImageToModelOutput({ output: out })).toEqual({
       type: 'text',
-      value: 'Image delivered (y.png).',
+      value: 'Image delivered (y.png, from https://x/y.png).',
     });
   });
 

@@ -328,3 +328,91 @@ describe('waitForStableFile (image-send-integrity readiness gate)', () => {
     expect(bytes.toString()).toContain('%PDF');
   });
 });
+
+describe('renderableMedia — send_image parts (image-send-integrity dashboard fix)', () => {
+  it('renders a compacted send_image row from its lifted mediaPath', () => {
+    const payload = {
+      role: 'assistant',
+      parts: [
+        {
+          type: 'tool-send_image',
+          input: { pathOrUrl: '/home/sunny/scene.jpg' },
+          output: {
+            imageShown: true,
+            note: 'Image delivered (scene.jpg, saved at /m/outbound/tok.jpg). Verify:',
+            mediaPath: '/m/outbound/tok.jpg',
+          },
+        },
+      ],
+    };
+    expect(renderableMedia(payload)).toEqual([
+      {
+        disk: '/m/outbound/tok.jpg',
+        url: null,
+        mediaType: 'image/jpeg',
+        kind: 'image',
+        name: 'tok.jpg',
+      },
+    ]);
+  });
+
+  it('renders a legacy (pre-compaction) send_image row from its full media object', () => {
+    const payload = {
+      role: 'assistant',
+      parts: [
+        {
+          type: 'tool-send_image',
+          input: { pathOrUrl: '/home/sunny/scene.jpg' },
+          output: {
+            status: 'delivered',
+            media: {
+              path: '/m/outbound/old.jpg',
+              mediaType: 'image/jpeg',
+              kind: 'image',
+              name: 'scene.jpg',
+            },
+          },
+        },
+      ],
+    };
+    expect(renderableMedia(payload)).toEqual([
+      {
+        disk: '/m/outbound/old.jpg',
+        url: null,
+        mediaType: 'image/jpeg',
+        kind: 'image',
+        name: 'scene.jpg',
+      },
+    ]);
+  });
+
+  it('renders a URL-passthrough send_image row from its compacted text output', () => {
+    const payload = {
+      role: 'assistant',
+      parts: [
+        {
+          type: 'tool-send_image',
+          input: { pathOrUrl: 'https://x/y.png' },
+          output: 'Image delivered (y.png, from https://x/y.png).',
+        },
+      ],
+    };
+    expect(renderableMedia(payload)).toEqual([
+      { disk: null, url: 'https://x/y.png', mediaType: 'image/*', kind: 'image', name: 'y.png' },
+    ]);
+  });
+
+  it('renders nothing for a failed send (error string output)', () => {
+    const payload = {
+      role: 'assistant',
+      parts: [
+        {
+          type: 'tool-send_image',
+          input: { pathOrUrl: '/x.jpg' },
+          output: 'IMAGE NOT SENT: no file exists at /x.jpg',
+        },
+      ],
+    };
+    expect(renderableMedia(payload)).toEqual([]);
+  });
+});

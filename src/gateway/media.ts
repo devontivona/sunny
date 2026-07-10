@@ -572,8 +572,9 @@ interface UiPartLike {
  * the dashboard data layer (to build `src`s) and the authenticated media route
  * (to resolve index → disk path) use this, so their ordering stays identical.
  * - inbound: `data-attachment` parts with a saved `path`.
- * - outbound: a `send_message` tool part whose output carries a durable media
- *   path, or whose input image was an external URL (passed through).
+ * - outbound: a `send_message` (legacy) or `send_image` tool part whose output
+ *   carries a durable media path — full `media` object on pre-compaction rows,
+ *   `mediaPath` on compacted ones (image-send-integrity), or a passthrough URL.
  */
 export function renderableMedia(payload: unknown): RenderableMedia[] {
   const parts = partsOf(payload);
@@ -592,8 +593,12 @@ export function renderableMedia(payload: unknown): RenderableMedia[] {
       }
       continue;
     }
-    if (part.type === 'tool-send_message') {
-      const media = (part.output as { media?: OutboundMediaResult } | undefined)?.media;
+    if (part.type === 'tool-send_message' || part.type === 'tool-send_image') {
+      const output = part.output as
+        | { media?: OutboundMediaResult; mediaPath?: string }
+        | string
+        | undefined;
+      const media = typeof output === 'object' ? output?.media : undefined;
       if (media && 'path' in media && media.path) {
         out.push({
           disk: media.path,
@@ -602,13 +607,41 @@ export function renderableMedia(payload: unknown): RenderableMedia[] {
           kind: media.kind,
           name: media.name,
         });
-      } else if (media && 'url' in media && media.url) {
+        continue;
+      }
+      if (media && 'url' in media && media.url) {
         out.push({
           disk: null,
           url: media.url,
           mediaType: media.mediaType,
           kind: media.kind,
           name: media.name,
+        });
+        continue;
+      }
+      // Compacted send_image row (image-send-integrity): the persist boundary keeps only
+      // the durable copy's path; derive the rest from the filename.
+      const mediaPath = typeof output === 'object' ? output?.mediaPath : undefined;
+      if (mediaPath) {
+        const mediaType = contentTypeForName(mediaPath);
+        out.push({
+          disk: mediaPath,
+          url: null,
+          mediaType,
+          kind: kindForMediaType(mediaType),
+          name: mediaPath.split('/').pop() || 'image',
+        });
+        continue;
+      }
+      // URL passthrough compacts to a plain text output naming the URL.
+      const url = typeof output === 'string' ? /\bhttps?:\/\/[^\s)]+/.exec(output)?.[0] : undefined;
+      if (url) {
+        out.push({
+          disk: null,
+          url,
+          mediaType: 'image/*',
+          kind: 'image',
+          name: url.split('/').pop() || 'image',
         });
       }
     }

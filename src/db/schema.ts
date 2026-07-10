@@ -1,4 +1,5 @@
 import {
+  bigserial,
   boolean,
   index,
   integer,
@@ -221,3 +222,50 @@ export const subagentLinks = pgTable(
 
 export type SubagentLinkRow = typeof subagentLinks.$inferSelect;
 export type NewSubagentLinkRow = typeof subagentLinks.$inferInsert;
+
+/**
+ * Per-thread compaction summaries (context-lifecycle). Written by the dreaming job via
+ * `sunny dream compact` (which owns the validations), read by window assembly as a
+ * READ-TIME OVERLAY: [latest summary] + [verbatim rows strictly after the boundary].
+ * Raw message rows are never deleted or mutated. The boundary is the `(created_at,
+ * message_id)` tuple of a stored row — the SAME ordering `recentWindow` uses, so the
+ * covered/replayed split is exact (no overlap, no gap). The latest row per thread wins
+ * (`seq` — strict insert order); prior rows are retained for audit.
+ */
+export const threadCompactions = pgTable(
+  'thread_compactions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    /** Strict insert order — "latest per thread" without createdAt tie ambiguity. */
+    seq: bigserial('seq', { mode: 'number' }).notNull(),
+    threadId: text('thread_id').notNull(),
+    /** Boundary watermark: the covered-through row's `created_at`… */
+    boundaryCreatedAt: timestamp('boundary_created_at', { withTimezone: true }).notNull(),
+    /** …and `message_id` (the tuple tiebreaker, matching `recentWindow`'s ordering). */
+    boundaryMessageId: text('boundary_message_id').notNull(),
+    /** The summary replayed as the window's head (content contract in skill:dreaming). */
+    summary: text('summary').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('thread_compactions_thread_idx').on(t.threadId, t.seq)],
+);
+
+export type ThreadCompactionRow = typeof threadCompactions.$inferSelect;
+
+/**
+ * The GLOBAL dreaming watermark (context-lifecycle): how far the digest has processed,
+ * advanced only at the END of a successful dream (`sunny dream advance`) so a failed
+ * dream reprocesses its span. Deliberately independent of per-thread compaction
+ * boundaries — the dream may decline to compact a quiet thread yet must still memorize
+ * its content exactly once. A single row (id 'global'), upserted.
+ */
+export const dreamState = pgTable('dream_state', {
+  id: text('id').primaryKey(),
+  coveredThroughCreatedAt: timestamp('covered_through_created_at', {
+    withTimezone: true,
+  }).notNull(),
+  coveredThroughMessageId: text('covered_through_message_id').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export type DreamStateRow = typeof dreamState.$inferSelect;

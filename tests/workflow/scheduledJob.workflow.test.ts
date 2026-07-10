@@ -4,6 +4,7 @@ import { start } from 'workflow/api';
 import { runScheduledJob } from '../../workflows/scheduledJob.js';
 import { schedules, scheduleRuns } from '../../src/db/schema.js';
 import {
+  capturedPrompts,
   setTurnModel,
   setupTestRuntime,
   teardownTestRuntime,
@@ -203,6 +204,53 @@ describe('runScheduledJob (workflow integration — real Local World)', () => {
     expect(await run.status).toBe('completed'); // the bash tool existed and the call succeeded
 
     expect(ctx.gateway.texts()).toEqual(['Tagged 3 docs.']);
+  });
+
+  it('dreaming shape (context-lifecycle): a silent run with the dream grants executes the sunny CLI over bash; idle outcome recorded', async () => {
+    // The dreaming job is a PLAIN scheduled run — no dedicated workflow. This drives the
+    // craft-style shape end-to-end: household/silent + authority ['memory_read',
+    // 'memory_write', 'bash', 'file_read'], with bash actually spawning the repo CLI
+    // (`npx tsx src/cli/index.ts dream`). The bare `dream` invocation deterministically
+    // prints the model-actionable usage (it exits before any DB connect), proving the CLI
+    // is reachable from a granted run; the idle path then records the run without sending.
+    ctx = await setupTestRuntime();
+    const { runId } = await seedScheduleRun('silent');
+    setTurnModel([
+      {
+        type: 'tool-call',
+        toolName: 'bash',
+        input: JSON.stringify({
+          command: 'cd /home/tivona/projects/sunny && npx tsx src/cli/index.ts dream',
+          timeout_ms: 120_000,
+        }),
+      },
+      { type: 'text', text: 'dream: idle' },
+    ]);
+
+    const run = await start(runScheduledJob, [
+      {
+        scheduleId: 's',
+        runId,
+        prompt: 'Dreaming: follow your dreaming skill.',
+        ownerName: 'Devon',
+        audience: { kind: 'household' },
+        authority: ['memory_read', 'memory_write', 'bash', 'file_read', 'file_write'],
+      },
+    ]);
+    await run.returnValue;
+    expect(await run.status).toBe('completed');
+
+    // The CLI actually ran: the second model step's prompt carries its usage output as the
+    // bash tool result (captured from the mock — what the model really saw).
+    const secondStep = capturedPrompts()[1];
+    expect(secondStep, 'the bash step should have produced a second model step').toBeTruthy();
+    expect(JSON.stringify(secondStep)).toContain('usage: sunny');
+
+    // Idle path: nothing sent (silent household run), the run row records the outcome.
+    expect(ctx.gateway.sendCount).toBe(0);
+    const [row] = await ctx.db.db.select().from(scheduleRuns).where(eq(scheduleRuns.id, runId));
+    expect(row?.status).toBe('completed');
+    expect(row?.output).toBe('dream: idle');
   });
 
   it('proactive fan-out (D-RA10): a delivering scheduled run can message a roster member via the bus', async () => {
