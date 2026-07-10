@@ -192,7 +192,13 @@ describe('scheduler ticker (integration)', () => {
     expect(dream.kind).toBe('cron');
     expect(dream.spec).toBe('30 */4 * * *');
     expect(dream.outputTarget).toBe('silent');
-    expect(dream.authority).toEqual(['memory_read', 'memory_write', 'bash', 'file_read']);
+    expect(dream.authority).toEqual([
+      'memory_read',
+      'memory_write',
+      'bash',
+      'file_read',
+      'file_write',
+    ]);
     expect(dream.prompt).toContain('dreaming skill');
     expect(dream.nextRunAt).toBeTruthy();
   });

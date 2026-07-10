@@ -3,7 +3,7 @@ import { and, asc, desc, eq, isNull, lte, notLike, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { dreamState, messages, threadCompactions } from '../db/schema.js';
 import type { SunnyConfig } from '../config/index.js';
-import { indexHasTopicLine, memoryPaths } from '../memory/index.js';
+import { indexHasTopicLine, memoryPaths, personId } from '../memory/index.js';
 import { stripBinaryRuns } from '../agent/delivery.js';
 
 /**
@@ -55,6 +55,8 @@ export interface DigestRow {
   role: string;
   senderId: string;
   senderName: string | null;
+  /** From the stored row — drives the deterministic "(owner)" attribution tag. */
+  isOwner: boolean;
   text: string;
   payload: unknown;
   createdAt: Date;
@@ -219,6 +221,28 @@ export function spokenHead(text: string): string {
   return head.length > ROW_TEXT_MAX_CHARS ? `${head.slice(0, ROW_TEXT_MAX_CHARS)}…(clipped)` : head;
 }
 
+/**
+ * Deterministic speaker attribution so the dream never GUESSES memory routing: the owner's
+ * messages are tagged "(owner)" (their facts → USER.md); every other human participant is
+ * rendered with their people-doc handle (their facts → memory_write file "people:<id>") —
+ * the same `personId` derivation the runtime uses, so the handle always hits the right doc.
+ */
+export function whoOf(row: {
+  role: string;
+  senderId: string;
+  senderName: string | null;
+  isOwner: boolean;
+}): string {
+  if (row.role === 'assistant') return 'Sunny';
+  const name = row.senderName ?? row.senderId;
+  if (row.isOwner) return `${name} (owner)`;
+  try {
+    return `${name} [people:${personId(row.senderId)}]`;
+  } catch {
+    return name; // an identity that slugs to nothing — attribute by name only
+  }
+}
+
 function fmtTs(d: Date): string {
   return d.toISOString().replace('T', ' ').slice(0, 16);
 }
@@ -245,8 +269,9 @@ export function renderThreadSection(section: ThreadSection, tokenTarget: number)
       lines.push(`— lull: ${fmtLull(row.createdAt.getTime() - prev.getTime())} —`);
     }
     prev = row.createdAt;
-    const who = row.role === 'assistant' ? 'Sunny' : (row.senderName ?? row.senderId);
-    lines.push(`[${fmtTs(row.createdAt)}] ${who} [id:${row.messageId}]: ${spokenHead(row.text)}`);
+    lines.push(
+      `[${fmtTs(row.createdAt)}] ${whoOf(row)} [id:${row.messageId}]: ${spokenHead(row.text)}`,
+    );
     lines.push(...digestAttachmentLines(row.payload));
     if (row.role === 'assistant') lines.push(...toolTraceLines(row.payload));
   }
@@ -432,6 +457,7 @@ export async function digest(db: Db, config: SunnyConfig, now: Date = new Date()
         role: r.role,
         senderId: r.senderId,
         senderName: r.senderName,
+        isOwner: r.isOwner,
         text: r.text,
         payload: r.payload,
         createdAt: r.createdAt,

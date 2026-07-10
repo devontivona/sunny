@@ -234,7 +234,7 @@ describe('runScheduledJob (workflow integration — real Local World)', () => {
         prompt: 'Dreaming: follow your dreaming skill.',
         ownerName: 'Devon',
         audience: { kind: 'household' },
-        authority: ['memory_read', 'memory_write', 'bash', 'file_read'],
+        authority: ['memory_read', 'memory_write', 'bash', 'file_read', 'file_write'],
       },
     ]);
     await run.returnValue;

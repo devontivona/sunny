@@ -182,7 +182,7 @@ broadened.
 delegate.
 
 Internal callers may endow bespoke grant lists (e.g. the seeded dreaming schedule holds
-`memory_read, memory_write, bash, file_read`); rows store the resolved grants, so they stay
+`memory_read, memory_write, bash, file_read, file_write`); rows store the resolved grants, so they stay
 self-describing if presets change.
 
 ### Dreaming, compaction & the `sunny` CLI (context lifecycle)
