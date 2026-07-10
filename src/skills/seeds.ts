@@ -707,7 +707,7 @@ The repo on this host: /home/tivona/projects/sunny. Every CLI call is:
 
 4. INDEX LINT. INDEX.md is the router: a topic doc without an accurate INDEX line is
    invisible to future turns. The digest ends with an INDEX LINT report (recompute it
-   anytime with 'dream lint' — detection only, it never edits anything). Fix every
+   anytime with 'memory lint' — detection only, it never edits anything). Fix every
    finding with memory_write on file INDEX — never edit INDEX.md via bash:
    - "topic doc with NO INDEX line" → add a one-line routing entry, "- <slug>: <what the
      doc holds and when to read it>". If you don't know what the doc holds, read_topic
@@ -716,7 +716,7 @@ The repo on this host: /home/tivona/projects/sunny. Every CLI call is:
      existing doc under a misspelled slug, in which case fix the slug.
    - "stub INDEX line" → replace the auto-added "(stub …)" placeholder with a real
      description, reading the topic doc first.
-   After fixing, re-run 'dream lint' and confirm it reports clean; if findings remain,
+   After fixing, re-run 'memory lint' and confirm it reports clean; if findings remain,
    fix those too (one more pass — do not loop indefinitely on a finding you cannot
    resolve; note it in your final line instead).
 
