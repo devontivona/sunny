@@ -1,0 +1,50 @@
+# Design: context-lifecycle
+
+## Context
+
+The Jul 9 financial-advisor session traced five context failures to mechanisms (full evidence in the session analysis; plan of record at `~/.claude/plans/yes-let-s-fold-this-abstract-comet.md`):
+attachments unreachable after window eviction (recall strips refs; prompt teaches helplessness); tool-derived knowledge unindexed (the `text` projection carries only spoken text); window economics (30 *rows* ≈ 170k tokens/~4h on a tool-heavy thread; ~350–400k uncached tokens per step; only the system message has a cache breakpoint); topic-INDEX linkage as unenforced convention (an orphaned topic doc caused the whole incident); and a structurally blind consolidation job (prompt-only input, keyword-FTS-only affordance — confirmed in `workflows/scheduledJob.ts:100` + grants).
+
+Current machinery being built on (explored + verified): `applyMemoryWrite` serialized single-writer with per-write git commit (`src/memory/index.ts:198`); `store.recall` = `plainto_tsquery` over the generated `text_search` column, recency-ordered (`src/gateway/store.ts:469`; DDL in `drizzle/0001_fts.sql`); window pipeline `recentWindow` → `loadPending` → `toModelMessages` with the R6 invariant (`windowUserIds` derived from the same row array that built the prompt, `workflows/conversation.ts:521-527`); message-level `providerOptions.anthropic.cacheControl` supported by the SDK; scheduled runs get tools from stored grant lists (authority model, PR #52); inbound media persists forever at `~/.sunny/media/inbound/<messageId>/<n>.<ext>` with the path already rendered in in-window notes.
+
+## Goals / Non-Goals
+
+**Goals:**
+- Evicted context is *reachable* (recall snippets + `recall_expand` + attachment paths), *cheap* (compaction overlay + cache breakpoints), and *distilled* (dreaming writes memories + summaries).
+- Dreaming is a plain pre-seeded scheduled job driven by a skill + a generic `sunny` CLI — bash/CLIs/skills as the composable surface; harness changes only where bash can't reach (window read side, store/prompt internals).
+- Correctness-critical logic (compaction validations, digest determinism) is repo-owned, typed, and tested — never skill prose.
+- Raw history is immutable: compaction is a read-time overlay.
+
+**Non-Goals:**
+- Migrating existing native tools to the CLI (future direction the CLI *enables*; explicitly not this change).
+- Per-thread or per-person dream runs; semantic/vector recall; media-file cleanup policy.
+- Changing steering, delivery tracking, or the authority model.
+- A moving mid-turn cache breakpoint (follow-up if cache hit-rates disappoint).
+
+## Decisions
+
+1. **Dreaming = scheduled job + skill + CLI, not a workflow profile.** Rejected: a bespoke `runDreamJob` workflow with a native `compact_thread` tool (earlier draft) — more harness, another dispatch branch, tools the conversation must never see. The generic scheduled-run engine already provides durable steps, grants (`memory_read, memory_write, bash, file_read`), household/silent semantics, and skills-index prompting. Cost accepted: idle runs make one small model call (~6/day, pennies), and the watermark advance is procedure-driven (digest prints the exact command; a forgotten advance reprocesses safely under merge-don't-re-add).
+2. **Generic `sunny` CLI (`src/cli/`), dream as its first subcommands.** Rejected: `src/dream/cli.ts` scoped to dreaming — the next job would mint another one-off. Frame: `src/cli/index.ts` thin arg parser; `src/cli/dream.ts` exports `digest/compact/advance` as importable, integration-tested functions; invoked `cd /home/tivona/projects/sunny && npx tsx src/cli/index.ts dream <cmd>`; reads `.env`/config like the runtime; validation failures exit non-zero with model-actionable messages. Future capabilities land as subcommands documented by skills — with the constraint that anything a readonly (bash-less) run needs stays a native tool (hence `recall_expand` is native).
+3. **Two watermarks.** Global `dream_state` (digest progress; advanced only at the end of a successful dream) is independent of per-thread `thread_compactions` boundaries (the model may decline to compact a quiet thread yet must still memorize its content exactly once). Failure semantics: no advance → next dream re-reads the span; prompt says merge-don't-re-add.
+4. **Compaction write validations (in `dream compact`, deterministic):** thread not `subagent:%`; boundary row exists; boundary older than the 30-min freshness margin (protects the `markTurnUndelivered` late-patch race and keeps the window tail cache-stable); **no unanswered user row at-or-before the boundary tuple** — the load-bearing guard: without it a covered-but-unanswered message makes `hasUnansweredInbound` true forever while never appearing in any window → router hot loop. Same tuple ordering as `recentWindow` (`ORDER BY created_at DESC, message_id DESC`). Monotonic vs current watermark; summary ≤ 6000 chars. This also makes dream-vs-live-turn races safe: an in-flight turn's window rows aren't yet answered, so they can't be covered; a row inserted mid-turn takes effect at the next turn's read.
+5. **Summary enters the prompt as a directly-built `ModelMessage`, not a synthetic store row.** A synthetic row would contaminate `setupTurn`'s presence detection (it also reads `recentWindow`), acquire group speaker prefixes in `rowToUIMessage`, and complicate R6/steering exclusion. Built message: `role:'user'`, bracketed data-not-instructions framing, `providerOptions.anthropic.cacheControl`. R6 untouched — `windowUserIds` still derives from the real row array; the summary carries no ids.
+6. **Watermark-aware window only when a compaction row exists** (`compactedWindowMaxRows` 120 cap; overflow falls off oldest-first). No row → legacy 30-row behavior, so deploy day changes nothing until the first dream compacts.
+7. **Token-target verbatim tail (default 100k, `windowTailTokenTarget`), enforced as the digest's *suggested boundary*** (newest row leaving ≈ target tokens of tail, payload-chars/4 estimate) rather than hard truncation — the model compacts at or earlier than the suggestion. Why 100k not 300k: >200k prompts bill input at 2×; cache misses are routine (iMessage gaps > 5-min TTL) so cost/latency scale with uncached prefix (~$1 + 10–20s TTFT at 300k); the Jul 9 precision failures happened *inside* ~400k prompts; compacted content stays one hop away.
+8. **Recall v2 = index fully, display narrowly, fetch deeply.** Projection gains tool-result extracts (strip base64/data-URL runs; ~4k chars/result, ~100KB/row — tsvector hard limit 1MB); `text_search` follows `text` for free. Display via `ts_headline('english', …, 'MaxFragments=2, MaxWords=40')` + message id + attachment refs; recency ordering kept. `recall_expand(messageId)` (native, `memory_read` bundle) returns one full rendered row capped ~20k chars. Verified consumers of `text`: `markTurnUndelivered.includes()` still matches (final text remains in the projection); dashboard previews already slice; dashboard `search()` switches to snippets.
+9. **INDEX invariant in `applyMemoryWrite`**: topic write appends a stub INDEX line when missing, same serialized write, one `commitState`; stub upgrade is a dream duty. Cap overflow on the stub is best-effort (topic write must not fail for it).
+10. **Digest built from `row.text` + payload scan, never `toModelMessages`** (which inlines media bytes). Delivery-failure notes and translator lines already live in the projection, so they ride into the digest for free.
+
+## Risks / Trade-offs
+
+- [Dream forgets `advance`] → digest prints the exact command; reprocessing is safe (merge-don't-re-add); `dream_state.updated_at` is observable in the dashboard-adjacent tables if it stalls.
+- [Bad/sloppy summaries replay into every future turn] → summary contract (rules, not examples) + 6k cap + Sonnet→Opus config flip (`schedule model` param) if quality disappoints; raw rows immutable so a bad summary is correctable by the next dream.
+- [Summarized hostile text becomes persistent prompt injection] → contract mandates describe-never-transcribe for imperative content; residual risk accepted and documented.
+- [Freshness margin vs late delivery-failure patches] → 30-min margin chosen to exceed retry-ladder + callback latencies observed in PR #55 data.
+- [Projection growth bloats DB/FTS] → per-result/per-row caps; binary stripping; tsvector 1MB hard limit respected with headroom.
+- [First dream after deploy digests the entire backlog] → digest cap (150k chars) + oldest-first partial watermark; several dreams to catch up is fine.
+- [Idle model call cost] → accepted (~6/day, small prompt).
+- [`npx tsx` startup latency per CLI call] → seconds, irrelevant at dream cadence.
+
+## Migration Plan
+
+Single PR. Migration 0012 (`thread_compactions`, `dream_state`) auto-applies at boot. `ensureDreamSchedule` deletes the legacy `nightly-consolidation` row and seeds `dreaming` idempotently. No data backfill: threads stay on legacy windows until their first compaction. Rollback: revert + restart — compaction rows simply stop being read; raw history was never touched. Post-deploy verification per tasks.md (fire a dream manually, inspect rows/INDEX/`schedule_runs`, compare per-step input tokens against the ~350–400k baseline).
