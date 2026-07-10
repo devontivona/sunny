@@ -1,7 +1,25 @@
-import { and, asc, desc, eq, inArray, isNull, lt, ne, notInArray, sql } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  getTableColumns,
+  inArray,
+  isNull,
+  lt,
+  ne,
+  notInArray,
+  sql,
+} from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import type { Db } from '../db/client.js';
-import { messages, outboundDeliveries, type OutboundDeliveryRow } from '../db/schema.js';
+import {
+  messages,
+  outboundDeliveries,
+  threadCompactions,
+  type OutboundDeliveryRow,
+  type ThreadCompactionRow,
+} from '../db/schema.js';
 import { attachmentRefsOf, type AttachmentRef, type OutboundMediaResult } from './media.js';
 import { sanitizePgJson, sanitizePgText } from './sanitize.js';
 import { isGroupThreadId } from './threadId.js';
@@ -78,6 +96,9 @@ export class ConversationStore {
   constructor(
     private readonly db: Db,
     private readonly windowSize: number,
+    /** Post-watermark verbatim-tail row cap for COMPACTED threads (context-lifecycle);
+     *  threads with no compaction row keep the legacy `windowSize` behavior. */
+    private readonly compactedWindowMaxRows: number = 120,
   ) {}
 
   /**
@@ -207,18 +228,13 @@ export class ConversationStore {
   }
 
   /** The message ids of this thread's recent window, oldest-first (durable-main-loop
-   *  D5) — the user-message ids the durable run marks processed after answering. */
+   *  D5) — the user-message ids the durable run marks processed after answering.
+   *  Derived FROM `recentWindow` (not a parallel query) so the id set can never diverge
+   *  from the prompt window's rows (R6) — including the compaction-overlay path, where
+   *  the window is the post-watermark tail only. */
   async windowUserIds(threadId: string): Promise<string[]> {
-    const rows = await this.db
-      .select({ messageId: messages.messageId, role: messages.role })
-      .from(messages)
-      .where(eq(messages.threadId, threadId))
-      // Same tiebreaker as `recentWindow` (desc createdAt, desc messageId): on a `createdAt`
-      // tie the two must select the SAME rows, or the id set marked answered could diverge
-      // from the prompt window (R6) — a message in one but not the other is silently dropped.
-      .orderBy(desc(messages.createdAt), desc(messages.messageId))
-      .limit(this.windowSize);
-    return rows.filter((r) => r.role === 'user').map((r) => r.messageId);
+    const window = await this.recentWindow(threadId);
+    return window.filter((m) => m.role === 'user').map((m) => m.messageId);
   }
 
   /**
@@ -445,19 +461,64 @@ export class ConversationStore {
     return null;
   }
 
-  /** Return the recent window for a thread, oldest-first. */
+  /**
+   * The thread's LATEST compaction summary, or null when it has never been compacted
+   * (context-lifecycle). `seq` (strict insert order) picks the winner — `dream compact`
+   * validates monotonic boundaries, so the newest row always covers the most.
+   */
+  async latestCompaction(threadId: string): Promise<ThreadCompactionRow | null> {
+    const rows = await this.db
+      .select()
+      .from(threadCompactions)
+      .where(eq(threadCompactions.threadId, threadId))
+      .orderBy(desc(threadCompactions.seq))
+      .limit(1);
+    return rows[0] ?? null;
+  }
+
+  /**
+   * Return the recent window for a thread, oldest-first. Watermark-aware
+   * (context-lifecycle): when the thread has a compaction summary, the window is the
+   * verbatim rows STRICTLY AFTER the boundary tuple (capped at `compactedWindowMaxRows`,
+   * overflow falling off oldest-first exactly like the legacy window); the summary itself
+   * is prepended at prompt-assembly time (`loadPending`), never as a synthetic row. With
+   * no compaction row this is the legacy fixed-row window — deploy day changes nothing.
+   */
   async recentWindow(threadId: string): Promise<StoredMessage[]> {
+    const compaction = await this.latestCompaction(threadId);
+    const conds = [eq(messages.threadId, threadId)];
+    if (compaction) {
+      // Row-value comparison on the SAME (created_at, message_id) tuple the ordering uses,
+      // so covered vs replayed is exact: no overlap, no gap (design decision 7). Compared
+      // against the STORED tuple via subquery: Postgres keeps microseconds, a JS Date only
+      // milliseconds — binding the JS-roundtripped value would leak the boundary row back
+      // into the window (covered by the summary AND replayed verbatim).
+      conds.push(
+        sql`(${messages.createdAt}, ${messages.messageId}) > (SELECT tc.boundary_created_at, tc.boundary_message_id FROM ${threadCompactions} tc WHERE tc.id = ${compaction.id})`,
+      );
+    }
     const rows = await this.db
       .select()
       .from(messages)
-      .where(eq(messages.threadId, threadId))
+      .where(and(...conds))
       // `createdAt` (defaultNow) can TIE when rows insert in the same instant (rapid inserts on a
       // fast machine — flaked CI), and ties order arbitrarily. `messageId` is a stable secondary
       // key so the window is deterministic. (For real traffic createdAt rarely ties; on a tie the
       // two are effectively simultaneous, so any stable order is fine.)
       .orderBy(desc(messages.createdAt), desc(messages.messageId))
-      .limit(this.windowSize);
+      .limit(compaction ? this.compactedWindowMaxRows : this.windowSize);
     return rows.reverse().map(toStored);
+  }
+
+  /** Fetch ONE stored row by its message id — `recall_expand`'s deep-fetch
+   *  (context-lifecycle recall v2). */
+  async messageById(messageId: string): Promise<StoredMessage | null> {
+    const rows = await this.db
+      .select()
+      .from(messages)
+      .where(eq(messages.messageId, messageId))
+      .limit(1);
+    return rows[0] ? toStored(rows[0]) : null;
   }
 
   /**
@@ -465,17 +526,29 @@ export class ConversationStore {
    * upgrade path). Full-text match via the GIN-indexed tsvector. The recall
    * *interface* is intentionally search-by-query so a `pgvector` semantic
    * implementation can slot in later without agent-loop changes (3.6).
+   *
+   * Each hit carries a `ts_headline` SNIPPET of the match (context-lifecycle recall v2:
+   * index fully, display narrowly) — the projection now includes tool-result extracts, so
+   * returning whole rows would paste tool output walls into context.
    */
-  async recall(query: string, limit = 10): Promise<StoredMessage[]> {
+  async recall(query: string, limit = 10): Promise<RecallHit[]> {
     if (!query.trim()) return [];
     const rows = await this.db
-      .select()
+      .select({
+        ...getTableColumns(messages),
+        snippet: sql<string>`ts_headline('english', ${messages.text}, plainto_tsquery('english', ${query}), 'StartSel=«, StopSel=», MaxFragments=2, MaxWords=40')`,
+      })
       .from(messages)
       .where(sql`"text_search" @@ plainto_tsquery('english', ${query})`)
       .orderBy(desc(messages.timestamp))
       .limit(limit);
-    return rows.map(toStored);
+    return rows.map((r) => ({ ...toStored(r), snippet: r.snippet }));
   }
+}
+
+/** A recall hit: the stored message plus the headline snippet of the match. */
+export interface RecallHit extends StoredMessage {
+  snippet: string;
 }
 
 /** Rebuild normalized attachments (metadata only) from a stored payload's refs. */

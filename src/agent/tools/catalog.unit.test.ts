@@ -15,6 +15,7 @@ describe('toolCatalog', () => {
         'memory_write',
         'read_topic',
         'recall_history',
+        'recall_expand',
         'delegate_task',
         'message',
         'schedule_create',

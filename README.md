@@ -181,8 +181,25 @@ broadened.
 ² Anti-recursion: no preset contains the spawn grants, so no spawned run can schedule or
 delegate.
 
-Internal callers may endow bespoke grant lists (e.g. the nightly-consolidation seed is
-memory-only); rows store the resolved grants, so they stay self-describing if presets change.
+Internal callers may endow bespoke grant lists (e.g. the seeded dreaming schedule holds
+`memory_read, memory_write, bash, file_read`); rows store the resolved grants, so they stay
+self-describing if presets change.
+
+### Dreaming, compaction & the `sunny` CLI (context lifecycle)
+
+Every ~4 hours a seeded **dreaming** schedule (label `dreaming`, silent/household) fires a
+plain scheduled run that follows `skill:dreaming`: it digests everything said since the last
+dream watermark (`sunny dream digest`), folds durable facts into memory (USER/SUNNY/people/
+topic docs, reconciling the topic↔INDEX linkage), and writes a **compaction summary** per busy
+thread (`sunny dream compact`, which owns the validations — freshness margin, the
+no-unanswered-message guard, monotonic boundaries). Window assembly then replays
+[latest summary] + [verbatim post-watermark tail (~100k-token target)] instead of raw evicted
+rows — raw history is never deleted or mutated, and stays one hop away via `recall_history`
+snippets + `recall_expand`. The **`sunny` CLI** (`src/cli/`, run via
+`npx tsx src/cli/index.ts …` over bash) is the generic repo-owned self-interaction surface:
+capabilities that don't warrant native tools ship as tested subcommands documented by skills;
+`dream digest|compact|advance` are its first. Tables: `thread_compactions`, `dream_state`
+(migration 0012).
 
 ### Audience: how a run speaks
 

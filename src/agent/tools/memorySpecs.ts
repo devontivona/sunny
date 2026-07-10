@@ -44,11 +44,13 @@ export const MEMORY_TOOL_SPECS = {
   recall_history: {
     description:
       'Search past message history by keyword across ALL conversations — every thread, not just ' +
-      "this one (the owner's and family members' chats alike). Use it to recall things beyond " +
-      'the recent window OR to cross-reference another conversation (e.g. someone mentions a ' +
-      "person or event you don't see here). Returns matching messages (newest first), each " +
-      'attributed with who said it and which chat it was in, for you to summarize. Use discretion ' +
-      "about repeating one person's private remarks to another.",
+      "this one (the owner's and family members' chats alike). The search covers what was SAID " +
+      'and what past turns READ in tool output (emails, documents, fetched pages). Use it to ' +
+      'recall things beyond the recent window OR to cross-reference another conversation (e.g. ' +
+      "someone mentions a person or event you don't see here). Returns match SNIPPETS (newest " +
+      'first), each attributed with who/which chat, its [id:…], and any attachment names + saved ' +
+      'file paths. For the full message behind a load-bearing snippet, call recall_expand with ' +
+      "its id. Use discretion about repeating one person's private remarks to another.",
     inputSchema: z.object({
       query: z.string().describe('Keywords to search for in past messages.'),
       limit: z
@@ -58,6 +60,16 @@ export const MEMORY_TOOL_SPECS = {
         .max(25)
         .optional()
         .describe('Max messages to return (default 10, max 25).'),
+    }),
+  },
+  recall_expand: {
+    description:
+      'Fetch ONE past message in full by the [id:…] a recall_history snippet showed: the ' +
+      'complete text, the tool calls that turn made with their outputs, and any attachment ' +
+      'names + saved file paths. Use when a snippet looks load-bearing and you need the detail ' +
+      'behind it (length-capped; one message per call).',
+    inputSchema: z.object({
+      messageId: z.string().describe('The message id shown in a recall_history hit ([id:…]).'),
     }),
   },
 };

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { createSchedule, ensureConsolidationSchedule, startScheduler } from './index.js';
+import { createSchedule, ensureDreamSchedule, startScheduler } from './index.js';
 import { schedules, scheduleRuns, type ScheduleRow } from '../db/schema.js';
 import { createTestDb, type TestDb } from '../../tests/db.js';
 import { advanceTimersByTimeAsync, freezeTime, unfreezeTime } from '../../tests/time.js';
@@ -183,13 +183,36 @@ describe('scheduler ticker (integration)', () => {
     expect(runs).toHaveLength(1);
   });
 
-  it('ensureConsolidationSchedule is idempotent', async () => {
-    await ensureConsolidationSchedule(tdb.db, OWNER_THREAD, TZ);
-    await ensureConsolidationSchedule(tdb.db, OWNER_THREAD, TZ);
-    const rows = await tdb.db
+  it('ensureDreamSchedule is idempotent and carries the dream shape (context-lifecycle)', async () => {
+    await ensureDreamSchedule(tdb.db, OWNER_THREAD, TZ);
+    await ensureDreamSchedule(tdb.db, OWNER_THREAD, TZ);
+    const rows = await tdb.db.select().from(schedules).where(eq(schedules.label, 'dreaming'));
+    expect(rows).toHaveLength(1);
+    const dream = rows[0]!;
+    expect(dream.kind).toBe('cron');
+    expect(dream.spec).toBe('30 */4 * * *');
+    expect(dream.outputTarget).toBe('silent');
+    expect(dream.authority).toEqual(['memory_read', 'memory_write', 'bash', 'file_read']);
+    expect(dream.prompt).toContain('dreaming skill');
+    expect(dream.nextRunAt).toBeTruthy();
+  });
+
+  it('ensureDreamSchedule retires the legacy nightly-consolidation seed', async () => {
+    await createSchedule(tdb.db, {
+      kind: 'cron',
+      spec: '0 3 * * *',
+      prompt: 'legacy consolidation',
+      threadId: OWNER_THREAD,
+      timezone: TZ,
+      label: 'nightly-consolidation',
+    });
+    await ensureDreamSchedule(tdb.db, OWNER_THREAD, TZ);
+    const legacy = await tdb.db
       .select()
       .from(schedules)
       .where(eq(schedules.label, 'nightly-consolidation'));
-    expect(rows).toHaveLength(1);
+    expect(legacy).toHaveLength(0);
+    const dream = await tdb.db.select().from(schedules).where(eq(schedules.label, 'dreaming'));
+    expect(dream).toHaveLength(1);
   });
 });

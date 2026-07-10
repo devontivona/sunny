@@ -104,6 +104,64 @@ function unwrapToolOutput(output: unknown): unknown {
   return output;
 }
 
+/** Sanity caps for the tool-result projection extract (context-lifecycle projection v2).
+ *  Per-result keeps one huge read from dominating; per-row keeps the row's generated
+ *  tsvector comfortably under Postgres's 1MB hard limit. */
+export const PROJECTION_CAPS = {
+  perResultChars: 4000,
+  perRowChars: 100_000,
+} as const;
+
+/** Strip binary-ish content (data-URLs, long base64/unbroken runs) from text destined for
+ *  the FTS projection — unsearchable noise that would bloat the tsvector toward its hard
+ *  limit. Pure. */
+export function stripBinaryRuns(text: string): string {
+  return text
+    .replace(/data:[a-z0-9.+-]+\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+/gi, '[data-url stripped]')
+    .replace(/[A-Za-z0-9+/=]{300,}/g, '[binary stripped]');
+}
+
+/**
+ * The searchable tool-result extract of a turn's messages (context-lifecycle projection
+ * v2): each tool result's TEXT, binary-stripped and sanity-bounded — appended to the `text`
+ * projection so facts Sunny READ (emails, documents, fetched pages) become findable by
+ * recall, not only facts it SAID. Pure; the write path stays best-effort around it.
+ */
+export function extractToolResultText(
+  messages: ModelMessage[],
+  caps: { perResultChars: number; perRowChars: number } = PROJECTION_CAPS,
+): string {
+  const chunks: string[] = [];
+  let total = 0;
+  for (const m of messages) {
+    if (m.role !== 'tool' || !Array.isArray(m.content)) continue;
+    for (const p of m.content as Array<Record<string, unknown>>) {
+      if (p.type !== 'tool-result') continue;
+      const text = stripBinaryRuns(stringifyToolValue(unwrapToolOutput(p.output))).trim();
+      if (!text) continue;
+      const clipped =
+        text.length > caps.perResultChars ? `${text.slice(0, caps.perResultChars)}…` : text;
+      const line = `[${typeof p.toolName === 'string' ? p.toolName : 'tool'}] ${clipped}`;
+      if (total + line.length + 1 > caps.perRowChars) return chunks.join('\n');
+      chunks.push(line);
+      total += line.length + 1;
+    }
+  }
+  return chunks.join('\n');
+}
+
+/** Flatten a tool-result value to text for the projection: strings pass through, structured
+ *  values JSON-stringify (best-effort — a cyclic value yields ''). */
+export function stringifyToolValue(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (value == null) return '';
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return '';
+  }
+}
+
 /** All `text` parts of a turn, joined and trimmed (a legacy turn's private scratch;
  *  used with slicing for a live turn's interim/final split — see extractFinalText). */
 export function extractScratch(parts: UIMessage['parts']): string {

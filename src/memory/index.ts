@@ -209,11 +209,45 @@ export function applyMemoryWrite(config: SunnyConfig, input: MemoryWriteInput): 
 
     mkdirSync(join(filePath, '..'), { recursive: true });
     writeFileSync(filePath, next, { mode: 0o644 });
+    // Topic-INDEX invariant (context-lifecycle): a topic write deterministically ensures an
+    // INDEX routing line in the SAME serialized write, so an orphaned (undiscoverable) topic
+    // doc is impossible. Best-effort on the stub itself — the topic write must never fail
+    // for it. One commitState covers both files.
+    let indexNote = '';
+    if (input.file.startsWith('topic:')) {
+      indexNote = ensureIndexLine(paths, config, sanitizeTopic(input.file.slice('topic:'.length)));
+    }
     // Capture the edit in the `state` repo's history (runtime-home). Best-effort:
     // never fails the write, even with no repo (committed on the periodic push).
     await commitState(config.runtimeDir, `memory: ${input.action} ${label}`);
-    return `ok: ${input.action} on ${label} (${next.length} chars)`;
+    return `ok: ${input.action} on ${label} (${next.length} chars)${indexNote}`;
   });
+}
+
+/** Whether INDEX already carries a routing line for a topic slug — a token-boundary match,
+ *  so `work` never piggybacks on `network`. */
+export function indexHasTopicLine(index: string, slug: string): boolean {
+  const escaped = slug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(^|[^a-z0-9-])${escaped}([^a-z0-9-]|$)`, 'im').test(index);
+}
+
+/**
+ * Ensure INDEX.md has a line for a topic (the write-path invariant). Appends a stub hook —
+ * the dreaming job upgrades stubs into descriptive lines — unless a line already exists.
+ * Best-effort on the INDEX cap: an INDEX at capacity skips the stub (with a warning in the
+ * returned note) rather than failing the topic write. Runs INSIDE the serialized writer.
+ */
+function ensureIndexLine(paths: MemoryPaths, config: SunnyConfig, slug: string): string {
+  const index = readIfExists(paths.INDEX);
+  if (indexHasTopicLine(index, slug)) return '';
+  const sep = index === '' || index.endsWith('\n') ? '' : '\n';
+  const stub = `- ${slug}: (stub — auto-added; describe this topic)\n`;
+  const next = `${index}${sep}${stub}`;
+  if (next.length > config.memory.indexMaxChars) {
+    return `; WARNING: INDEX.md is at its cap, so no INDEX line was added for "${slug}" — consolidate INDEX and add one`;
+  }
+  writeFileSync(paths.INDEX, next, { mode: 0o644 });
+  return `; INDEX line added for "${slug}"`;
 }
 
 function computeNext(current: string, input: MemoryWriteInput): string {

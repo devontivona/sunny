@@ -180,7 +180,13 @@ per-profile exceptions.
   model + prompt.
 - `src/gateway/` — normalized `Gateway` seam, Sendblue driver, conversation store, auth.
 - `src/memory/` — files-first memory soul (`~/.sunny/memory/`).
-- `src/scheduler/` — schedules table + ~60s ticker.
+- `src/cli/` — the `sunny` self-interaction CLI (`npx tsx src/cli/index.ts …`), the composable
+  surface for capabilities that don't warrant native tools (context-lifecycle). First
+  subcommands: `dream digest|compact|advance` (the dreaming job's deterministic half; the
+  procedure lives in `skill:dreaming`). Subcommand logic is importable + integration-tested;
+  the entry stays a thin parser. Gotcha: watermark/boundary tuples are copied and compared
+  IN SQL — Postgres timestamps carry microseconds, a JS `Date` truncates to milliseconds.
+- `src/scheduler/` — schedules table + ~60s ticker; seeds the `dreaming` schedule (4h, silent).
 - `src/db/` — Drizzle schema + client; migrations in `drizzle/`.
 - `src/runtime.ts` — memoized startup (DB, migrations, memory, gateway, scheduler). The memo
   is pinned on `globalThis` so Vite's server-module re-eval on a back-end edit doesn't re-run
@@ -201,6 +207,10 @@ per-profile exceptions.
   edits HMR; back-end (`server/`, `src/`) edits hot-reload the server (re-eval), and run
   migrations on the re-eval — be deliberate touching migrations/recovery code on the box.
   `app/` is excluded from Nitro's watcher; Vite handles its HMR.
+- **Check for in-flight WDK runs before restarting the devbox service.** A restart kills any
+  durable run mid-flight (a conversation turn, scheduled job, or subagent gets cancelled —
+  annoying for whoever is mid-conversation). Inspect first (see "Inspect durable runs" below)
+  and wait for active runs to finish, or get the owner's go-ahead before restarting.
 - **Never edit an already-applied Drizzle migration** — the migrator silently skips it
   (keys by journal order, not file hash). Add a *new* migration instead.
 - **Author migrations with `drizzle-kit generate`, never hand-write the SQL.** Edit

@@ -506,6 +506,16 @@ export async function recallStep(query: string, limit?: number): Promise<string>
   return execRecall(store, config, query, limit);
 }
 
+/** Deep-fetch one recalled message in full as a durable step (context-lifecycle recall v2). */
+export async function recallExpandStep(messageId: string): Promise<string> {
+  'use step';
+
+  const { getRuntime } = await import('../src/runtime.js');
+  const { execRecallExpand } = await import('../src/agent/tools/memory.js');
+  const { store, config } = await getRuntime();
+  return execRecallExpand(store, config, messageId);
+}
+
 /**
  * List the durable runs the caller can see (run-audiences Phase 3.2): active schedules they own
  * plus `threadId`'s running subagents. An owner-scoped caller sees ALL schedules; anyone else only
@@ -625,6 +635,10 @@ export function grantTools(grants: Authority, ctx: GrantToolsCtx) {
             ...MEMORY_TOOL_SPECS.recall_history,
             execute: ({ query, limit }: { query: string; limit?: number }) =>
               recallStep(query, limit),
+          }),
+          recall_expand: tool({
+            ...MEMORY_TOOL_SPECS.recall_expand,
+            execute: ({ messageId }: { messageId: string }) => recallExpandStep(messageId),
           }),
         }
       : {}),
