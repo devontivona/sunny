@@ -20,6 +20,8 @@ const USAGE = `usage: sunny <command>
 
 commands:
   dream digest                         print everything since the last dream watermark
+  dream lint                           print the INDEX<->topics consistency report (detection
+                                       only — fix findings via memory_write, re-run until clean)
   dream compact --thread <threadId> --boundary <messageId> (--summary <text> | --summary-file <path>)
                                        write one thread's compaction summary (validated)
   dream advance --thread <threadId> --message <messageId>
@@ -60,6 +62,10 @@ async function main(): Promise<void> {
     switch (command) {
       case 'digest': {
         process.stdout.write(`${await dream.digest(db, config)}\n`);
+        break;
+      }
+      case 'lint': {
+        process.stdout.write(`${dream.lint(config)}\n`);
         break;
       }
       case 'compact': {

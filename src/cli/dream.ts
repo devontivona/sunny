@@ -85,6 +85,8 @@ export interface IndexLint {
   missingFromIndex: string[];
   /** INDEX bullet slugs whose topic doc no longer exists. */
   staleIndexLines: string[];
+  /** INDEX lines still carrying the auto-added "(stub …)" marker — need a real description. */
+  stubLines: string[];
 }
 
 export interface DigestInput {
@@ -154,15 +156,42 @@ export function suggestBoundary(
 
 // --- INDEX lint (pure over the loaded body + slug list) ------------------------------
 
+/**
+ * The INDEX↔topics consistency check (detection ONLY — deterministic, repo-owned). Fixes
+ * are deliberately NOT automated: adding/upgrading a line needs judgement (a real
+ * description of what the doc holds), and every INDEX mutation must go through
+ * `memory_write` (the serialized writer + cap enforcement + git commit), never a CLI
+ * editing the file. Embedded in every digest and exposed standalone as `dream lint` so
+ * the dream can verify its fixes without re-printing a whole digest.
+ */
 export function lintIndex(indexBody: string, topicSlugs: string[]): IndexLint {
   const missingFromIndex = topicSlugs.filter((slug) => !indexHasTopicLine(indexBody, slug));
   const topicSet = new Set(topicSlugs);
   const staleIndexLines: string[] = [];
+  const stubLines: string[] = [];
   for (const line of indexBody.split('\n')) {
     const m = /^\s*-\s*([a-z0-9][a-z0-9-]*)\s*:/.exec(line);
-    if (m && !topicSet.has(m[1]!)) staleIndexLines.push(m[1]!);
+    if (!m) continue;
+    if (!topicSet.has(m[1]!)) staleIndexLines.push(m[1]!);
+    else if (line.includes('(stub')) stubLines.push(m[1]!);
   }
-  return { missingFromIndex, staleIndexLines };
+  return { missingFromIndex, staleIndexLines, stubLines };
+}
+
+/** The lint report, one actionable line per finding — shared verbatim by the digest's
+ *  INDEX LINT section and the standalone `dream lint` command. */
+export function renderLintReport(lint: IndexLint): string {
+  const lines: string[] = [];
+  for (const slug of lint.missingFromIndex) {
+    lines.push(`topic doc with NO INDEX line (add one): ${slug}`);
+  }
+  for (const slug of lint.staleIndexLines) {
+    lines.push(`INDEX line with NO topic doc (remove or fix): ${slug}`);
+  }
+  for (const slug of lint.stubLines) {
+    lines.push(`stub INDEX line (replace the placeholder with a real description): ${slug}`);
+  }
+  return lines.length > 0 ? lines.join('\n') : 'INDEX.md and topics/ are consistent — clean.';
 }
 
 // --- digest rendering (pure) ---------------------------------------------------------
@@ -317,19 +346,7 @@ export function renderDigest(input: DigestInput): string {
     lines.push('');
   }
   lines.push('=== INDEX LINT ===');
-  if (
-    input.indexLint.missingFromIndex.length === 0 &&
-    input.indexLint.staleIndexLines.length === 0
-  ) {
-    lines.push('INDEX.md and topics/ are consistent.');
-  } else {
-    for (const slug of input.indexLint.missingFromIndex) {
-      lines.push(`topic doc with NO INDEX line (add one): ${slug}`);
-    }
-    for (const slug of input.indexLint.staleIndexLines) {
-      lines.push(`INDEX line with NO topic doc (remove or fix): ${slug}`);
-    }
-  }
+  lines.push(renderLintReport(input.indexLint));
   lines.push('');
   lines.push('=== WHEN DONE ===');
   if (input.coveredThrough) {
@@ -482,6 +499,13 @@ export async function digest(db: Db, config: SunnyConfig, now: Date = new Date()
     tokenTarget: config.windowTailTokenTarget,
     repoRoot: process.cwd(),
   });
+}
+
+/** The standalone `dream lint` command: the same report the digest embeds, recomputed
+ *  from the live memory tree — the dream's verify-after-fix loop (re-run until clean).
+ *  Detection only; fixes go through memory_write (see lintIndex). */
+export function lint(config: SunnyConfig): string {
+  return renderLintReport(lintIndexFromDisk(config));
 }
 
 /** INDEX lint against the live memory tree (topics/ dir + INDEX.md). */

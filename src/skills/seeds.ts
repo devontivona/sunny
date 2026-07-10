@@ -705,9 +705,20 @@ The repo on this host: /home/tivona/projects/sunny. Every CLI call is:
    - Respect the core-file caps: on overflow, consolidate (promote detail to a topic doc)
      rather than dropping facts.
 
-4. INDEX LINT. Fix the diff the digest printed: add a line for any topic doc missing one,
-   remove lines whose topic doc is gone, and upgrade "(stub — auto-added…)" lines into
-   real one-line descriptions of what the topic doc holds.
+4. INDEX LINT. INDEX.md is the router: a topic doc without an accurate INDEX line is
+   invisible to future turns. The digest ends with an INDEX LINT report (recompute it
+   anytime with 'dream lint' — detection only, it never edits anything). Fix every
+   finding with memory_write on file INDEX — never edit INDEX.md via bash:
+   - "topic doc with NO INDEX line" → add a one-line routing entry, "- <slug>: <what the
+     doc holds and when to read it>". If you don't know what the doc holds, read_topic
+     it first — never write a guessed description.
+   - "INDEX line with NO topic doc" → remove the line; unless it plainly points at an
+     existing doc under a misspelled slug, in which case fix the slug.
+   - "stub INDEX line" → replace the auto-added "(stub …)" placeholder with a real
+     description, reading the topic doc first.
+   After fixing, re-run 'dream lint' and confirm it reports clean; if findings remain,
+   fix those too (one more pass — do not loop indefinitely on a finding you cannot
+   resolve; note it in your final line instead).
 
 5. COMPACT — one summary per thread that shows a suggested boundary (threads without a
    suggestion need none). Contract and mechanics below.

@@ -16,6 +16,7 @@ The repo SHALL provide a single `sunny` CLI (subcommand-structured, repo-owned, 
 ### Requirement: Dream subcommands
 The CLI SHALL provide the dreaming job's deterministic operations:
 - `dream digest` SHALL emit all conversation messages since the global dream watermark (excluding internal `subagent:` inboxes and anything newer than the freshness margin), grouped per thread with speaker attribution, verbatim spoken text, attachment name+path lines, bounded tool-call traces, inter-message time-gap markers above a lull threshold (surfacing natural episode boundaries), each thread's prior compaction summary, and a suggested compaction boundary that leaves approximately the configured token target of verbatim tail — presented as a ceiling: the dream cuts at the nearest conversational seam at-or-before it; it SHALL emit the INDEX lint diff (topic files vs INDEX bullets, both directions) and the exact `advance` invocation for the digest's covered-through position; it SHALL enforce a global size cap by covering oldest-first and reporting a partial covered-through; and it SHALL print an idle marker when nothing is new.
+- `dream lint` SHALL print the INDEX↔topics consistency report standalone — the same deterministic computation the digest embeds: topic docs missing an INDEX line, INDEX lines whose topic doc is gone, and INDEX lines still carrying the auto-added stub marker (needing a real description). Detection only: the command SHALL NOT modify any file — fixes are the dreaming run's judgement, applied through the memory-write path — and it exists so fixes can be verified (re-run until clean) without re-printing a digest.
 - `dream compact` SHALL perform the compaction write with all validations owned by the context-compaction capability.
 - `dream advance` SHALL upsert the global dream watermark to a given covered-through position.
 
@@ -30,3 +31,7 @@ The CLI SHALL provide the dreaming job's deterministic operations:
 #### Scenario: Size cap yields a partial watermark
 - **WHEN** the unprocessed span exceeds the digest size cap
 - **THEN** the digest covers the oldest content up to the cap and reports a covered-through position before the newest message, so the next dream continues from there
+
+#### Scenario: Lint verifies clean after fixes
+- **WHEN** the dreaming run fixes the digest's INDEX lint findings via memory writes and re-runs `dream lint`
+- **THEN** the report shows the remaining findings, or states the index is clean — without the command itself having modified anything
