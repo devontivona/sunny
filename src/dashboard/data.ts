@@ -295,8 +295,18 @@ export class DashboardData {
 
   async search(query: string, limit = 25) {
     if (!query.trim()) return { results: [] };
+    // Match SNIPPETS, not whole rows (context-lifecycle projection v2): the `text`
+    // projection now includes tool-result extracts, so a full row can be ~100KB of tool
+    // output — the headline shows just the matched fragments.
     const rows = await this.db
-      .select()
+      .select({
+        id: messages.id,
+        threadId: messages.threadId,
+        role: messages.role,
+        timestamp: messages.timestamp,
+        senderName: messages.senderName,
+        snippet: sql<string>`ts_headline('english', ${messages.text}, plainto_tsquery('english', ${query}), 'StartSel=«, StopSel=», MaxFragments=2, MaxWords=40')`,
+      })
       .from(messages)
       .where(sql`"text_search" @@ plainto_tsquery('english', ${query})`)
       .orderBy(desc(messages.timestamp))
@@ -308,7 +318,7 @@ export class DashboardData {
         role: r.role as 'user' | 'assistant',
         timestamp: r.timestamp.toISOString(),
         senderName: r.senderName ?? null,
-        text: r.text,
+        text: r.snippet,
       })),
     };
   }

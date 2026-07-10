@@ -92,36 +92,42 @@ export async function deleteSchedule(db: Db, id: string): Promise<boolean> {
   return res.length > 0;
 }
 
-/** Ensure the nightly memory-consolidation schedule exists (4.7, idempotent). */
-export async function ensureConsolidationSchedule(
-  db: Db,
-  threadId: string,
-  tz: string,
-): Promise<void> {
-  const existing = await db
-    .select()
-    .from(schedules)
-    .where(eq(schedules.label, 'nightly-consolidation'));
+/**
+ * Ensure the DREAMING schedule exists (context-lifecycle; idempotent on `label='dreaming'`),
+ * retiring the legacy `nightly-consolidation` seed it replaces. The dream is a plain
+ * scheduled run: silent (result recorded, nothing sent), skill-driven (the prompt points at
+ * skill:dreaming; the procedure lives there, not here), and grant-scoped to exactly what the
+ * job needs — memory + bash/file_read to run the `sunny dream` CLI. Never the spawn grants.
+ */
+export async function ensureDreamSchedule(db: Db, threadId: string, tz: string): Promise<void> {
+  // The blind nightly pass this replaces (its only input was its own prompt — every
+  // "nothing to consolidate" since June was structurally guaranteed).
+  const legacy = await db
+    .delete(schedules)
+    .where(eq(schedules.label, 'nightly-consolidation'))
+    .returning({ id: schedules.id });
+  if (legacy.length > 0) log.info('removed legacy nightly-consolidation schedule');
+
+  const existing = await db.select().from(schedules).where(eq(schedules.label, 'dreaming'));
   if (existing.length > 0) return;
   await createSchedule(db, {
     kind: 'cron',
-    spec: '0 3 * * *', // 3am in the owner's timezone
+    spec: '30 */4 * * *', // every 4 hours, off the hour
     prompt:
-      'Nightly memory consolidation: review the recent conversation and tidy the memory core — ' +
-      'merge duplicate facts in USER.md, promote bulky detail into topic docs (with an INDEX ' +
-      'line), and keep everything accurate and concise. Reply with a one-line summary of what ' +
-      'you changed, or an empty reply if nothing needed tidying.',
+      'Dreaming (recurring memory maintenance): follow your dreaming skill — read its SKILL.md ' +
+      'and execute the procedure exactly (digest via the sunny CLI, fold durable facts into ' +
+      'memory, reconcile INDEX, write compaction summaries, advance the watermark). End with ' +
+      'the one-line outcome the skill specifies.',
     threadId,
     timezone: tz,
-    label: 'nightly-consolidation',
-    // Maintenance with no news value: record the outcome but send NO proactive message
-    // (durable-subagents D-DS1/§3 — the fix for the unwanted 2am consolidation text).
+    label: 'dreaming',
+    // Maintenance with no news value: record the outcome but send NO proactive message.
     outputTarget: 'silent',
-    // Explicit bespoke grants (internal seeder, not the preset surface): consolidation edits
-    // the memory core and nothing else — readonly lacks memory_write, host is far too broad.
-    authority: ['memory_read', 'memory_write'],
+    // Bespoke grants (internal seeder, not the preset surface): memory duties + the bash/
+    // file_read needed to run `sunny dream` and read the skill. No spawn/registry grants.
+    authority: ['memory_read', 'memory_write', 'bash', 'file_read'],
   });
-  log.info('seeded nightly-consolidation schedule', { threadId });
+  log.info('seeded dreaming schedule', { threadId });
 }
 
 export interface SchedulerDeps {

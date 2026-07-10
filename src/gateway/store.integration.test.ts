@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ConversationStore } from './store.js';
+import { messages, threadCompactions } from '../db/schema.js';
 import { createTestDb, type TestDb } from '../../tests/db.js';
 import { makeChannelEvent, OWNER_THREAD } from '../../tests/factories.js';
 
@@ -153,6 +154,101 @@ describe('ConversationStore (integration, PGlite)', () => {
       });
       // Already on disk — nothing to re-fetch from an expired URL.
       expect(ev?.attachments[0]?.fetchData).toBeUndefined();
+    });
+  });
+
+  describe('recall v2 — snippets + tool-text projection (context-lifecycle)', () => {
+    it('finds facts that live only in the tool-result extract of a turn projection', async () => {
+      const filler = Array.from({ length: 200 }, (_, i) => `word${i}`).join(' ');
+      const projection = `checked your statements\n[tool results]\n[bash] ${filler} the invoice total was zylophant dollars ${filler}`;
+      await store.appendTurn(OWNER_THREAD, { id: 't', role: 'assistant', parts: [] }, projection);
+      const hits = await store.recall('zylophant');
+      expect(hits).toHaveLength(1);
+    });
+
+    it('returns a headline snippet, not the whole stored row', async () => {
+      const filler = Array.from({ length: 500 }, (_, i) => `word${i}`).join(' ');
+      const projection = `ok\n[tool results]\n[bash] ${filler} unique zylophant fact ${filler}`;
+      await store.appendTurn(OWNER_THREAD, { id: 't', role: 'assistant', parts: [] }, projection);
+      const [hit] = await store.recall('zylophant');
+      expect(hit!.snippet).toContain('«zylophant»');
+      expect(hit!.snippet.length).toBeLessThan(500);
+      expect(hit!.snippet.length).toBeLessThan(hit!.text.length);
+    });
+
+    it('messageById deep-fetches one row (and null for an unknown id)', async () => {
+      await store.appendInbound(makeChannelEvent({ messageId: 'deep-1', text: 'deep fetch me' }));
+      const row = await store.messageById('deep-1');
+      expect(row?.text).toBe('deep fetch me');
+      expect(await store.messageById('nope')).toBeNull();
+    });
+  });
+
+  describe('compaction-aware window (context-lifecycle 4.1)', () => {
+    /** Insert a message row with an explicit createdAt so tuple ordering is controllable. */
+    async function insertAt(messageId: string, createdAt: Date, text = messageId) {
+      await tdb.db.insert(messages).values({
+        channel: 'imessage',
+        threadId: OWNER_THREAD,
+        messageId,
+        role: 'user',
+        senderId: '+15551230000',
+        text,
+        isOwner: true,
+        timestamp: createdAt,
+        createdAt,
+      });
+    }
+
+    async function compactAt(messageId: string, createdAt: Date, summary = 'summary') {
+      await tdb.db.insert(threadCompactions).values({
+        threadId: OWNER_THREAD,
+        boundaryCreatedAt: createdAt,
+        boundaryMessageId: messageId,
+        summary,
+      });
+    }
+
+    const t = (s: number) => new Date(Date.UTC(2026, 6, 1, 0, 0, s));
+
+    it('legacy fallback: with no compaction row the fixed-size window is unchanged', async () => {
+      const small = new ConversationStore(tdb.db, 2, 120);
+      for (let i = 0; i < 3; i++) await insertAt(`m${i}`, t(i));
+      const win = await small.recentWindow(OWNER_THREAD);
+      expect(win.map((m) => m.messageId)).toEqual(['m1', 'm2']);
+    });
+
+    it('boundary exclusion: only rows strictly after the watermark tuple replay', async () => {
+      for (let i = 0; i < 4; i++) await insertAt(`m${i}`, t(i));
+      await compactAt('m1', t(1));
+      const win = await store.recentWindow(OWNER_THREAD);
+      expect(win.map((m) => m.messageId)).toEqual(['m2', 'm3']);
+    });
+
+    it('tuple tie: a createdAt tie is broken by messageId, same as the ordering', async () => {
+      await insertAt('m-a', t(5));
+      await insertAt('m-b', t(5)); // same instant — tuple (t5, 'm-b') > (t5, 'm-a')
+      await compactAt('m-a', t(5));
+      const win = await store.recentWindow(OWNER_THREAD);
+      expect(win.map((m) => m.messageId)).toEqual(['m-b']);
+    });
+
+    it('cap overflow: the post-watermark tail keeps the newest compactedWindowMaxRows', async () => {
+      const capped = new ConversationStore(tdb.db, 30, 2);
+      for (let i = 0; i < 5; i++) await insertAt(`m${i}`, t(i));
+      await compactAt('m0', t(0));
+      const win = await capped.recentWindow(OWNER_THREAD);
+      expect(win.map((m) => m.messageId)).toEqual(['m3', 'm4']); // oldest uncompacted fell off
+    });
+
+    it('latestCompaction returns the newest row per thread (supersede by seq)', async () => {
+      for (let i = 0; i < 3; i++) await insertAt(`m${i}`, t(i));
+      await compactAt('m0', t(0), 'first');
+      await compactAt('m1', t(1), 'second');
+      const latest = await store.latestCompaction(OWNER_THREAD);
+      expect(latest?.summary).toBe('second');
+      expect(latest?.boundaryMessageId).toBe('m1');
+      expect(await store.latestCompaction('sendblue:other:thread')).toBeNull();
     });
   });
 

@@ -1,5 +1,5 @@
 import { start } from 'workflow/api';
-import type { MockResponseDescriptor } from '../../src/agent/mockModel.js';
+import { TEST_PROMPT_CAPTURE_KEY, type MockResponseDescriptor } from '../../src/agent/mockModel.js';
 import { ConversationStore } from '../../src/gateway/store.js';
 import type { SunnyConfig } from '../../src/config/index.js';
 import { initMemory } from '../../src/memory/index.js';
@@ -91,9 +91,17 @@ export async function setupTestRuntime(
 
 /** Script the turn's model (reply text, tool calls, the silence sentinel, etc.). Sets the
  *  plain RESPONSES array on the seam global; the workflow's `setupTurn` step reads it and the
- *  body builds the mock (responses[N] is returned for the Nth model step). */
+ *  body builds the mock (responses[N] is returned for the Nth model step). Also resets the
+ *  prompt capture, so `capturedPrompts()` reflects only this scripted turn. */
 export function setTurnModel(responses: MockResponseDescriptor[]): void {
   g[TEST_TURN_MODEL_KEY] = responses;
+  g[TEST_PROMPT_CAPTURE_KEY] = [];
+}
+
+/** Every prompt the mock model received since the last `setTurnModel` (one per model step) —
+ *  what the model actually SAW, for asserting window/summary assembly. */
+export function capturedPrompts(): Array<Array<{ role: string; content: unknown }>> {
+  return (g[TEST_PROMPT_CAPTURE_KEY] ?? []) as Array<Array<{ role: string; content: unknown }>>;
 }
 
 /** Convenience: a turn that replies with one final text (text-as-reply). */
@@ -104,5 +112,6 @@ export function replyOnce(text: string): MockResponseDescriptor[] {
 export async function teardownTestRuntime(ctx: TestRuntimeCtx): Promise<void> {
   delete g[RUNTIME_KEY];
   delete g[TEST_TURN_MODEL_KEY];
+  delete g[TEST_PROMPT_CAPTURE_KEY];
   await ctx.db.teardown();
 }

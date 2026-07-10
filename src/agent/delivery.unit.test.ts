@@ -7,7 +7,9 @@ import {
   extractFinalText,
   extractInterimText,
   extractReportBlocks,
+  extractToolResultText,
   extractTranslatorUpdates,
+  stripBinaryRuns,
   stripNoReply,
   stripNoReport,
   translatorPart,
@@ -149,6 +151,54 @@ describe('text-as-reply extraction (text delivery mode)', () => {
 
   it('extractReportBlocks: an empty block delivers nothing', () => {
     expect(extractReportBlocks('<report>  </report>rest')).toEqual({ reports: [], rest: 'rest' });
+  });
+});
+
+describe('extractToolResultText — projection v2 (context-lifecycle)', () => {
+  const toolResult = (toolName: string, output: unknown): ModelMessage =>
+    ({
+      role: 'tool',
+      content: [{ type: 'tool-result', toolCallId: 'c1', toolName, output }],
+    }) as unknown as ModelMessage;
+
+  it('extracts each tool result labeled by tool name', () => {
+    const out = extractToolResultText([
+      toolResult('bash', { type: 'text', value: 'total due: $412.50' }),
+      toolResult('recall_history', { type: 'json', value: { hits: 2 } }),
+    ]);
+    expect(out).toContain('[bash] total due: $412.50');
+    expect(out).toContain('[recall_history] {"hits":2}');
+  });
+
+  it('ignores non-tool messages and empty outputs', () => {
+    const out = extractToolResultText([
+      { role: 'assistant', content: [{ type: 'text', text: 'narration' }] } as ModelMessage,
+      toolResult('bash', { type: 'text', value: '   ' }),
+    ]);
+    expect(out).toBe('');
+  });
+
+  it('caps each result and the row total', () => {
+    const big = 'x'.repeat(10_000);
+    const out = extractToolResultText(
+      [
+        toolResult('bash', { type: 'text', value: big }),
+        toolResult('bash', { type: 'text', value: big }),
+      ],
+      { perResultChars: 100, perRowChars: 150 },
+    );
+    // First result clipped to ~100 chars; the second would exceed the row cap and is dropped.
+    expect(out.length).toBeLessThanOrEqual(150);
+    expect(out.startsWith('[bash] ')).toBe(true);
+  });
+
+  it('strips data-URLs and long base64 runs (binary never enters the projection)', () => {
+    const b64 = Buffer.from('a'.repeat(400)).toString('base64');
+    expect(stripBinaryRuns(`before data:image/png;base64,${b64} after`)).toBe(
+      'before [data-url stripped] after',
+    );
+    expect(stripBinaryRuns(`raw ${b64} tail`)).toBe('raw [binary stripped] tail');
+    expect(stripBinaryRuns('a normal sentence stays')).toBe('a normal sentence stays');
   });
 });
 

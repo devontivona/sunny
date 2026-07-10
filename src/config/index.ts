@@ -70,8 +70,28 @@ export const ConfigSchema = z.object({
     .default([]),
   /** Whether to answer in authorized group chats (R1: answerable, owner-only actions). */
   allowGroups: z.boolean().default(true),
-  /** Recent-window size for the conversation store (task 2.3). */
+  /** Recent-window size for the conversation store (task 2.3). Legacy path: applies to
+   *  threads with NO compaction row (context-lifecycle — deploy day changes nothing). */
   recentWindowSize: z.number().int().positive().default(30),
+  /** Post-watermark verbatim-tail row cap for COMPACTED threads (context-lifecycle).
+   *  Overflow falls off oldest-first (recall-reachable; folded in by the next dream). */
+  compactedWindowMaxRows: z.number().int().positive().default(120),
+  /** Verbatim-tail token target (chars/4 estimate) used by `dream digest` to SUGGEST a
+   *  compaction boundary — a ceiling the dream cuts at-or-before, never hard truncation. */
+  windowTailTokenTarget: z.number().int().positive().default(100_000),
+  /** Dreaming-job knobs (context-lifecycle). */
+  dream: z
+    .object({
+      /** Freshness margin: rows newer than this are excluded from digest AND refused as
+       *  compaction boundaries (protects the `markTurnUndelivered` late-patch race and
+       *  keeps the window-tail cache prefix stable). */
+      marginMinutes: z.number().int().positive().default(30),
+      /** Digest size cap; larger spans cover oldest-first with a partial covered-through. */
+      digestMaxChars: z.number().int().positive().default(150_000),
+      /** Per-thread compaction summary length cap (`dream compact` refuses over it). */
+      summaryMaxChars: z.number().int().positive().default(6000),
+    })
+    .default({ marginMinutes: 30, digestMaxChars: 150_000, summaryMaxChars: 6000 }),
   /** Caps for the always-on core memory files (agent-memory D2). */
   memory: z
     .object({

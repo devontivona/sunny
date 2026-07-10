@@ -15,7 +15,7 @@ import type { ChannelEvent, Gateway } from './gateway/types.js';
 import { initMemory } from './memory/index.js';
 import { initSkills, startSkillSync } from './skills/index.js';
 import { pushState } from './state/index.js';
-import { ensureConsolidationSchedule, startScheduler } from './scheduler/index.js';
+import { ensureDreamSchedule, startScheduler } from './scheduler/index.js';
 import { sendblueDmThreadId } from './gateway/threadId.js';
 import { normalize } from './gateway/auth.js';
 import { scheduleAudience } from './agent/audience.js';
@@ -118,7 +118,7 @@ async function start(): Promise<Runtime> {
   cleanupOutbox(config.runtimeDir, Date.now());
   setInterval(() => cleanupOutbox(config.runtimeDir, Date.now()), 60 * 60_000).unref();
 
-  const store = new ConversationStore(db, config.recentWindowSize);
+  const store = new ConversationStore(db, config.recentWindowSize, config.compactedWindowMaxRows);
   // Channels (durable-main-loop test infra): real Sendblue/iMessage is always wired. With
   // SUNNY_TEST_CHANNEL=1 the programmatic loopback channel is added ALONGSIDE it via a
   // MultiChannelGateway that routes by thread — `loopback:` threads go to the test channel
@@ -236,24 +236,20 @@ async function start(): Promise<Runtime> {
     });
   }
 
-  // Seed the nightly memory-consolidation schedule (run-audiences Phase 1a: restore the caller
-  // the durable-main-loop migration dropped, so fresh installs get consolidation again).
-  // Idempotent (keyed on its label) and delivered `silent`. Addressed to the owner's DM thread,
-  // constructed deterministically from config + SENDBLUE_FROM_NUMBER so it needs no prior inbound.
+  // Seed the dreaming schedule (context-lifecycle: the history-fed replacement for the blind
+  // nightly consolidation — the legacy row is deleted by the seeder). Idempotent (keyed on
+  // its label) and delivered `silent`. Addressed to the owner's DM thread, constructed
+  // deterministically from config + SENDBLUE_FROM_NUMBER so it needs no prior inbound.
   try {
     const ownerId = config.owner.identities[0];
     const from = process.env.SENDBLUE_FROM_NUMBER;
     if (ownerId && from) {
-      await ensureConsolidationSchedule(
-        db,
-        sendblueDmThreadId(from, normalize(ownerId)),
-        config.timezone,
-      );
+      await ensureDreamSchedule(db, sendblueDmThreadId(from, normalize(ownerId)), config.timezone);
     } else {
-      log.info('nightly-consolidation seed skipped — owner identity or SENDBLUE_FROM_NUMBER unset');
+      log.info('dreaming seed skipped — owner identity or SENDBLUE_FROM_NUMBER unset');
     }
   } catch (err) {
-    log.warn('nightly-consolidation seed failed (non-fatal)', { err: String(err) });
+    log.warn('dreaming seed failed (non-fatal)', { err: String(err) });
   }
 
   // Periodic skill-repo sync (D-SK8): keep the local clone fresh from the canonical
