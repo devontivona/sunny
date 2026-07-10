@@ -16,7 +16,7 @@
 ## 3. sunny CLI
 
 - [ ] 3.1 Frame: `src/cli/index.ts` (thin arg parser, env-file/config bootstrap, non-zero model-actionable errors); `src/cli/dream.ts` with importable `digest/compact/advance` functions
-- [ ] 3.2 `dream digest`: global-watermark span (exclude `subagent:%`, freshness margin), per-thread sections (attribution, verbatim `row.text`, attachment lines, bounded tool traces from payload scan), prior compaction summary per thread, suggested boundary vs `windowTailTokenTarget`, INDEX lint diff, printed `advance` command, 150k cap with oldest-first partial coveredThrough, IDLE marker; unit tests on the pure renderer
+- [ ] 3.2 `dream digest`: global-watermark span (exclude `subagent:%`, freshness margin), per-thread sections (attribution, verbatim `row.text`, attachment lines, bounded tool traces from payload scan), prior compaction summary per thread, suggested boundary vs `windowTailTokenTarget` (a ceiling), inter-message lull markers (episode-boundary hints), INDEX lint diff, printed `advance` command, 150k cap with oldest-first partial coveredThrough, IDLE marker; unit tests on the pure renderer
 - [ ] 3.3 `dream compact`: full validation matrix (internal thread, boundary exists, freshness, **no unanswered at-or-before boundary**, monotonic, length cap) + insert; `dream advance`: `dream_state` upsert; integration tests (PGlite) for the refusal matrix + supersede ordering + advance
 - [ ] 3.4 Sanity-run the CLI end-to-end against a scratch DB (`npx tsx src/cli/index.ts dream digest`)
 
@@ -27,7 +27,7 @@
 
 ## 5. Dreaming job (skill + schedule)
 
-- [ ] 5.1 `skill:dreaming` in `SEED_SKILLS` (`src/skills/seeds.ts`): procedure (digest → IDLE short-circuit → memory duties merge-don't-re-add → INDEX lint → per-thread compact at/earlier than suggested boundary → advance → one-line final), summary contract (incl. attachments+paths, DELIVERY FAILURE verbatim, describe-never-transcribe), rules not examples
+- [ ] 5.1 `skill:dreaming` in `SEED_SKILLS` (`src/skills/seeds.ts`): procedure (digest → IDLE short-circuit → memory duties merge-don't-re-add → INDEX lint → per-thread compact at the nearest conversational seam at/earlier than the suggested boundary (completed topic/exchange or lull, always after an assistant turn) → advance → one-line final), summary contract (incl. attachments+paths, DELIVERY FAILURE verbatim, describe-never-transcribe), rules not examples
 - [ ] 5.2 `ensureConsolidationSchedule` → `ensureDreamSchedule` (`src/scheduler/index.ts`): idempotent on `label='dreaming'`, deletes legacy `nightly-consolidation`, cron `'30 */4 * * *'`, silent, authority `['memory_read','memory_write','bash','file_read']`, skill-pointing prompt; update runtime seeding call + scheduler unit tests
 - [ ] 5.3 Workflow test: scripted scheduled run with bash grants executes the CLI (craft-style shape); idle path records the run
 
