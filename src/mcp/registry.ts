@@ -1,7 +1,9 @@
-import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { stateDir } from '../config/index.js';
 import { logger } from '../logger.js';
 import { sanitizeSlug } from '../slug.js';
+import { commitState } from '../state/index.js';
 
 const log = logger('mcp:registry');
 
@@ -67,8 +69,32 @@ export interface McpServerEntry {
 
 export type McpRegistry = Record<string, McpServerEntry>;
 
+/** The registry lives IN the state repo (portability): the server list is learned
+ *  knowledge (URLs, names, purposes — never secrets; OAuth tokens stay machine-local
+ *  under mcp-oauth/), so it restores on a fresh host with the rest of the state clone. */
 export function mcpRegistryPath(runtimeDir: string): string {
+  return join(stateDir(runtimeDir), 'mcp.json');
+}
+
+/** Pre-portability location (`~/.sunny/mcp.json`, machine-local). Moved into the
+ *  state repo on first read; delete once every host has migrated. */
+function legacyMcpRegistryPath(runtimeDir: string): string {
   return join(runtimeDir, 'mcp.json');
+}
+
+/** One-time migration: relocate a legacy machine-local registry into the state repo. */
+function migrateLegacyRegistry(runtimeDir: string): void {
+  const legacy = legacyMcpRegistryPath(runtimeDir);
+  const current = mcpRegistryPath(runtimeDir);
+  if (!existsSync(legacy) || existsSync(current)) return;
+  try {
+    mkdirSync(dirname(current), { recursive: true });
+    renameSync(legacy, current);
+    log.info('migrated mcp registry into the state repo', { from: legacy, to: current });
+    void commitState(runtimeDir, 'mcp: migrate registry into state repo');
+  } catch (err) {
+    log.warn('could not migrate legacy mcp registry (non-fatal)', { err: String(err) });
+  }
 }
 
 /** Normalize a symbolic server name to a stable registry key (shares the one `sanitizeSlug`
@@ -78,6 +104,7 @@ export function normalizeMcpName(name: string): string {
 }
 
 export function loadMcpRegistry(runtimeDir: string): McpRegistry {
+  migrateLegacyRegistry(runtimeDir);
   const file = mcpRegistryPath(runtimeDir);
   if (!existsSync(file)) return {};
   try {
@@ -132,9 +159,12 @@ function writeRegistry(runtimeDir: string, registry: McpRegistry): void {
   // Atomic write: a temp file + rename so a crash or concurrent reader never sees
   // a torn/half-written registry (which would parse-fail and be quarantined).
   const file = mcpRegistryPath(runtimeDir);
+  mkdirSync(dirname(file), { recursive: true });
   const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
   writeFileSync(tmp, `${JSON.stringify(registry, null, 2)}\n`, { mode: 0o644 });
   renameSync(tmp, file);
+  // Registry writes are state writes (runtime-home): commit-on-write, push batched.
+  void commitState(runtimeDir, 'mcp: update registry');
 }
 
 const HTTP_URL_RE = /^https?:\/\/[^/\s]+/i;

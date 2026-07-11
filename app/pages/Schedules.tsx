@@ -23,6 +23,18 @@ function ScheduleCard({ s }: { s: ScheduleView }) {
           <StatusDot ok={s.active} />
           <span className="font-bold text-fg">{s.label ?? '(Unlabeled)'}</span>
           <span className="text-fg-dim">[{s.kind}]</span>
+          {s.fileClass && (
+            <span
+              className="text-fg-dim"
+              title={
+                s.fileClass === 'builtin'
+                  ? 'Defined in agent/builtin/schedules/ — changed only by a code deploy'
+                  : "Standing schedule — a portable file in the state repo (state/schedules/)"
+              }
+            >
+              [{s.fileClass}]
+            </span>
+          )}
         </div>
         <span className="text-fg-dim">{s.active ? 'Active' : 'Inactive'}</span>
       </div>

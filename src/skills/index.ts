@@ -1,30 +1,33 @@
 import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { builtinSkillsDir } from '../agentDir.js';
 import type { SunnyConfig } from '../config/index.js';
 import { logger } from '../logger.js';
 import { sanitizeSlug } from '../slug.js';
-import { SEED_SKILLS } from './seeds.js';
 
 const log = logger('skills');
 const exec = promisify(execFile);
 
 /**
- * Agent-skills runtime (agent-skills D-SK1/2/7/8). Skills are agentskills.io
- * `SKILL.md` files read across three roots under `~/.sunny/skills/`, classified BY
- * LOCATION (D-SK5): `authored/` (self-authored + curated seeds, the canonical-repo
- * clone — trusted), `trusted/<slug>/` (owned source-repo mirrors — trusted), and
- * `installed/` (third-party `npx skills` installs — untrusted). Progressive disclosure mirrors the memory
+ * Agent-skills runtime (agent-skills D-SK1/2/7/8 + the portability change). Skills
+ * are agentskills.io `SKILL.md` files read across four roots, classified BY LOCATION
+ * (D-SK5): `builtin` (shipped in the app repo at `agent/builtin/skills/` — trusted,
+ * read-only, read in place, updated by code deploy), and three under `~/.sunny/skills/`:
+ * `authored/` (self-authored, the canonical-repo clone — trusted), `trusted/<slug>/`
+ * (owned source-repo mirrors — trusted), and `installed/` (third-party `npx skills`
+ * installs — untrusted). Progressive disclosure mirrors the memory
  * core: only name + description are always-on (the index); a body is read on demand
  * (file_read on its SKILL.md). Self-authored skills are validated and
  * written, then committed and pushed to the canonical skill repo (D-SK8) when one
  * is configured (`config.skills.repo`); `~/.sunny/skills` is a clone of it, synced
  * on init. Git access uses the host's own auth (e.g. the gh credential helper).
+ * An authored skill with a builtin's name SHADOWS the builtin (fork-to-customize);
+ * the index annotates the shadow so a stale fork stays visible.
  */
 
-export type TrustTier = 'authored' | 'installed';
+export type TrustTier = 'builtin' | 'authored' | 'installed';
 
 export interface SkillRecord {
   name: string;
@@ -35,6 +38,8 @@ export interface SkillRecord {
   /** Provenance: the owned source repo it came from (e.g. owner/repo), or an explicit
    *  frontmatter `source`. Undefined for primary self-authored skills. */
   source?: string;
+  /** Set when a non-builtin skill hides a builtin of the same name (a fork). */
+  shadowsBuiltin?: boolean;
 }
 
 export interface SkillsBudget {
@@ -276,9 +281,32 @@ function loadInstalledSkills(root: string): SkillRecord[] {
   return out.sort((a, b) => a.name.localeCompare(b.name));
 }
 
-/** Read skills across ALL roots (authored primary + trusted owned sources + installed
- *  third-party), deduped by name with earlier (higher-trust) roots winning, sorted by
- *  name. This is what the prompt index and dashboard use. */
+/** Read the builtin tier: skills shipped IN the app repo (`agent/builtin/skills/
+ *  <name>/SKILL.md`), read in place — never materialized into `~/.sunny` or the
+ *  authored repo (portability D2). Trusted by location; read-only at runtime (the
+ *  structured write path only ever targets `authored/` — customization is a fork). */
+export function loadBuiltinSkills(): SkillRecord[] {
+  const root = builtinSkillsDir();
+  if (!existsSync(root)) return [];
+  const records: SkillRecord[] = [];
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const rec = readSkillRecord(join(root, entry.name, 'SKILL.md'), 'builtin');
+    if (rec) records.push(rec);
+  }
+  return records.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** True when `name` is a builtin skill (used for fork/shadow messaging). */
+export function isBuiltinSkill(name: string): boolean {
+  return existsSync(join(builtinSkillsDir(), sanitizeSkillName(name), 'SKILL.md'));
+}
+
+/** Read skills across ALL roots (authored primary + trusted owned sources + builtin
+ *  + installed third-party), deduped by name with earlier (higher-precedence) roots
+ *  winning — authored > trusted > builtin > installed, so an authored fork SHADOWS
+ *  its builtin (annotated via `shadowsBuiltin`) and a third-party skill can never
+ *  shadow one Sunny owns. Sorted by name; what the prompt index and dashboard use. */
 export function loadAllSkills(config: SunnyConfig): SkillRecord[] {
   const seen = new Set<string>();
   const out: SkillRecord[] = [];
@@ -289,8 +317,16 @@ export function loadAllSkills(config: SunnyConfig): SkillRecord[] {
       out.push(rec);
     }
   }
-  // Third-party installs come last: authored/trusted skills win a name conflict, and a
-  // third-party skill can never shadow one Sunny owns.
+  const builtins = loadBuiltinSkills();
+  const builtinNames = new Set(builtins.map((r) => r.name));
+  for (const rec of out) {
+    if (builtinNames.has(rec.name)) rec.shadowsBuiltin = true;
+  }
+  for (const rec of builtins) {
+    if (seen.has(rec.name)) continue;
+    seen.add(rec.name);
+    out.push(rec);
+  }
   for (const rec of loadInstalledSkills(installedDir(config.runtimeDir))) {
     if (seen.has(rec.name)) continue;
     seen.add(rec.name);
@@ -313,7 +349,9 @@ export function renderSkillIndex(records: SkillRecord[], budget: SkillsBudget): 
       r.description.length > budget.descriptionMaxChars
         ? `${r.description.slice(0, budget.descriptionMaxChars - 1)}…`
         : r.description;
-    return `- ${r.name}: ${desc}`;
+    // A fork hiding a builtin stays visible as such (stale forks are findable).
+    const shadow = r.shadowsBuiltin ? ' (your fork of a builtin)' : '';
+    return `- ${r.name}${shadow}: ${desc}`;
   });
   if (records.length > shown.length) {
     lines.push(`- (+${records.length - shown.length} more not shown)`);
@@ -373,7 +411,10 @@ export function writeSkill(config: SunnyConfig, input: WriteSkillInput): Promise
     mkdirSync(paths.skillDir(name), { recursive: true });
     writeFileSync(paths.skillFile(name), raw, { mode: 0o644 });
     await commitSkillChange(config, `skill: write ${name}`);
-    return `ok: wrote skill "${name}" (${raw.length} chars). Tell ${config.owner.name} you created it.`;
+    const shadow = isBuiltinSkill(name)
+      ? ' Note: this is now your fork of the builtin skill of the same name — it shadows the builtin until deleted.'
+      : '';
+    return `ok: wrote skill "${name}" (${raw.length} chars). Tell ${config.owner.name} you created it.${shadow}`;
   });
 }
 
@@ -382,10 +423,22 @@ export function deleteSkill(config: SunnyConfig, name: string): Promise<string> 
   return serialize(async () => {
     const slug = sanitizeSkillName(name);
     const dir = skillsPaths(config.runtimeDir).skillDir(slug);
-    if (!existsSync(dir)) return `(no skill named "${slug}")`;
+    if (!existsSync(dir)) {
+      if (isBuiltinSkill(slug)) {
+        return (
+          `"${slug}" is a builtin skill — part of Sunny's code, read-only, changed only by a ` +
+          `code deploy. To customize it instead, author a skill with the same name (it will ` +
+          `shadow the builtin).`
+        );
+      }
+      return `(no skill named "${slug}")`;
+    }
     rmSync(dir, { recursive: true, force: true });
     await commitSkillChange(config, `skill: delete ${slug}`);
-    return `ok: deleted skill "${slug}".`;
+    const restored = isBuiltinSkill(slug)
+      ? ' The builtin skill of that name is no longer shadowed and is active again.'
+      : '';
+    return `ok: deleted skill "${slug}".${restored}`;
   });
 }
 
@@ -555,10 +608,10 @@ export function startSkillSync(deps: {
   });
 }
 
-/** Ensure the skills dir exists, sync the canonical repo (D-SK8), then write any
- *  missing bundled seed skills as a FALLBACK (D-SK5) — the repo's versions win;
- *  bundled seeds only fill gaps. Seeds/edits are committed (and pushed) so Sunny's
- *  improvements round-trip to the canonical repo. */
+/** Ensure the skills dir exists and sync the canonical + owned source repos (D-SK8).
+ *  Shipped skills are NOT materialized here: they are the `builtin` tier, read in
+ *  place from `agent/builtin/skills/` in the app repo (portability D2), so a code
+ *  deploy is their only — and sufficient — update channel. */
 export async function initSkills(config: SunnyConfig): Promise<void> {
   // The skill tiers are siblings under `~/.sunny/skills/` (runtime-home). Create the
   // container + the third-party install root (so `npx skills` has somewhere to land
@@ -573,43 +626,6 @@ export async function initSkills(config: SunnyConfig): Promise<void> {
 
   const paths = skillsPaths(config.runtimeDir);
   mkdirSync(paths.root, { recursive: true });
-
-  let changed = 0;
-  for (const seed of SEED_SKILLS) {
-    const file = paths.skillFile(seed.name);
-    if (!existsSync(file)) {
-      mkdirSync(paths.skillDir(seed.name), { recursive: true });
-      writeFileSync(file, seed.content, { mode: 0o644 });
-      changed += 1;
-    }
-    // Install any bundled files (e.g. a skill's own scripts/) write-if-missing, so
-    // the capability travels with the skill and self-heals if removed (D-SK1/D-SK4).
-    for (const asset of seed.assets ?? []) {
-      const dest = join(paths.skillDir(seed.name), asset.dest);
-      if (existsSync(dest)) continue;
-      try {
-        const content = readFileSync(seedAssetPath(asset.src), 'utf8');
-        mkdirSync(dirname(dest), { recursive: true });
-        writeFileSync(dest, content, { mode: asset.mode ?? 0o644 });
-        changed += 1;
-      } catch (err) {
-        log.warn('could not install seed asset (non-fatal)', {
-          skill: seed.name,
-          asset: asset.dest,
-          err: String(err),
-        });
-      }
-    }
-  }
-  if (changed > 0) {
-    log.info('seeded bundled skills', { count: changed });
-    await commitSkillChange(config, 'skill: seed bundled skills');
-  }
-}
-
-/** Resolve a bundled seed asset (`src/skills/seed-assets/<src>`) to an absolute path. */
-function seedAssetPath(src: string): string {
-  return fileURLToPath(new URL(`./seed-assets/${src}`, import.meta.url));
 }
 
 /** Commit a skill change, and push it to the canonical repo when one is configured
@@ -627,7 +643,13 @@ async function commitSkillChange(config: SunnyConfig, message: string): Promise<
   }
   try {
     await exec('git', ['add', '-A'], { cwd: root });
-    await exec('git', ['commit', '-q', '-m', message], { cwd: root });
+    // Fixed committer identity (portability D12): skill persistence must work on a
+    // host with no global git config. (Mirrored in src/state/index.ts.)
+    await exec(
+      'git',
+      ['-c', 'user.name=Sunny', '-c', 'user.email=sunny@sunny.invalid', 'commit', '-q', '-m', message],
+      { cwd: root },
+    );
   } catch (err) {
     log.warn('could not commit skill change (non-fatal)', { err: String(err) });
     return;

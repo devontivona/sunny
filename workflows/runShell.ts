@@ -541,12 +541,15 @@ export async function listRunsStep(
   'use step';
 
   const { getRuntime } = await import('../src/runtime.js');
-  const { listSchedules } = await import('../src/scheduler/index.js');
+  const { listSchedules, computeNextRun } = await import('../src/scheduler/index.js');
   const { listRunningLinks } = await import('../src/agent/delegation.js');
   const { subjectName, scheduleAudience } = await import('../src/agent/audience.js');
-  const { db, config } = await getRuntime();
+  const { db, config, fileSchedules } = await getRuntime();
 
-  const scheds = await listSchedules(db);
+  // File-defined schedules (builtin + standing) merge into the same view, tagged by
+  // class (portability D6/D14). Their next-fire time is recomputed for display (the
+  // live state is the scheduler's in-memory map, not a row).
+  const scheds = [...fileSchedules.list(), ...(await listSchedules(db))];
   const visible = ownerScope
     ? scheds
     : scheds.filter((s) => subjectName(scheduleAudience(s), config) === callerSubject);
@@ -556,8 +559,16 @@ export async function listRunsStep(
   if (visible.length > 0) {
     lines.push('Schedules:');
     for (const s of visible) {
+      const cls = 'fileClass' in s ? s.fileClass : null;
+      const next = cls ? computeNextRun('cron', s.spec, new Date(), s.timezone) : s.nextRunAt;
+      const note =
+        cls === 'builtin'
+          ? ' (system schedule; changed only by code deploy)'
+          : cls === 'standing'
+            ? ' (standing schedule; lives in state/schedules/)'
+            : '';
       lines.push(
-        `  ${s.id} [${s.kind} ${s.spec}]${s.label ? ` "${s.label}"` : ''} next ${s.nextRunAt?.toISOString() ?? 'n/a'}: ${s.prompt.slice(0, 50)}`,
+        `  ${s.id} [${cls ? `${cls} ` : ''}${s.kind} ${s.spec}]${s.label ? ` "${s.label}"` : ''} next ${next?.toISOString() ?? 'n/a'}: ${s.prompt.slice(0, 50)}${note}`,
       );
     }
   }

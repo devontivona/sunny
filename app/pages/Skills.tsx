@@ -4,12 +4,14 @@ import { Markdown } from '../components/Markdown';
 import { Link } from '../components/Link';
 import { ErrorNote, Loading, PageTitle, Panel, useAsync } from '../components/ui';
 
-// Skills directory (web-dashboard agent-tooling delta): every installed and
-// self-authored skill with its description, trust tier (authored vs installed),
-// and source — each openable at `skills/<name>` to view the full SKILL.md and the
-// other files it ships. Observe-only: no control to run, edit, install, or delete.
+// Skills directory (web-dashboard agent-tooling delta): every builtin, installed,
+// and self-authored skill with its description, trust tier, and source — each
+// openable at `skills/<name>` to view the full SKILL.md and the other files it
+// ships. Observe-only: no control to run, edit, install, or delete. An authored
+// skill that shadows a builtin (a fork) is annotated so stale forks stay visible.
 
 function trustClass(trust: string): string {
+  if (trust === 'builtin') return 'text-fg-dim';
   return trust === 'authored' ? 'text-success' : 'text-warning';
 }
 
@@ -63,6 +65,7 @@ function SkillsHome() {
                 <div className="flex items-baseline gap-sm">
                   <Link to={`skills/${encodeURIComponent(s.name)}`}>{s.name}</Link>
                   <span className={trustClass(s.trust)}>[{s.trust}]</span>
+                  {s.shadowsBuiltin && <span className="text-warning">[fork of builtin]</span>}
                   {s.source && <span className="text-fg-dim">{s.source}</span>}
                 </div>
                 <div className="text-fg-muted">{s.description}</div>

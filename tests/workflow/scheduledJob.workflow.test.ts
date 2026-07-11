@@ -213,6 +213,9 @@ describe('runScheduledJob (workflow integration — real Local World)', () => {
     // (`npx tsx src/cli/index.ts dream`). The bare `dream` invocation deterministically
     // prints the model-actionable usage (it exits before any DB connect), proving the CLI
     // is reachable from a granted run; the idle path then records the run without sending.
+    // `$SUNNY_REPO` is the builtin dreaming skill's exact invocation (portability D10 —
+    // the bash tool exports it), which also keeps this test machine-agnostic: the old
+    // hardcoded /home/tivona path passed locally and failed on the CI runner.
     ctx = await setupTestRuntime();
     const { runId } = await seedScheduleRun('silent');
     setTurnModel([
@@ -220,7 +223,7 @@ describe('runScheduledJob (workflow integration — real Local World)', () => {
         type: 'tool-call',
         toolName: 'bash',
         input: JSON.stringify({
-          command: 'cd /home/tivona/projects/sunny && npx tsx src/cli/index.ts dream',
+          command: 'cd "$SUNNY_REPO" && npx tsx src/cli/index.ts dream',
           timeout_ms: 120_000,
         }),
       },

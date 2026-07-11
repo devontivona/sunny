@@ -23,8 +23,8 @@ agent. The agent core speaks only the normalized `Gateway` seam, with the iMessa
 - **Postgres** — a dedicated **`sunny-postgres`** Docker container (pgvector image) on
   `localhost:5544`, db `sunny`. One instance holds the message archive + tsvector FTS,
   schedules, and the WDK world (`workflow` + `graphile_worker` schemas) — consolidated per
-  D-DE4. App migrations auto-apply at startup; WDK world tables are created once with
-  `npx workflow-postgres-setup`.
+  D-DE4. App migrations AND the WDK world tables auto-apply idempotently at startup (manual
+  equivalent: `npm run db:setup-world`).
 - **Observability** — a self-hosted **Langfuse** stack (`deploy/langfuse/docker-compose.yml`),
   Sunny's OTLP trace backend + trace/trajectory store + cost/usage dashboards (D-OB7). All
   services (web + Postgres/Clickhouse/Redis/minio) bind to `127.0.0.1`. The web UI is published
@@ -38,9 +38,16 @@ agent. The agent core speaks only the normalized `Gateway` seam, with the iMessa
 - **Secrets** — env-only (`.env` locally / the service environment in prod):
   `ANTHROPIC_API_KEY`, `SENDBLUE_API_KEY`, `SENDBLUE_API_SECRET`, `SENDBLUE_FROM_NUMBER`,
   `SENDBLUE_WEBHOOK_SECRET`, `DATABASE_URL`, `WORKFLOW_TARGET_WORLD`, `WORKFLOW_POSTGRES_URL`,
-  and `DASHBOARD_SESSION_SECRET` (+ optional `DASHBOARD_PUBLIC_URL`) for dashboard auth.
-  Non-secret settings live in `~/.sunny/config.json`; the memory soul lives under
-  `~/.sunny/memory/` (its own git repo).
+  `DASHBOARD_SESSION_SECRET` for dashboard auth, and `DASHBOARD_PUBLIC_URL` — this host's
+  public URL, used for approve links, MCP OAuth, and outbound media links (no default: unset,
+  those features degrade with a loud warning). Non-secret settings live in
+  `~/.sunny/config.json`; the memory soul lives under `~/.sunny/state/memory/` (inside the
+  `state` repo, alongside `credentials.json` and `sites/`).
+
+  Developer-authored runtime content is git-committed under **`agent/`** (portability):
+  `agent/builtin/` (builtin skills + system schedules — read in place, authoritative, updated
+  by code deploy) and `agent/seeds/` (memory starters + default config — materialized
+  write-if-missing on first run).
 
 ### First-time setup
 
@@ -60,8 +67,9 @@ sudo apt install -y ripgrep jq fd-find gh tmux   # or user-local static binaries
                        # then make sure the sunny SERVICE's PATH includes them (the devbox cmd's
                        # exported PATH), not just your login shell.
 
-# 3. WDK world tables (idempotent); app migrations apply automatically on first boot
-WORKFLOW_POSTGRES_URL="$DATABASE_URL" npx workflow-postgres-setup
+# 3. Preflight — checks env, host CLIs, git auth, DB, and WDK tables with remediation hints
+npm run doctor
+#    (DB provisioning is automatic: app migrations AND WDK world tables apply on first boot.)
 
 # 4. Owner identity — add your iMessage phone/email to ~/.sunny/config.json → owner.identities
 #    Family (optional) — add trusted people who get the SAME elevated permissions as the owner:
@@ -98,9 +106,12 @@ devbox add langfuse -d "$PWD/deploy/langfuse" -c "PATH=/snap/bin:/usr/bin:/bin d
   `allowedHosts` (in `vite.config.unified.ts`). To run a second instance against the shared
   Postgres (e.g. a staged cutover), isolate its Nitro `buildDir` and set
   `SUNNY_DISABLE_SCHEDULER=1` so only one fires schedules.
-- **Sendblue:** set the project's **Receive** (inbound) webhook to
-  `https://sunny.waywardlane.com/webhooks/sendblue` and the signing secret to
-  `SENDBLUE_WEBHOOK_SECRET`. Health check: `/health`.
+- **Sendblue (manual, per host):** inbound iMessage only works once this host is reachable at
+  a public HTTPS URL (devbox + Cloudflare tunnel here). Set the Sendblue project's **Receive**
+  (inbound) webhook to `<DASHBOARD_PUBLIC_URL>/webhooks/sendblue` (this host:
+  `https://sunny.waywardlane.com/webhooks/sendblue`) and the signing secret to
+  `SENDBLUE_WEBHOOK_SECRET`. Health check: `/health`. Without the Sendblue env vars the
+  service boots with the transport disabled (loopback/test mode) and warns loudly.
 
 ### Programmatic test channel (drive full turns without iMessage)
 
@@ -181,14 +192,14 @@ broadened.
 ² Anti-recursion: no preset contains the spawn grants, so no spawned run can schedule or
 delegate.
 
-Internal callers may endow bespoke grant lists (e.g. the seeded dreaming schedule holds
+Internal callers may endow bespoke grant lists (e.g. the builtin dreaming schedule holds
 `memory_read, memory_write, bash, file_read, file_write`); rows store the resolved grants, so they stay
 self-describing if presets change.
 
 ### Dreaming, compaction & the `sunny` CLI (context lifecycle)
 
-Every ~4 hours a seeded **dreaming** schedule (label `dreaming`, silent/household) fires a
-plain scheduled run that follows `skill:dreaming`: it digests everything said since the last
+Every ~4 hours the builtin **dreaming** schedule (`agent/builtin/schedules/dreaming.md`,
+silent/household) fires a plain scheduled run that follows `skill:dreaming`: it digests everything said since the last
 dream watermark (`sunny dream digest`), folds durable facts into memory (USER/SUNNY/people/
 topic docs, reconciling the topic↔INDEX linkage), and writes a **compaction summary** per busy
 thread (`sunny dream compact`, which owns the validations — freshness margin, the

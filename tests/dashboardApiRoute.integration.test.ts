@@ -178,7 +178,12 @@ describe('dashboard media content-type allowlist (S3)', () => {
 
 describe('approval rate-limit ignores client X-Forwarded-For (S5)', () => {
   beforeEach(() =>
-    stubEnv({ DASHBOARD_SESSION_SECRET: 'test-secret', DASHBOARD_DEV_OPEN: undefined }),
+    stubEnv({
+      DASHBOARD_SESSION_SECRET: 'test-secret',
+      DASHBOARD_DEV_OPEN: undefined,
+      // Approve links need an explicit public URL (portability D12 — no fallback).
+      DASHBOARD_PUBLIC_URL: 'https://sunny.example.com',
+    }),
   );
 
   it('rotating X-Forwarded-For does not grant fresh rate-limit buckets', async () => {

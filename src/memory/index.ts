@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { readSeedFile, renderTemplate } from '../agentDir.js';
 import { stateDir, type SunnyConfig } from '../config/index.js';
 import { normalize } from '../gateway/auth.js';
 import { sanitizeSlug } from '../slug.js';
@@ -119,7 +120,11 @@ export async function ensureAndLoadPeople(
   for (const p of people) {
     const file = paths.person(p.id);
     if (!existsSync(file)) {
-      writeFileSync(file, starterPerson(p.name, p.identity), { mode: 0o644 });
+      writeFileSync(
+        file,
+        renderTemplate(readSeedFile('memory', 'PERSON.md'), { name: p.name, identity: p.identity }),
+        { mode: 0o644 },
+      );
       created = true;
     }
     docs.push({ id: p.id, name: p.name, content: readIfExists(file) });
@@ -142,9 +147,9 @@ export async function initMemory(config: SunnyConfig): Promise<void> {
   mkdirSync(paths.topicsDir, { recursive: true });
   mkdirSync(paths.peopleDir, { recursive: true });
 
-  seedIfAbsent(paths.USER, starterUser(config.owner.name));
-  seedIfAbsent(paths.SUNNY, starterSunny());
-  seedIfAbsent(paths.INDEX, starterIndex());
+  seedIfAbsent(paths.USER, renderTemplate(readSeedFile('memory', 'USER.md'), { ownerName: config.owner.name }));
+  seedIfAbsent(paths.SUNNY, readSeedFile('memory', 'SUNNY.md'));
+  seedIfAbsent(paths.INDEX, readSeedFile('memory', 'INDEX.md'));
 
   await commitState(config.runtimeDir, 'memory: seed core');
 }
@@ -323,37 +328,3 @@ function seedIfAbsent(path: string, content: string): void {
   if (!existsSync(path)) writeFileSync(path, content, { mode: 0o644 });
 }
 
-function starterUser(owner: string): string {
-  return `# USER — model of ${owner}
-
-_Durable facts about ${owner}: identity, preferences, people, comms style. Sunny keeps this current; ${owner} can hand-edit it._
-
-- Name: ${owner}
-`;
-}
-
-function starterPerson(name: string, identity: string): string {
-  return `# ${name} — profile
-
-_Durable facts about ${name} (a family member who messages Sunny): identity, preferences, people, comms style. Sunny keeps this current. Use discretion about sharing one person's facts with another._
-
-- Name: ${name}
-- Identity: ${identity}
-`;
-}
-
-function starterSunny(): string {
-  return `# SUNNY — operating notes
-
-_How Sunny should behave: learned conventions, preferences about its own conduct. Sunny writes this; distinct from facts about the user._
-
-- Be concise and warm over iMessage. Think privately; say only what's worth saying.
-`;
-}
-
-function starterIndex(): string {
-  return `# INDEX — topic router
-
-_One line per topic doc under topics/. Sunny reads a topic only when relevant._
-`;
-}

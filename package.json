@@ -22,6 +22,7 @@
     "eval:audit": "tsx evals/audit-seeds.ts",
     "eval:grid": "node scripts/eval-grid.mjs",
     "db:setup-world": "workflow-postgres-setup",
+    "doctor": "node --env-file-if-exists=.env scripts/doctor.mjs",
     "format": "prettier --write \"src/**/*.ts\" \"server/**/*.ts\" \"plugins/**/*.ts\" \"workflows/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\"",
     "design:lint": "design.md lint DESIGN.md",

@@ -22,7 +22,7 @@ export const FILE_TOOL_SPECS = {
       'is written verbatim: never include file_read line-number prefixes in it — those are ' +
       'display-only.',
     inputSchema: z.object({
-      path: z.string().describe('File path (absolute or ~-relative).'),
+      path: z.string().describe('File path (absolute, ~-relative, or $SUNNY_REPO-relative).'),
       content: z.string().describe('The complete file contents to write, exactly as given.'),
     }),
   },
@@ -36,7 +36,7 @@ export const FILE_TOOL_SPECS = {
       'match, or multiple matches), re-read the file and widen old_string until it is ' +
       'unique. Use this — not sed or bash heredocs — for surgical file changes.',
     inputSchema: z.object({
-      path: z.string().describe('File path (absolute or ~-relative). Must exist.'),
+      path: z.string().describe('File path (absolute, ~-relative, or $SUNNY_REPO-relative). Must exist.'),
       old_string: z
         .string()
         .describe('The exact text to replace (must match the file verbatim, once).'),

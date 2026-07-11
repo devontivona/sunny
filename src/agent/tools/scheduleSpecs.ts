@@ -17,23 +17,33 @@ export function scheduleToolSpecs(timezone: string) {
       description:
         'Schedule yourself to do something later or on a recurring basis. Translate the ' +
         "user's natural-language timing into a canonical form: kind 'once' with an ISO 8601 " +
-        'timestamp (compute the absolute time, e.g. "in 30 min" or "tomorrow 9am"); kind ' +
-        "'interval' with a duration like '2h'/'30m'/'1d'; or kind 'cron' with a 5-field cron " +
-        `expression (evaluated in the user's timezone, ${timezone}). prompt = what you should ` +
-        'do when it fires. The result is delivered automatically to whoever the schedule is for ' +
-        '(the current person by default, or the "for" person).',
+        'timestamp (compute the absolute time, e.g. "in 30 min" or "tomorrow 9am") for a ' +
+        "one-off reminder; or kind 'cron' with a 5-field cron expression (evaluated in the " +
+        `user's timezone, ${timezone}) for anything recurring — translate periods to cron ` +
+        '(e.g. "every 2 hours" → "0 */2 * * *"). A cron schedule becomes a STANDING schedule: ' +
+        'a portable file in state/schedules/ that is part of your identity and survives ' +
+        'machine moves — give it a meaningful label, and keep its prompt LIGHT (point at a ' +
+        'skill for any nontrivial procedure). prompt = what you should do when it fires. The ' +
+        'result is delivered automatically to whoever the schedule is for (the current person ' +
+        'by default, or the "for" person).',
       inputSchema: z.object({
         kind: z
-          .enum(['once', 'interval', 'cron'])
+          .enum(['once', 'cron'])
           .describe(
-            "'once' (one-time, ISO timestamp) · 'interval' (recurring duration) · 'cron' (5-field " +
-              'cron expression).',
+            "'once' (one-time reminder, ISO timestamp) · 'cron' (recurring standing schedule, " +
+              '5-field cron expression).',
           ),
         spec: z
           .string()
-          .describe("once: ISO timestamp · interval: duration (e.g. '2h') · cron: '0 9 * * *'"),
+          .describe("once: ISO timestamp · cron: '0 9 * * *' (5-field, user's timezone)"),
         prompt: z.string().describe('What to do when it fires.'),
-        label: z.string().optional().describe('Optional short label.'),
+        label: z
+          .string()
+          .optional()
+          .describe(
+            'Short kebab-case label. Effectively required for cron (it names the standing ' +
+              "schedule's file); optional for once.",
+          ),
         for: z
           .string()
           .optional()

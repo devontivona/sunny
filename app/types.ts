@@ -81,9 +81,12 @@ export interface McpServersView {
 export interface SkillEntry {
   name: string;
   description: string;
-  /** 'authored' (self-written, trusted) or 'installed' (third-party). */
+  /** 'builtin' (ships with the code, read-only), 'authored' (self-written, trusted),
+   *  or 'installed' (third-party). */
   trust: string;
   source: string | null;
+  /** True when an authored fork hides the builtin of the same name. */
+  shadowsBuiltin: boolean;
 }
 
 export interface SkillsView {
@@ -211,6 +214,10 @@ export interface ScheduleRunView {
 
 export interface ScheduleView {
   id: string;
+  /** 'builtin' (agent/builtin/schedules/, changed by code deploy) · 'standing'
+   *  (state/schedules/, the agent's portable recurring intents) · null (a one-off
+   *  reminder row). */
+  fileClass: 'builtin' | 'standing' | null;
   kind: string;
   spec: string;
   label: string | null;

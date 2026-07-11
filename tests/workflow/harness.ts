@@ -10,10 +10,11 @@ import {
   type SpawnResult,
 } from '../../src/agent/delegationSupervisor.js';
 import { steerChild as steerChildImpl } from '../../src/agent/delegation.js';
+import { FileScheduleRegistry } from '../../src/scheduler/index.js';
 import { runSubagent } from '../../workflows/subagent.js';
 import { createTestDb, type TestDb } from '../db.js';
 import { FakeGateway } from '../fakes/gateway.js';
-import { makeConfig } from '../factories.js';
+import { makeConfig, OWNER_THREAD } from '../factories.js';
 
 /**
  * Harness for `@workflow/vitest` workflow integration tests (durable-main-loop). The
@@ -38,6 +39,9 @@ export interface TestRuntimeCtx {
   spawnChild: (input: SpawnInput) => Promise<SpawnResult>;
   steerChild: (childThreadId: string, text: string) => Promise<boolean>;
   wakeCalls: string[];
+  /** File-defined schedules (portability D14): a REAL enabled registry over the temp
+   *  runtime dir, so schedule tools exercise the standing-file path. */
+  fileSchedules: FileScheduleRegistry;
 }
 
 /** Stand up a PGlite-backed test runtime and inject it for the workflow's steps.
@@ -52,6 +56,11 @@ export async function setupTestRuntime(
   await initMemory(config); // create the memory tree so instruction assembly reads clean files
   const store = new ConversationStore(db.db, 30);
   const gateway = new FakeGateway();
+  const fileSchedules = new FileScheduleRegistry({
+    runtimeDir: config.runtimeDir,
+    threadId: OWNER_THREAD,
+    timezone: config.timezone,
+  });
 
   // Delegation seams (durable-subagents): a real supervisor over the Local World, so a child
   // run actually starts + reports. `wake` is captured rather than re-routed (no router here).
@@ -77,6 +86,7 @@ export async function setupTestRuntime(
     gateway,
     store,
     db: db.db,
+    fileSchedules,
     wakeThread: wake,
     spawnChild,
     steerChild,
@@ -86,7 +96,7 @@ export async function setupTestRuntime(
     translateOverride: () => '',
     ...runtimeExtras,
   });
-  return { db, store, gateway, config, spawnChild, steerChild, wakeCalls };
+  return { db, store, gateway, config, spawnChild, steerChild, wakeCalls, fileSchedules };
 }
 
 /** Script the turn's model (reply text, tool calls, the silence sentinel, etc.). Sets the

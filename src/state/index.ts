@@ -33,6 +33,11 @@ function cloneUrl(repo: string): string {
     : `https://github.com/${repo}.git`;
 }
 
+/** Fixed committer identity for runtime commits (portability D12): persistence must
+ *  work on a host with NO global git config — without this, every commit fails and
+ *  memory silently stops being versioned. (Mirrored in src/skills/index.ts.) */
+const GIT_IDENTITY = ['-c', 'user.name=Sunny', '-c', 'user.email=sunny@sunny.invalid'];
+
 function isGitRepo(dir: string): boolean {
   return existsSync(join(dir, '.git'));
 }
@@ -73,7 +78,7 @@ export async function initStateRepo(config: SunnyConfig): Promise<void> {
     }
     await exec('git', ['add', '-A'], { cwd: dir });
     try {
-      await exec('git', ['commit', '-q', '-m', 'seed state repo'], { cwd: dir });
+      await exec('git', [...GIT_IDENTITY, 'commit', '-q', '-m', 'seed state repo'], { cwd: dir });
     } catch {
       /* nothing to commit yet (seeds land right after) — fine */
     }
@@ -94,7 +99,7 @@ export async function commitState(runtimeDir: string, message: string): Promise<
   if (!isGitRepo(dir)) return;
   try {
     await exec('git', ['add', '-A'], { cwd: dir });
-    await exec('git', ['commit', '-q', '-m', message], { cwd: dir });
+    await exec('git', [...GIT_IDENTITY, 'commit', '-q', '-m', message], { cwd: dir });
   } catch (err) {
     // Includes the benign "nothing to commit" case (e.g. an idempotent re-write).
     log.debug('state commit no-op or failed (non-fatal)', { err: String(err) });

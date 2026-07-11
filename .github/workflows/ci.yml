@@ -1,6 +1,7 @@
 name: CI
 
-# The merge gate (design D9/D11): typecheck + unit + integration on every change.
+# The merge gate (design D9/D11): typecheck + unit + integration, durable-workflow
+# tests, and the production build (+ dashboard typecheck) on every change.
 # No service container and no Docker — integration uses in-process PGlite (D4).
 # Mostly mock-model and free, with ONE deliberate exception: the real-model
 # recovery regression test (tests/recovery.realmodel.integration.test.ts) calls
@@ -70,3 +71,46 @@ jobs:
           name: coverage
           path: coverage/
           if-no-files-found: ignore
+
+  # Durable-workflow tests (@workflow/vitest Local World + PGlite — no services, no
+  # real model). A separate lane because they run the REAL runConversation/subagent
+  # workflows (~3 min): previously local-only, which let a merged PR break them
+  # undetected (the send_image `required` drift, Jul 2026).
+  workflow-tests:
+    name: durable workflow tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Workflow tests (WDK Local World)
+        run: npm run test:workflow
+
+  # The production build + the dashboard SPA's typecheck — neither was previously in
+  # CI (the unified vite build was "build locally before merging", which relies on
+  # remembering to). The build exercises the WDK builders' whole-repo sweep, so a
+  # file that would poison the workflow VM bundle fails HERE, not at deploy.
+  build:
+    name: production build + dashboard typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Dashboard typecheck (app/ tsconfig)
+        run: npm run dashboard:typecheck
+
+      - name: Production build (unified vite + nitro + WDK)
+        run: NITRO_VITE=1 node node_modules/vite/bin/vite.js build --config vite.config.unified.ts

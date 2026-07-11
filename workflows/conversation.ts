@@ -9,6 +9,7 @@ import { MESSAGE_SPEC } from '../src/agent/tools/messageSpec.js';
 import { RUNS_TOOL_SPECS, scheduleToolSpecs } from '../src/agent/tools/scheduleSpecs.js';
 import type { McpToolDef } from '../src/mcp/turnTools.js';
 import { DELEGATE_TASK_SPEC, type ChildModelName } from '../src/agent/tools/delegationSpecs.js';
+import { MAX_CONCURRENT_CHILDREN } from '../src/agent/limits.js';
 import {
   GROUP_AUTHORITY,
   OWNER_DM_AUTHORITY,
@@ -418,7 +419,7 @@ function buildTools(ctx: {
       ? {
           schedule_create: tool({
             ...scheduleSpecs.schedule_create,
-            execute: (args) => scheduleCreateStep(threadId, ownerPresent, args),
+            execute: (args) => scheduleCreateStep(threadId, ownerPresent, subject, args),
           }),
           cancel_run: tool({
             ...RUNS_TOOL_SPECS.cancel_run,
@@ -858,7 +859,7 @@ async function delegateStep(
   });
   if ('error' in res) {
     if (res.error === 'depth_cap') return 'Delegation refused: max delegation depth reached.';
-    return 'Delegation refused: already at the concurrent-subagent limit (3). Wait for one to finish.';
+    return `Delegation refused: already at the concurrent-subagent limit (${MAX_CONCURRENT_CHILDREN}). Wait for one to finish.`;
   }
   return (
     `Delegated to subagent "${args.label ?? 'subagent'}" (id ${res.childThreadId}). It is working ` +
@@ -970,8 +971,9 @@ async function personRelayStepBody(
 async function scheduleCreateStep(
   threadId: string,
   ownerPresent: boolean,
+  callerSubject: string,
   args: {
-    kind: 'once' | 'interval' | 'cron';
+    kind: 'once' | 'cron';
     spec: string;
     prompt: string;
     label?: string;
@@ -984,7 +986,7 @@ async function scheduleCreateStep(
   const { getRuntime } = await import('../src/runtime.js');
   const { createSchedule } = await import('../src/scheduler/index.js');
   const { rosterMatch, attenuate, authorityForToolset } = await import('../src/agent/audience.js');
-  const { db, config } = await getRuntime();
+  const { db, config, fileSchedules } = await getRuntime();
 
   // "for" schedules this on behalf of ANOTHER family member (run-audiences #4): store an explicit
   // `person:<name>` audience so the fired run acts for + delivers to them, not the creating thread.
@@ -1000,13 +1002,36 @@ async function scheduleCreateStep(
 
   // Monotone attenuation (D-RA5): the preset's grants intersected with this turn's authority —
   // the same semantics as delegate_task, one vocabulary across both spawn verbs. The stored
-  // grants make the row self-describing even if preset definitions later change.
+  // grants make the schedule self-describing even if preset definitions later change.
   const authority = attenuate(
     authorityForToolset(args.toolset),
     conversationAuthority(true, ownerPresent),
   );
 
   try {
+    if (args.kind === 'cron') {
+      // Recurring = STANDING (portability D14): a file in state/schedules/, part of the
+      // agent's portable identity — not a DB row. A standing file carries no machine
+      // thread id, so a family member's schedule needs an explicit audience to keep
+      // delivering to them (the row used to capture this via the creating thread).
+      if (!audience && callerSubject !== config.owner.name) {
+        audience = `person:${callerSubject}`;
+      }
+      const standing = await fileSchedules.createStanding({
+        name: args.label ?? `job-${Date.now().toString(36)}`,
+        cron: args.spec,
+        prompt: args.prompt,
+        audience,
+        authority,
+      });
+      const forWhom = audience ? ` for ${audience.slice('person:'.length)}` : '';
+      return (
+        `Standing schedule "${standing.label}" created (cron ${args.spec})${forWhom}; next run ` +
+        `${standing.nextRunAt?.toISOString() ?? 'n/a'}. It lives at state/schedules/` +
+        `${standing.label}.md — part of your portable identity, restored on any machine.`
+      );
+    }
+    // One-off reminder: consumable event state — a DB row that deactivates when it fires.
     const row = await createSchedule(db, {
       kind: args.kind,
       spec: args.spec,
@@ -1041,7 +1066,26 @@ async function cancelRunStep(
   const { listSchedules, deleteSchedule } = await import('../src/scheduler/index.js');
   const { getLinkByChildThread, completeLink } = await import('../src/agent/delegation.js');
   const { subjectName, scheduleAudience } = await import('../src/agent/audience.js');
-  const { db, config } = await getRuntime();
+  const { db, config, fileSchedules } = await getRuntime();
+
+  // File-defined schedules (portability D6/D14): builtins are code — refuse; standing
+  // schedules are the caller's identity files — deletable, ownership-scoped like rows.
+  const file = fileSchedules.list().find((b) => b.id === id || b.label === id);
+  if (file?.fileClass === 'builtin') {
+    return (
+      `"${file.label}" is a builtin system schedule — part of Sunny's code, changed only by ` +
+      `a code deploy (its definition lives at agent/builtin/schedules/${file.label}.md in the ` +
+      `sunny repo). It can't be cancelled from here.`
+    );
+  }
+  if (file?.fileClass === 'standing') {
+    const owner = subjectName(scheduleAudience(file), config);
+    if (!ownerPresent && owner !== callerSubject) {
+      return `That standing schedule belongs to ${owner}, so I didn't cancel it.`;
+    }
+    await fileSchedules.deleteStanding(file.id);
+    return `Cancelled standing schedule "${file.label}" (removed state/schedules/${file.label}.md).`;
+  }
 
   const sched = (await listSchedules(db)).find((s) => s.id === id);
   if (sched) {

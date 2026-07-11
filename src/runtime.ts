@@ -3,7 +3,8 @@ import { and, desc, eq, sql } from 'drizzle-orm';
 import { runScheduledJob } from '../workflows/scheduledJob.js';
 import { DurableTurnRouter } from './agent/durableRouter.js';
 import { DelegationSupervisor } from './agent/delegationSupervisor.js';
-import { loadConfig, type SunnyConfig } from './config/index.js';
+import { mkdirSync } from 'node:fs';
+import { loadConfig, scratchDir, type SunnyConfig } from './config/index.js';
 import { createDb, runMigrations, type Db } from './db/client.js';
 import { messages, scheduleRuns } from './db/schema.js';
 import { ConversationStore } from './gateway/store.js';
@@ -12,10 +13,17 @@ import { SendblueGateway } from './gateway/sendblue.js';
 import { LoopbackGateway } from './gateway/loopback.js';
 import { MultiChannelGateway } from './gateway/multiChannel.js';
 import type { ChannelEvent, Gateway } from './gateway/types.js';
+import { assertAgentSurface } from './agentDir.js';
 import { initMemory } from './memory/index.js';
 import { initSkills, startSkillSync } from './skills/index.js';
 import { pushState } from './state/index.js';
-import { ensureDreamSchedule, startScheduler } from './scheduler/index.js';
+import {
+  FileScheduleRegistry,
+  loadBuiltinSchedules,
+  migrateCronRowsToStanding,
+  removeLegacySeededSchedules,
+  startScheduler,
+} from './scheduler/index.js';
 import { sendblueDmThreadId } from './gateway/threadId.js';
 import { normalize } from './gateway/auth.js';
 import { scheduleAudience } from './agent/audience.js';
@@ -28,6 +36,11 @@ export interface Runtime {
   gateway: Gateway;
   store: ConversationStore;
   db: Db;
+  /** File-defined schedules (portability D5/D14): builtin (repo) + standing (state
+   *  repo) classes, listed alongside DB reminder rows and mutated live by the
+   *  scheduling tools (standing only). Disabled — empty, creation refused — when the
+   *  owner-DM thread can't be resolved yet (warned loudly at boot). */
+  fileSchedules: FileScheduleRegistry;
   /**
    * Wake a thread's run-supply (durable-subagents D-DS13): ensure the supervisor/router is
    * draining `threadId` as durable runs. Lets a `'use step'` (which can reach the runtime
@@ -91,6 +104,10 @@ export function getRuntime(): Promise<Runtime> {
 }
 
 async function start(): Promise<Runtime> {
+  // The git-committed authored surface (builtin skills/schedules + seed templates)
+  // must be present at cwd — its absence is a packaging error, caught before any
+  // seed/loader quietly comes up empty (portability).
+  assertAgentSurface();
   const config = loadConfig();
 
   if (!process.env.ANTHROPIC_API_KEY) {
@@ -105,6 +122,13 @@ async function start(): Promise<Runtime> {
         'unauthorized. Add your iMessage phone/email to owner.identities.',
     );
   }
+  if (!process.env.DASHBOARD_PUBLIC_URL) {
+    log.warn(
+      'DASHBOARD_PUBLIC_URL is not set — outbound media links, MCP OAuth, and dashboard ' +
+        'approve links need a public URL and will degrade until it is configured (there is ' +
+        'deliberately no default: it must be THIS host\'s URL).',
+    );
+  }
 
   const { db } = createDb(process.env.DATABASE_URL);
   await runMigrations(db);
@@ -115,6 +139,9 @@ async function start(): Promise<Runtime> {
   // and sweep the short-TTL public outbox hourly so hosted send-files don't pile
   // up. Inbound media is retained durably (cleanup deferred).
   ensureMediaDirs(config.runtimeDir);
+  // Scratch space for the agent's working files (portability: keeps throwaway files
+  // out of the state repo, whose history is durable and synced).
+  mkdirSync(scratchDir(config.runtimeDir), { recursive: true });
   cleanupOutbox(config.runtimeDir, Date.now());
   setInterval(() => cleanupOutbox(config.runtimeDir, Date.now()), 60 * 60_000).unref();
 
@@ -124,11 +151,31 @@ async function start(): Promise<Runtime> {
   // MultiChannelGateway that routes by thread — `loopback:` threads go to the test channel
   // (drive full turns over HTTP), everything else to iMessage. So iMessage stays fully live
   // while a test thread is driven; default OFF → production is the bare Sendblue gateway.
-  const sendblue = new SendblueGateway({ config, store });
-  let gateway: Gateway = sendblue;
-  if (process.env.SUNNY_TEST_CHANNEL === '1') {
-    log.info('test channel enabled (loopback alongside Sendblue; SUNNY_TEST_CHANNEL=1)');
-    gateway = new MultiChannelGateway(sendblue, new LoopbackGateway({ config, store }));
+  // Transport-optional boot (first-run-setup): missing Sendblue secrets disable the
+  // iMessage transport with a LOUD warning instead of crashing the whole service —
+  // a bare clone still boots (echo/test channel, dashboard, scheduler, doctor all
+  // usable), which is how a new machine gets far enough to be configured at all.
+  const sendblueConfigured = Boolean(
+    process.env.SENDBLUE_API_KEY &&
+      process.env.SENDBLUE_API_SECRET &&
+      process.env.SENDBLUE_FROM_NUMBER &&
+      process.env.SENDBLUE_WEBHOOK_SECRET,
+  );
+  let gateway: Gateway;
+  if (sendblueConfigured) {
+    const sendblue = new SendblueGateway({ config, store });
+    gateway = sendblue;
+    if (process.env.SUNNY_TEST_CHANNEL === '1') {
+      log.info('test channel enabled (loopback alongside Sendblue; SUNNY_TEST_CHANNEL=1)');
+      gateway = new MultiChannelGateway(sendblue, new LoopbackGateway({ config, store }));
+    }
+  } else {
+    log.warn(
+      '=== MESSAGING TRANSPORT DISABLED === Sendblue is not configured (need SENDBLUE_API_KEY, ' +
+        'SENDBLUE_API_SECRET, SENDBLUE_FROM_NUMBER, SENDBLUE_WEBHOOK_SECRET). iMessage will not ' +
+        'work; the loopback test channel is serving instead. Run `npm run doctor` for setup help.',
+    );
+    gateway = new LoopbackGateway({ config, store });
   }
 
   // Two inbound paths: ECHO (no LLM) and the durable Tier-1 loop — each turn is a per-thread
@@ -205,6 +252,46 @@ async function start(): Promise<Runtime> {
   // SUNNY_DISABLE_SCHEDULER=1 lets a second instance run without scheduling — e.g.
   // the unified dashboard service during the interim where it overlaps the legacy
   // gateway against one DB (avoids double-firing schedules until cutover).
+  // File-defined schedules (portability D5/D14): builtin definitions come from
+  // `agent/builtin/schedules/*.md` (repo) and standing ones from `state/schedules/`
+  // (agent/owner identity, synced with the state clone); both are EXECUTED from the
+  // files. The owner-DM thread + timezone are the only machine-specific values,
+  // resolved here from config + transport env. Legacy seeded rows are retired, and
+  // pre-portability recurring cron ROWS migrate to standing files once.
+  const ownerId = config.owner.identities[0];
+  const from = process.env.SENDBLUE_FROM_NUMBER;
+  const scheduleThread = ownerId && from ? sendblueDmThreadId(from, normalize(ownerId)) : null;
+  let fileSchedules = new FileScheduleRegistry({
+    runtimeDir: config.runtimeDir,
+    threadId: null,
+    timezone: config.timezone,
+  });
+  try {
+    await removeLegacySeededSchedules(db);
+    fileSchedules = FileScheduleRegistry.load({
+      runtimeDir: config.runtimeDir,
+      threadId: scheduleThread,
+      timezone: config.timezone,
+    });
+    if (!scheduleThread) {
+      const names = loadBuiltinSchedules().map((d) => d.name);
+      if (names.length > 0) {
+        log.warn(
+          `=== FILE SCHEDULES NOT RUNNING === ${names.join(', ')} (and any standing schedules) ` +
+            'need an owner identity (~/.sunny/config.json → owner.identities) and ' +
+            'SENDBLUE_FROM_NUMBER to resolve their owner-DM thread. Memory maintenance ' +
+            '(dreaming) will NOT run until both are set and the service restarts.',
+        );
+      }
+    } else {
+      await migrateCronRowsToStanding(db, fileSchedules);
+    }
+  } catch (err) {
+    log.error('file schedule load failed — builtin/standing schedules will not fire', {
+      err: String(err),
+    });
+  }
+
   if (process.env.SUNNY_DISABLE_SCHEDULER === '1') {
     log.warn(
       'scheduler disabled (SUNNY_DISABLE_SCHEDULER=1) — this instance will not fire schedules',
@@ -212,6 +299,7 @@ async function start(): Promise<Runtime> {
   } else {
     startScheduler({
       db,
+      files: fileSchedules,
       dispatch: async (schedule, runId) => {
         const run = await startWorkflow(runScheduledJob, [
           {
@@ -236,22 +324,6 @@ async function start(): Promise<Runtime> {
     });
   }
 
-  // Seed the dreaming schedule (context-lifecycle: the history-fed replacement for the blind
-  // nightly consolidation — the legacy row is deleted by the seeder). Idempotent (keyed on
-  // its label) and delivered `silent`. Addressed to the owner's DM thread, constructed
-  // deterministically from config + SENDBLUE_FROM_NUMBER so it needs no prior inbound.
-  try {
-    const ownerId = config.owner.identities[0];
-    const from = process.env.SENDBLUE_FROM_NUMBER;
-    if (ownerId && from) {
-      await ensureDreamSchedule(db, sendblueDmThreadId(from, normalize(ownerId)), config.timezone);
-    } else {
-      log.info('dreaming seed skipped — owner identity or SENDBLUE_FROM_NUMBER unset');
-    }
-  } catch (err) {
-    log.warn('dreaming seed failed (non-fatal)', { err: String(err) });
-  }
-
   // Periodic skill-repo sync (D-SK8): keep the local clone fresh from the canonical
   // repo without a restart. initSkills synced once already; this is the ongoing
   // cadence (every 10 min, ff-only). Reads are live, so a pull lands for the next turn.
@@ -265,7 +337,7 @@ async function start(): Promise<Runtime> {
   });
 
   log.info('runtime started');
-  return { config, gateway, store, db, wakeThread, spawnChild, steerChild };
+  return { config, gateway, store, db, fileSchedules, wakeThread, spawnChild, steerChild };
 }
 
 /** Fallback bound for an orphan run whose thread id can't be recovered from the WDK run

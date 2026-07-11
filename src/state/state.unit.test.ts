@@ -40,6 +40,24 @@ describe('commitState', () => {
     // No .git → must not throw.
     await expect(commitState(runtimeDir, 'noop')).resolves.toBeUndefined();
   });
+
+  it('commits with the fixed runtime identity — no machine git config required (portability D12)', async () => {
+    const { runtimeDir } = makeConfig();
+    // Deliberately NO `git config user.*` here: a fresh host has none, and
+    // persistence must still work (the -c identity flags carry it).
+    const dir = stateDir(runtimeDir);
+    mkdirSync(dir, { recursive: true });
+    execFileSync('git', ['init', '-q'], { cwd: dir });
+    writeFileSync(join(dir, 'note.txt'), 'hello');
+
+    await commitState(runtimeDir, 'state: identity test');
+
+    const author = execFileSync('git', ['log', '-1', '--format=%an <%ae>'], {
+      cwd: dir,
+      encoding: 'utf8',
+    }).trim();
+    expect(author).toBe('Sunny <sunny@sunny.invalid>');
+  });
 });
 
 describe('pushState', () => {
