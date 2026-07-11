@@ -99,7 +99,7 @@ Each channel SHALL be implemented as a driver behind the gateway interface. Addi
 - **THEN** it uses the Chat SDK + Sendblue iMessage transport behind the gateway interface
 
 ### Requirement: Self-owned conversation store
-Sunny SHALL persist every inbound and outbound message to its own store (the Postgres message archive) and SHALL build agent context from that store. The system SHALL NOT rely on the messaging transport to provide message history.
+Sunny SHALL persist every inbound and outbound message to its own store (the Postgres message archive) and SHALL build agent context from that store. The system SHALL NOT rely on the messaging transport to provide message history. Context assembly SHALL replay a thread's latest compaction summary (when one exists) followed by the verbatim post-watermark tail, per the context-compaction capability; stored message rows SHALL remain immutable under compaction and reachable via recall.
 
 #### Scenario: Messages persisted on both directions
 - **WHEN** a message is received or sent on any channel
@@ -107,8 +107,9 @@ Sunny SHALL persist every inbound and outbound message to its own store (the Pos
 
 #### Scenario: Context built from own store
 - **WHEN** Sunny assembles context for a response
-- **THEN** it reads from its own conversation store
+- **THEN** it reads from its own conversation store — the compaction summary plus verbatim tail for compacted threads, the legacy recent window otherwise
 - **AND** does not depend on the transport returning prior message history
+
 
 ### Requirement: Per-channel capability flags with graceful degradation
 Each channel driver SHALL declare its capabilities (at least: reactions, read receipts, typing indicators, group participation, proactive group messaging, and media/attachments). Sunny SHALL feature-detect these capabilities and degrade gracefully rather than assuming any channel's feature set. Where a channel supports typing indicators, Sunny SHALL keep the indicator active for the duration of a conversational turn, refreshing it as the turn makes progress, and SHALL clear it when the turn ends. Refreshing the indicator SHALL be driven from the gateway (which holds the live channel handle), not from inside a durable workflow.
@@ -252,4 +253,3 @@ The iMessage transport SHALL be replaceable behind the gateway seam without chan
 #### Scenario: Change runtime placement
 - **WHEN** the iMessage transport's physical placement changes (e.g. Sendblue to a local macOS bridge)
 - **THEN** only the driver/configuration changes and the agent core is unchanged
-

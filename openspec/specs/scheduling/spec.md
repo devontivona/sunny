@@ -33,7 +33,7 @@ Schedule definitions SHALL be persisted so they survive process restarts, and a 
 Sunny SHALL be able to create, list, update, and delete schedules **during interactive turns of any trusted DM (owner or family)** — not only owner turns. A created schedule SHALL carry an **audience** (defaulting to the creating conversation's subject) so that its fired run frames itself for, and delivers to, that subject rather than the owner by default. The self-scheduling tools SHALL be registered on the durable conversational turn (their omission after the durable-main-loop migration was a regression against this requirement).
 
 #### Scenario: Agent schedules itself
-- **WHEN** Sunny decides recurring work is needed (e.g. nightly memory consolidation)
+- **WHEN** Sunny decides recurring work is needed (e.g. the recurring dreaming job)
 - **THEN** it creates the schedule itself without user intervention
 
 #### Scenario: A family member can schedule for themselves
@@ -56,14 +56,14 @@ A job executing as a scheduled run SHALL NOT be able to create, modify, or delet
 - **THEN** it can create, modify, or delete schedules
 
 ### Requirement: Scheduled output delivery and history
-A scheduled run SHALL deliver through the single delivery bus, whose destination is **resolved from the schedule's audience** — defaulting to the audience's subject (the creating conversation), NOT a hardcoded owner thread. A `household` schedule's TERMINAL result SHALL be recorded without being sent (no single recipient); its run MAY still deliberately fan out to roster members via the `message` tool (the audience axis — e.g. a household job briefing each member), so a maintenance run like nightly consolidation is silent because it has nothing to send, not because it is muzzled. Run outcomes SHALL be retained for later inspection.
+A scheduled run SHALL deliver through the single delivery bus, whose destination is **resolved from the schedule's audience** — defaulting to the audience's subject (the creating conversation), NOT a hardcoded owner thread. A `household` schedule's TERMINAL result SHALL be recorded without being sent (no single recipient); its run MAY still deliberately fan out to roster members via the `message` tool (the audience axis — e.g. a household job briefing each member), so a maintenance run like the dreaming job is silent because it has nothing to send, not because it is muzzled. Run outcomes SHALL be retained for later inspection.
 
 #### Scenario: Scheduled result is delivered to its audience
 - **WHEN** a scheduled run created by a family member completes with a result
 - **THEN** the result is delivered to that family member's conversation via the gateway
 
 #### Scenario: Household terminal result is recorded, not sent
-- **WHEN** a `household` schedule (e.g. nightly consolidation) completes with a result and sent no messages
+- **WHEN** a `household` schedule (e.g. the dreaming job) completes with a result and sent no messages
 - **THEN** no proactive message is sent, and its outcome is still recorded
 
 #### Scenario: Household run can fan out deliberately
@@ -81,3 +81,13 @@ The scheduler SHALL bound how many due schedules it dispatches per tick, so a ba
 - **WHEN** more schedules are due in a single tick than the configured per-tick limit
 - **THEN** the scheduler dispatches up to the limit and defers the rest to subsequent ticks
 
+### Requirement: Seeded dreaming schedule
+The runtime SHALL idempotently seed the dreaming schedule (label `dreaming`): cron every 4 hours, silent/household output (result recorded, nothing sent), authority `memory_read, memory_write, bash, file_read, file_write` (never the spawn grants — `file_write` lets the dream author skills via the skill-authoring skill; it adds ergonomics, not privilege, since `bash` can already write), and a prompt that directs the run to follow the dreaming skill. Seeding SHALL retire the legacy `nightly-consolidation` schedule row. The fired run uses the standard scheduled-run engine — no dedicated workflow or dispatch branch.
+
+#### Scenario: Fresh install gets a dreaming schedule
+- **WHEN** the runtime boots with no `dreaming` schedule present
+- **THEN** the schedule is created and any legacy `nightly-consolidation` row is removed
+
+#### Scenario: Reboot is idempotent
+- **WHEN** the runtime boots and a `dreaming` schedule already exists
+- **THEN** no duplicate schedule is created
