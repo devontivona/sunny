@@ -34,12 +34,12 @@
 ## 6. Docs + specs sync
 
 - [x] 6.1 README capability-model note (dreaming + compaction + sunny CLI paragraph); AGENTS.md pointer if warranted
-- [ ] 6.2 Sync delta specs to main specs on archive (`/opsx:sync` or archive flow)
+- [x] 6.2 Sync delta specs to main specs on archive (`/opsx:sync` or archive flow)
 
 ## 7. Verification + ship
 
 - [x] 7.1 Full unit + integration + workflow suites; `npm run format`; `tsc --noEmit`
 - [x] 7.2 Local production build (`NITRO_VITE=1 node node_modules/vite/bin/vite.js build --config vite.config.unified.ts`) — build is NOT in CI
-- [ ] 7.3 PR → CI → merge → devbox restart (migration 0012 auto-applies) → verify boot
-- [ ] 7.4 Post-deploy: commit live `skill:dreaming` to the authored skills repo; bump the dreaming schedule's `next_run_at` to fire now; verify `schedule_runs` output, `thread_compactions` rows, INDEX hooks, `dream_state`
-- [ ] 7.5 Drive a real turn on the owner thread; compare per-step input tokens vs the ~350–400k baseline (turn metadata/Langfuse); verify recall snippets, `recall_expand`, and attachment-path rendering via the loopback channel; update `~/.claude` memory notes
+- [x] 7.3 PR → CI → merge → devbox restart (migration 0012 auto-applies) → verify boot
+- [x] 7.4 Post-deploy: commit live `skill:dreaming` to the authored skills repo; bump the dreaming schedule's `next_run_at` to fire now; verify `schedule_runs` output, `thread_compactions` rows, INDEX hooks, `dream_state`
+- [x] 7.5 Drive a real turn on the owner thread; compare per-step input tokens vs the ~350–400k baseline (turn metadata/Langfuse); verify recall snippets, `recall_expand`, and attachment-path rendering via the loopback channel; update `~/.claude` memory notes
