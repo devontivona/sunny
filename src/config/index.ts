@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
+import { readSeedFile } from '../agentDir.js';
 
 /**
  * Non-secret configuration (D-PS5). Lives in `~/.sunny/config.json`, hand-editable.
@@ -143,35 +144,6 @@ export type SunnyConfig = z.infer<typeof ConfigSchema> & {
   runtimeDir: string;
 };
 
-const DEFAULT_CONFIG_JSON = `{
-  "modelId": "claude-sonnet-5",
-  "utilityModelId": "claude-haiku-4-5",
-  "effort": "high",
-  "timezone": "America/New_York",
-  "owner": {
-    "name": "Devon",
-    "identities": []
-  },
-  "family": [],
-  "allowGroups": true,
-  "recentWindowSize": 30,
-  "memory": {
-    "userMaxChars": 8000,
-    "sunnyMaxChars": 6000,
-    "indexMaxChars": 2000
-  },
-  "state": {},
-  "skills": {
-    "maxSkills": 20,
-    "descriptionMaxChars": 280
-  },
-  "server": {
-    "port": 8787,
-    "webhookPath": "/webhooks/sendblue"
-  }
-}
-`;
-
 /** Resolve the runtime dir (`~/.sunny`, overridable via SUNNY_HOME). A plain
  *  namespace directory — NOT a git repo (runtime-home). `config.json` lives here as
  *  local, unsynced bootstrap; durable state lives in the `state/` repo (see
@@ -194,6 +166,16 @@ export function sitesDir(runtimeDir: string): string {
   return join(stateDir(runtimeDir), 'sites');
 }
 
+/** The agent's scratch space (`~/.sunny/scratch`): temporary/working files — downloads,
+ *  intermediate outputs, one-off script results. Machine-local and untracked (a SIBLING
+ *  of `state/`, never inside it) so throwaway files don't get committed to the state
+ *  repo's history. Durable artifacts have homes: sites → `state/sites`, skills → the
+ *  authored repo, knowledge → memory. Created at boot; the prompt teaches the agent
+ *  to use it. */
+export function scratchDir(runtimeDir: string): string {
+  return join(runtimeDir, 'scratch');
+}
+
 /**
  * Load `~/.sunny/config.json`, creating the runtime dir and seeding a default
  * config file on first run (D-PS5). `config.json` is the LOCAL, UNSYNCED bootstrap
@@ -207,7 +189,7 @@ export function loadConfig(): SunnyConfig {
 
   const configPath = join(dir, 'config.json');
   if (!existsSync(configPath)) {
-    writeFileSync(configPath, DEFAULT_CONFIG_JSON, { mode: 0o644 });
+    writeFileSync(configPath, readSeedFile('config.json'), { mode: 0o644 });
   }
 
   const raw: unknown = JSON.parse(readFileSync(configPath, 'utf8'));

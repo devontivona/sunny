@@ -465,7 +465,7 @@ describe('runConversation (workflow integration — real Local World)', () => {
     // The relayed message + its image attachment landed on KATE's thread.
     const toKate = ctx.gateway.sent.find((s) => s.threadId === kateThread);
     expect(toKate?.text).toBe('Devon wanted you to see this 🦁');
-    expect(toKate?.attachment).toEqual({ pathOrUrl: '/home/tivona/work/leo_lion.jpg' });
+    expect(toKate?.attachment).toEqual({ pathOrUrl: '/home/tivona/work/leo_lion.jpg', required: true });
     expect(toKate?.persist).toBe(true);
   });
 
@@ -896,7 +896,7 @@ describe('runConversation (workflow integration — real Local World)', () => {
     expect(await run.status).toBe('completed');
 
     const img = ctx.gateway.sent.find((s) => s.attachment);
-    expect(img?.attachment).toEqual({ pathOrUrl: '/home/tivona/work/chart.png' });
+    expect(img?.attachment).toEqual({ pathOrUrl: '/home/tivona/work/chart.png', required: true });
     expect(img?.text).toBe('this week');
     expect(ctx.gateway.texts()).toContain('chart sent — red line is spend');
   });

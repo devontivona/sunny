@@ -16,6 +16,12 @@ export function createScheduleTools(db: Db, ownerThreadId: string, timezone: str
   const schedule_create = tool({
     ...specs.schedule_create,
     execute: async ({ kind, spec, prompt, label }) => {
+      // Catalog-only surface (inert db): recurring cron schedules are standing FILES
+      // created by the durable turn's step (workflows/conversation.ts); this in-process
+      // path only ever handles the one-off reminder kind.
+      if (kind === 'cron') {
+        return 'Recurring schedules are standing files — create them from a conversation turn.';
+      }
       try {
         const row = await createSchedule(db, {
           kind,

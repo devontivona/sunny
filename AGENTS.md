@@ -175,24 +175,39 @@ per-profile exceptions.
 
 ## Layout
 
+- `agent/` — the git-committed authored surface (portability change): `agent/builtin/skills/`
+  (the shipped skill set — trust tier `builtin`, read in place, NEVER materialized into
+  `~/.sunny`; an authored skill of the same name shadows it as a fork) and
+  `agent/builtin/schedules/*.md` (system schedules — executed from the files; the `schedules`
+  table holds only agent/user-created rows), plus `agent/seeds/` (memory starters + default
+  config, materialized write-if-missing). Builtin content must stay machine-agnostic: address
+  the repo as `$SUNNY_REPO` (exported in the agent's bash env; the file tools expand it) —
+  never an absolute path.
 - `src/agent/` — turn loop, dispatcher (serialization/steering), tool specs (memory,
   schedule/runs, delegation, credentials/MCP registries), authority model (`audience.ts`),
   model + prompt.
 - `src/gateway/` — normalized `Gateway` seam, Sendblue driver, conversation store, auth.
-- `src/memory/` — files-first memory soul (`~/.sunny/memory/`).
+- `src/memory/` — files-first memory soul (`~/.sunny/state/memory/`, inside the state repo);
+  starter templates live in `agent/seeds/memory/`.
 - `src/cli/` — the `sunny` self-interaction CLI (`npx tsx src/cli/index.ts …`), the composable
   surface for capabilities that don't warrant native tools (context-lifecycle). First
   subcommands: `dream digest|compact|advance` (the dreaming job's deterministic half; the
   procedure lives in `skill:dreaming`). Subcommand logic is importable + integration-tested;
   the entry stays a thin parser. Gotcha: watermark/boundary tuples are copied and compared
   IN SQL — Postgres timestamps carry microseconds, a JS `Date` truncates to milliseconds.
-- `src/scheduler/` — schedules table + ~60s ticker; seeds the `dreaming` schedule (4h, silent).
+- `src/scheduler/` — the `schedules` table holds ONE-SHOT REMINDERS only; recurring
+  schedules are files fired by the same ~60s ticker via `FileScheduleRegistry`:
+  builtin (`agent/builtin/schedules/`, e.g. `dreaming` — 4h, silent) and standing
+  (`~/.sunny/state/schedules/` — agent-created recurring intents, portable via the
+  state repo, mutated live by the scheduling tools). Run history under deterministic
+  per-(class,name) UUIDs (`fileScheduleId`). The `interval` kind is retired.
 - `src/db/` — Drizzle schema + client; migrations in `drizzle/`.
 - `src/runtime.ts` — memoized startup (DB, migrations, memory, gateway, scheduler). The memo
   is pinned on `globalThis` so Vite's server-module re-eval on a back-end edit doesn't re-run
   startup. `SUNNY_DISABLE_SCHEDULER=1` skips the ticker (for a second instance during cutover).
 - `server/` (Nitro routes: `/dashboard/api`, `/webhooks/sendblue`, `/health`),
-  `plugins/startup.ts` (starts WDK world + runtime), `workflows/` (durable `"use workflow"` jobs).
+  `plugins/startup.ts` (provisions WDK world tables idempotently, starts WDK world + runtime),
+  `workflows/` (durable `"use workflow"` jobs).
 - `vite.config.unified.ts` — the unified entry: `[nitro(), react(), tailwindcss(), workflow()]`.
   `nitro.config.ts` omits the `workflow/nitro` module under `NITRO_VITE=1` (the `workflow()`
   Vite plugin supplies it). Root `index.html` → `app/main.tsx` is the SPA entry (served at `/`).

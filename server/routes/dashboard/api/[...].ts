@@ -117,8 +117,8 @@ function deviceHint(event: H3Event): string {
 
 export default defineEventHandler(async (event) => {
   const cfg = loadDashboardConfig();
-  const { db, config, gateway } = await getRuntime();
-  const data = new DashboardData(db, config, STARTED_AT);
+  const { db, config, gateway, fileSchedules } = await getRuntime();
+  const data = new DashboardData(db, config, STARTED_AT, fileSchedules);
   const auth = new AuthStore(db);
 
   // Subpath after /dashboard/api/ (no query string).
@@ -194,6 +194,13 @@ export default defineEventHandler(async (event) => {
       const existingId = getCookie(event, PENDING_COOKIE);
       let row = existingId ? await auth.getRequest(existingId) : null;
       if (!row || row.status !== 'pending' || row.expiresAt.getTime() <= Date.now()) {
+        if (!cfg.publicUrl) {
+          log.error(
+            'DASHBOARD_PUBLIC_URL is not set — cannot build an owner-facing approve link ' +
+              '(portability D12: no personal-domain fallback). Set it to this host\'s public URL.',
+          );
+          return json(503, { error: 'dashboard public URL not configured on this host' });
+        }
         row = await auth.createRequest(deviceHint(event));
         const approveUrl = `${cfg.publicUrl}/dashboard/api/auth/approve?rid=${row.id}&secret=${encodeURIComponent(row.secret)}`;
         await notifyOwner(approveUrl, row.deviceHint ?? '', row.id);

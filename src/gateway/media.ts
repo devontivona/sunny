@@ -268,14 +268,20 @@ export function dataUrl(bytes: Buffer, mediaType: string): string {
 /**
  * The public base URL the host is reachable at (D-MM4) — used to build the media
  * links Sendblue fetches server-side. Reuses the dashboard's public URL (the same
- * ingress already operated for the webhook); `PUBLIC_BASE_URL` overrides.
+ * ingress already operated for the webhook); `PUBLIC_BASE_URL` overrides. No
+ * fallback: an unset URL throws a descriptive error (the send path catches it and
+ * degrades to text-only) rather than silently emitting links to a host this
+ * machine doesn't own (portability D12).
  */
 export function publicBaseUrl(): string {
-  return (
-    process.env.PUBLIC_BASE_URL ??
-    process.env.DASHBOARD_PUBLIC_URL ??
-    'https://sunny.waywardlane.com'
-  ).replace(/\/+$/, '');
+  const url = process.env.PUBLIC_BASE_URL ?? process.env.DASHBOARD_PUBLIC_URL;
+  if (!url) {
+    throw new Error(
+      'PUBLIC_BASE_URL / DASHBOARD_PUBLIC_URL is not set — cannot build a publicly ' +
+        'reachable media link. Set DASHBOARD_PUBLIC_URL to this host\'s public HTTPS URL.',
+    );
+  }
+  return url.replace(/\/+$/, '');
 }
 
 export function mediaRoot(runtimeDir: string): string {

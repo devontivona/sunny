@@ -13,10 +13,7 @@ const log = logger('delegation');
  *  has to be stable + distinct from a real transport's ids (for the dedup unique index). */
 export const DELEGATION_CHANNEL = 'delegation';
 
-/** Bounded fan-out + depth (D-DS8): defaults guarded against the "depth 5 × branching 3 = 243
- *  agents" blowup. A child cannot delegate further unless it is an orchestrator. */
-export const MAX_CONCURRENT_CHILDREN = 3;
-export const MAX_DELEGATION_DEPTH = 2;
+export { MAX_CONCURRENT_CHILDREN, MAX_DELEGATION_DEPTH } from './limits.js';
 
 /** A distinct internal inbox thread for a child run (D-DS12). `subagent:` is non-group
  *  (`isGroupThreadId` keys off the 3rd colon-segment), so a child runs with DM semantics. */

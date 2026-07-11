@@ -16,6 +16,7 @@ import {
 import { Authorizer, type Role } from '../gateway/auth.js';
 import { listCredentials } from '../credentials/index.js';
 import { listMcpServers, serverHost } from '../mcp/registry.js';
+import { computeNextRun, type FileScheduleRegistry } from '../scheduler/index.js';
 import { loadAllSkills, parseSkill, sanitizeSkillName } from '../skills/index.js';
 import { toolCatalog } from '../agent/tools/catalog.js';
 import { renderableMedia, type AttachmentKind } from '../gateway/media.js';
@@ -39,6 +40,9 @@ export class DashboardData {
     private readonly db: Db,
     private readonly config: SunnyConfig,
     private readonly startedAt = Date.now(),
+    /** File-defined schedules (builtin + standing, portability D6/D14) — merged into
+     *  the schedules view alongside DB reminder rows, tagged by class. */
+    private readonly fileSchedules: Pick<FileScheduleRegistry, 'list'> = { list: () => [] },
   ) {}
 
   // --- Memory --------------------------------------------------------------
@@ -178,7 +182,13 @@ export class DashboardData {
   /** All skills across every root (primary + owned source repos), with description,
    *  trust tier, and source/provenance. */
   skills(): {
-    skills: { name: string; description: string; trust: string; source: string | null }[];
+    skills: {
+      name: string;
+      description: string;
+      trust: string;
+      source: string | null;
+      shadowsBuiltin: boolean;
+    }[];
   } {
     return {
       skills: loadAllSkills(this.config).map((s) => ({
@@ -186,6 +196,7 @@ export class DashboardData {
         description: s.description,
         trust: s.trust,
         source: s.source ?? null,
+        shadowsBuiltin: s.shadowsBuiltin ?? false,
       })),
     };
   }
@@ -328,7 +339,12 @@ export class DashboardData {
   async schedules(runLimit = 10) {
     const rows = await this.db.select().from(schedules).orderBy(desc(schedules.createdAt));
     const out = [];
-    for (const s of rows) {
+    // File-defined schedules first (builtin system jobs + standing identity jobs),
+    // tagged so the UI can label the class; their run history lives in
+    // `schedule_runs` under each schedule's deterministic id like any other row.
+    for (const s of [...this.fileSchedules.list(), ...rows]) {
+      const fileClass = 'fileClass' in s ? s.fileClass : null;
+      const builtin = fileClass !== null;
       const runs = await this.db
         .select()
         .from(scheduleRuns)
@@ -337,6 +353,8 @@ export class DashboardData {
         .limit(runLimit);
       out.push({
         id: s.id,
+        /** 'builtin' | 'standing' for file schedules; null for DB reminder rows. */
+        fileClass,
         kind: s.kind,
         spec: s.spec,
         label: s.label,
@@ -344,8 +362,12 @@ export class DashboardData {
         threadId: s.threadId,
         timezone: s.timezone,
         active: s.active,
-        nextRunAt: s.nextRunAt?.toISOString() ?? null,
-        lastRunAt: s.lastRunAt?.toISOString() ?? null,
+        nextRunAt: builtin
+          ? (computeNextRun('cron', s.spec, new Date(), s.timezone)?.toISOString() ?? null)
+          : (s.nextRunAt?.toISOString() ?? null),
+        lastRunAt: builtin
+          ? (runs[0]?.firedAt.toISOString() ?? null)
+          : (s.lastRunAt?.toISOString() ?? null),
         runs: runs.map((r) => ({
           id: r.id,
           firedAt: r.firedAt.toISOString(),

@@ -1,6 +1,18 @@
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { eq } from 'drizzle-orm';
-import { createSchedule, ensureDreamSchedule, startScheduler } from './index.js';
+import {
+  createSchedule,
+  fileScheduleId,
+  FileScheduleRegistry,
+  loadBuiltinSchedules,
+  migrateCronRowsToStanding,
+  parseScheduleFile,
+  removeLegacySeededSchedules,
+  startScheduler,
+  standingSchedulesDir,
+} from './index.js';
 import { schedules, scheduleRuns, type ScheduleRow } from '../db/schema.js';
 import { createTestDb, type TestDb } from '../../tests/db.js';
 import { advanceTimersByTimeAsync, freezeTime, unfreezeTime } from '../../tests/time.js';
@@ -12,14 +24,17 @@ import { OWNER_THREAD } from '../../tests/factories.js';
  */
 describe('scheduler ticker (integration)', () => {
   let tdb: TestDb;
+  let runtimeDir: string;
   const TZ = 'America/New_York';
 
   beforeEach(async () => {
     tdb = await createTestDb();
+    runtimeDir = mkdtempSync(join(tmpdir(), 'sunny-sched-'));
     freezeTime(new Date('2026-01-01T12:00:00.000Z'));
   });
   afterEach(async () => {
     unfreezeTime();
+    rmSync(runtimeDir, { recursive: true, force: true });
     await tdb.teardown();
   });
 
@@ -183,42 +198,154 @@ describe('scheduler ticker (integration)', () => {
     expect(runs).toHaveLength(1);
   });
 
-  it('ensureDreamSchedule is idempotent and carries the dream shape (context-lifecycle)', async () => {
-    await ensureDreamSchedule(tdb.db, OWNER_THREAD, TZ);
-    await ensureDreamSchedule(tdb.db, OWNER_THREAD, TZ);
-    const rows = await tdb.db.select().from(schedules).where(eq(schedules.label, 'dreaming'));
-    expect(rows).toHaveLength(1);
-    const dream = rows[0]!;
-    expect(dream.kind).toBe('cron');
-    expect(dream.spec).toBe('30 */4 * * *');
-    expect(dream.outputTarget).toBe('silent');
-    expect(dream.authority).toEqual([
+  it('the repo dreaming builtin carries the dream contract (portability D5)', () => {
+    // Loaded from the actual agent/builtin/schedules/ files — the deployed file IS
+    // the definition, so this locks the shipped contract, not a copy of it.
+    const defs = loadBuiltinSchedules();
+    const dream = defs.find((d) => d.name === 'dreaming');
+    expect(dream).toBeDefined();
+    expect(dream!.cron).toBe('30 */4 * * *');
+    expect(dream!.outputTarget).toBe('silent');
+    expect(dream!.authority).toEqual([
       'memory_read',
       'memory_write',
       'bash',
       'file_read',
       'file_write',
     ]);
-    expect(dream.prompt).toContain('dreaming skill');
-    expect(dream.nextRunAt).toBeTruthy();
+    expect(dream!.prompt).toContain('dreaming skill');
   });
 
-  it('ensureDreamSchedule retires the legacy nightly-consolidation seed', async () => {
+  it('file schedule ids are deterministic per (class, name); resolution fills machine fields', () => {
+    const id = fileScheduleId('builtin', 'dreaming');
+    expect(id).toBe(fileScheduleId('builtin', 'dreaming'));
+    expect(id).not.toBe(fileScheduleId('builtin', 'other'));
+    expect(id).not.toBe(fileScheduleId('standing', 'dreaming')); // classes never collide
+    expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+
+    const def = parseScheduleFile(
+      'dreaming',
+      '---\ncron: "30 */4 * * *"\noutputTarget: silent\nauthority: memory_read, bash\n---\nDream.',
+    );
+    expect(def.authority).toEqual(['memory_read', 'bash']);
+    expect(def.outputTarget).toBe('silent');
+  });
+
+  it('parseScheduleFile rejects invalid definitions loudly', () => {
+    expect(() => parseScheduleFile('x', 'no frontmatter')).toThrow(/missing frontmatter cron/);
+    expect(() => parseScheduleFile('x', '---\ncron: "not a cron"\n---\nbody')).toThrow();
+    expect(() => parseScheduleFile('x', '---\ncron: "* * * * *"\n---\n')).toThrow(
+      /empty prompt body/,
+    );
+    expect(() =>
+      parseScheduleFile('x', '---\ncron: "* * * * *"\noutputTarget: shout\n---\nbody'),
+    ).toThrow(/invalid outputTarget/);
+  });
+
+  it('a standing schedule created live fires through dispatch under its stable id, and stops when deleted', async () => {
+    const registry = new FileScheduleRegistry({ runtimeDir, threadId: OWNER_THREAD, timezone: TZ });
+
+    const dispatched: string[] = [];
+    startScheduler({
+      db: tdb.db,
+      files: registry,
+      dispatch: async (schedule) => void dispatched.push(schedule.id),
+    });
+    await advanceTimersByTimeAsync(1_000);
+    expect(dispatched).toEqual([]); // nothing registered yet
+
+    // Created mid-flight: live without a restart, file committed under state/schedules/.
+    const standing = await registry.createStanding({
+      name: 'morning-briefing',
+      cron: '*/5 * * * *',
+      prompt: 'Follow your morning-briefing skill.',
+    });
+    expect(standing.fileClass).toBe('standing');
+    expect(
+      existsSync(join(standingSchedulesDir(runtimeDir), 'morning-briefing.md')),
+    ).toBe(true);
+
+    // First sighting seeds next-fire from the cron — never fires immediately...
+    await advanceTimersByTimeAsync(60_000);
+    expect(dispatched).toEqual([]);
+    // ...then fires at the next occurrence (*/5 from 12:01 → 12:05).
+    await advanceTimersByTimeAsync(4 * 60_000);
+    expect(dispatched).toEqual([fileScheduleId('standing', 'morning-briefing')]);
+    const runs = await tdb.db.select().from(scheduleRuns);
+    expect(runs[0]?.scheduleId).toBe(fileScheduleId('standing', 'morning-briefing'));
+    // No row was ever inserted into `schedules` — file schedules execute from files.
+    expect(await tdb.db.select().from(schedules)).toHaveLength(0);
+
+    // Deleting removes the file and stops firing.
+    await registry.deleteStanding('morning-briefing');
+    expect(
+      existsSync(join(standingSchedulesDir(runtimeDir), 'morning-briefing.md')),
+    ).toBe(false);
+    await advanceTimersByTimeAsync(10 * 60_000);
+    expect(dispatched).toHaveLength(1);
+  });
+
+  it('migrateCronRowsToStanding converts cron rows to standing files and deletes them', async () => {
+    const registry = new FileScheduleRegistry({ runtimeDir, threadId: OWNER_THREAD, timezone: TZ });
     await createSchedule(tdb.db, {
       kind: 'cron',
-      spec: '0 3 * * *',
-      prompt: 'legacy consolidation',
+      spec: '0 5 * * *',
+      prompt: 'Run the daily Craft resource-tagging job.',
       threadId: OWNER_THREAD,
       timezone: TZ,
-      label: 'nightly-consolidation',
+      label: 'craft-daily-resource-tagging',
+      outputTarget: 'silent',
+      authority: ['memory_read', 'bash'],
     });
-    await ensureDreamSchedule(tdb.db, OWNER_THREAD, TZ);
-    const legacy = await tdb.db
-      .select()
-      .from(schedules)
-      .where(eq(schedules.label, 'nightly-consolidation'));
-    expect(legacy).toHaveLength(0);
-    const dream = await tdb.db.select().from(schedules).where(eq(schedules.label, 'dreaming'));
-    expect(dream).toHaveLength(1);
+    await createSchedule(tdb.db, {
+      kind: 'once',
+      spec: '2026-06-01T12:00:00.000Z',
+      prompt: 'one-off reminder stays',
+      threadId: OWNER_THREAD,
+      timezone: TZ,
+    });
+
+    await migrateCronRowsToStanding(tdb.db, registry);
+
+    const rows = await tdb.db.select().from(schedules);
+    expect(rows.map((r) => r.kind)).toEqual(['once']); // reminder row untouched
+    const migrated = registry.list().find((f) => f.label === 'craft-daily-resource-tagging');
+    expect(migrated?.fileClass).toBe('standing');
+    expect(migrated?.spec).toBe('0 5 * * *');
+    expect(migrated?.outputTarget).toBe('silent');
+    expect(migrated?.authority).toEqual(['memory_read', 'bash']);
+    // Round-trips through the file on disk.
+    const raw = readFileSync(
+      join(standingSchedulesDir(runtimeDir), 'craft-daily-resource-tagging.md'),
+      'utf8',
+    );
+    expect(parseScheduleFile('craft-daily-resource-tagging', raw).cron).toBe('0 5 * * *');
+  });
+
+  it('removeLegacySeededSchedules retires dreaming and nightly-consolidation rows', async () => {
+    for (const label of ['nightly-consolidation', 'dreaming']) {
+      await createSchedule(tdb.db, {
+        kind: 'cron',
+        spec: '0 3 * * *',
+        prompt: 'legacy seeded row',
+        threadId: OWNER_THREAD,
+        timezone: TZ,
+        label,
+      });
+    }
+    await createSchedule(tdb.db, {
+      kind: 'cron',
+      spec: '0 9 * * *',
+      prompt: 'user-created reminder',
+      threadId: OWNER_THREAD,
+      timezone: TZ,
+      label: 'standup',
+    });
+
+    await removeLegacySeededSchedules(tdb.db);
+
+    const rows = await tdb.db.select().from(schedules);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.label).toBe('standup');
   });
 });

@@ -96,18 +96,35 @@ describe('mcp registry corruption safety (D-MCP2)', () => {
       registerMcpServer(runtimeDir, 'other', { url: 'https://x.example/mcp' }),
     ).rejects.toThrow(/corrupt/);
 
-    // The corrupt bytes are preserved in a quarantine sibling, not lost.
-    const backup = readdirSync(runtimeDir).find((f) => f.startsWith('mcp.json.corrupt-'));
+    // The corrupt bytes are preserved in a quarantine sibling, not lost. (The
+    // registry lives in state/ now — portability.)
+    const stateRoot = join(runtimeDir, 'state');
+    const backup = readdirSync(stateRoot).find((f) => f.startsWith('mcp.json.corrupt-'));
     expect(backup).toBeDefined();
-    expect(readFileSync(join(runtimeDir, backup!), 'utf8')).toContain('this is not valid json');
+    expect(readFileSync(join(stateRoot, backup!), 'utf8')).toContain('this is not valid json');
   });
 
   it('writes atomically — no torn temp file is left behind', async () => {
     const { runtimeDir } = makeConfig();
     await registerMcpServer(runtimeDir, 'craft', { url: CRAFT_URL });
     await setMcpEnabled(runtimeDir, 'craft', true);
-    expect(readdirSync(runtimeDir).filter((f) => f.includes('mcp.json.tmp-'))).toEqual([]);
+    expect(readdirSync(join(runtimeDir, 'state')).filter((f) => f.includes('mcp.json.tmp-'))).toEqual([]);
     expect(getMcpServer(runtimeDir, 'craft')?.enabled).toBe(true);
+  });
+
+  it('lives in the state repo, and a legacy ~/.sunny/mcp.json migrates on first read', async () => {
+    const { runtimeDir } = makeConfig();
+    // Registry path is state-resident (portability: restores with the state clone).
+    expect(mcpRegistryPath(runtimeDir)).toBe(join(runtimeDir, 'state', 'mcp.json'));
+
+    // A pre-portability machine-local registry is relocated, contents intact.
+    writeFileSync(
+      join(runtimeDir, 'mcp.json'),
+      JSON.stringify({ craft: { url: 'https://mcp.craft.do/x/mcp', transport: 'http', enabled: true } }),
+    );
+    expect(listMcpServers(runtimeDir).map((s) => s.name)).toEqual(['craft']);
+    expect(readdirSync(runtimeDir)).not.toContain('mcp.json');
+    expect(readdirSync(join(runtimeDir, 'state'))).toContain('mcp.json');
   });
 });
 
@@ -403,5 +420,27 @@ describe('mcp_manage tool (D-MCP4)', () => {
     expect(await execMcpManage(config, undefined, {}, { action: 'probe', name: 'nope' })).toMatch(
       /no MCP server named/,
     );
+  });
+});
+
+// Portability D12: the OAuth redirect URI must come from explicit configuration.
+import { afterEach as _after, beforeEach as _before } from 'vitest';
+import { defaultRedirectUri, MCP_OAUTH_CALLBACK_PATH } from './oauth.js';
+
+describe('defaultRedirectUri', () => {
+  const saved = process.env.DASHBOARD_PUBLIC_URL;
+  _before(() => delete process.env.DASHBOARD_PUBLIC_URL);
+  _after(() => {
+    if (saved === undefined) delete process.env.DASHBOARD_PUBLIC_URL;
+    else process.env.DASHBOARD_PUBLIC_URL = saved;
+  });
+
+  it('throws loudly when DASHBOARD_PUBLIC_URL is unset (no personal-domain fallback)', () => {
+    expect(() => defaultRedirectUri()).toThrow(/DASHBOARD_PUBLIC_URL/);
+  });
+
+  it('derives the callback from the configured public URL', () => {
+    process.env.DASHBOARD_PUBLIC_URL = 'https://sunny.example.com/';
+    expect(defaultRedirectUri()).toBe(`https://sunny.example.com${MCP_OAUTH_CALLBACK_PATH}`);
   });
 });

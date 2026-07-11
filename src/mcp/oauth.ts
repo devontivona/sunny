@@ -74,12 +74,17 @@ export const MCP_OAUTH_CALLBACK_PATH = '/dashboard/api/mcp/oauth/callback';
 
 /** The public, reachable redirect URI for OAuth consent — NOT localhost (a phone/
  *  browser must reach it). Derived from the dashboard's public URL (D-WD); the
- *  callback route completes the token exchange. */
+ *  callback route completes the token exchange. No fallback: an unset URL is a
+ *  loud error (surfaced in the mcp_manage tool result), never a redirect to a
+ *  host this machine doesn't own (portability D12). */
 export function defaultRedirectUri(): string {
-  const base = (process.env.DASHBOARD_PUBLIC_URL ?? 'https://sunny.waywardlane.com').replace(
-    /\/+$/,
-    '',
-  );
+  const base = process.env.DASHBOARD_PUBLIC_URL?.replace(/\/+$/, '');
+  if (!base) {
+    throw new Error(
+      'DASHBOARD_PUBLIC_URL is not set — MCP OAuth needs a publicly reachable redirect URI. ' +
+        "Set it to this host's public HTTPS URL and retry.",
+    );
+  }
   return `${base}${MCP_OAUTH_CALLBACK_PATH}`;
 }
 

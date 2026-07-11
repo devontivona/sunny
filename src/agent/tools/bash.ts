@@ -152,6 +152,9 @@ export async function runBash(
 
   const env: NodeJS.ProcessEnv = { ...process.env };
   for (const k of STRIPPED_ENV) delete env[k];
+  // The sunny repo root, for builtin content that must stay machine-agnostic
+  // (portability D10): builtin skills say `cd "$SUNNY_REPO"` instead of baking in a path.
+  env.SUNNY_REPO = process.cwd();
   if (opts.env) Object.assign(env, opts.env);
 
   const r = await spawnShell(command, cwd, timeoutMs, env);
@@ -172,7 +175,13 @@ export async function runBash(
 
 function expandHome(p: string): string {
   if (p === '~') return homedir();
-  return p.startsWith('~/') ? join(homedir(), p.slice(2)) : p;
+  if (p.startsWith('~/')) return join(homedir(), p.slice(2));
+  // `$SUNNY_REPO` = the sunny repo root (process.cwd(), the drizzle/ contract). Builtin
+  // skills/schedules under `agent/` are addressed this way so no builtin content or
+  // prompt text ever embeds a machine-specific absolute path (portability D10).
+  if (p === '$SUNNY_REPO') return process.cwd();
+  if (p.startsWith('$SUNNY_REPO/')) return join(process.cwd(), p.slice('$SUNNY_REPO/'.length));
+  return p;
 }
 
 /** Load a text file for the file tools: expand `~`, refuse directories and binary (NUL)

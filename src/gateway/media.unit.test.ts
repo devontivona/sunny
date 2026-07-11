@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   attachmentRefsOf,
   cleanupOutbox,
+  publicBaseUrl,
   contentTypeForName,
   extForMediaType,
   isGenericBinaryType,
@@ -414,5 +415,34 @@ describe('renderableMedia — send_image parts (image-send-integrity dashboard f
       ],
     };
     expect(renderableMedia(payload)).toEqual([]);
+  });
+});
+
+// Portability D12: media links must come from explicit configuration — unset, the
+// hosting path throws a descriptive error (the send path degrades to text-only)
+// instead of silently emitting links to a host this machine doesn't own.
+describe('publicBaseUrl', () => {
+  const saved = {
+    pub: process.env.PUBLIC_BASE_URL,
+    dash: process.env.DASHBOARD_PUBLIC_URL,
+  };
+  beforeEach(() => {
+    delete process.env.PUBLIC_BASE_URL;
+    delete process.env.DASHBOARD_PUBLIC_URL;
+  });
+  afterEach(() => {
+    if (saved.pub !== undefined) process.env.PUBLIC_BASE_URL = saved.pub;
+    if (saved.dash !== undefined) process.env.DASHBOARD_PUBLIC_URL = saved.dash;
+  });
+
+  it('throws a descriptive error when no public URL is configured', () => {
+    expect(() => publicBaseUrl()).toThrow(/DASHBOARD_PUBLIC_URL/);
+  });
+
+  it('uses PUBLIC_BASE_URL over DASHBOARD_PUBLIC_URL, trimming trailing slashes', () => {
+    process.env.DASHBOARD_PUBLIC_URL = 'https://dash.example.com';
+    expect(publicBaseUrl()).toBe('https://dash.example.com');
+    process.env.PUBLIC_BASE_URL = 'https://media.example.com/';
+    expect(publicBaseUrl()).toBe('https://media.example.com');
   });
 });

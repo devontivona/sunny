@@ -1,13 +1,16 @@
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, it, expect } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect } from 'vitest';
 import { makeConfig } from '../../tests/factories.js';
 import {
   authoredRoot,
   composeSkill,
   deleteSkill,
   initSkills,
+  isBuiltinSkill,
   loadAllSkills,
+  loadBuiltinSkills,
   loadSkillBody,
   repoSlug,
   repoUrl,
@@ -21,6 +24,29 @@ import {
 } from './index.js';
 
 const BUDGET = { maxSkills: 20, descriptionMaxChars: 280 };
+
+// Isolate the builtin tier per test: point SUNNY_AGENT_DIR at a scratch dir so the
+// REAL repo builtins (agent/builtin/skills) don't leak into fixture expectations.
+// Tests that want the real shipped set clear the override explicitly.
+let agentScratch: string;
+beforeEach(() => {
+  agentScratch = mkdtempSync(join(tmpdir(), 'sunny-agent-'));
+  mkdirSync(join(agentScratch, 'builtin', 'skills'), { recursive: true });
+  process.env.SUNNY_AGENT_DIR = agentScratch;
+});
+afterEach(() => {
+  delete process.env.SUNNY_AGENT_DIR;
+  rmSync(agentScratch, { recursive: true, force: true });
+});
+
+function writeBuiltin(name: string, description = `builtin ${name}`): void {
+  const dir = join(agentScratch, 'builtin', 'skills', name);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, 'SKILL.md'),
+    `---\nname: ${name}\ndescription: ${description}\n---\n\nbuiltin body of ${name}\n`,
+  );
+}
 
 function rec(name: string, description = `do ${name}`): SkillRecord {
   return { name, description, trust: 'authored', file: `/tmp/${name}/SKILL.md` };
@@ -153,43 +179,75 @@ describe('repoUrl', () => {
   });
 });
 
-describe('initSkills seeding', () => {
-  it('seeds bundled skills on a fresh runtime, idempotently', async () => {
+describe('builtin skill tier (portability)', () => {
+  it('loads builtins from the agent dir, trusted and read in place', async () => {
     const config = makeConfig();
-
+    writeBuiltin('coding');
     await initSkills(config);
-    const names = loadAllSkills(config).map((s) => s.name);
-    expect(names).toContain('email');
-    expect(names).toContain('coding');
-    const after = loadAllSkills(config).length;
 
-    await initSkills(config); // running again seeds nothing new
-    expect(loadAllSkills(config).length).toBe(after);
+    const all = loadAllSkills(config);
+    const coding = all.find((s) => s.name === 'coding');
+    expect(coding?.trust).toBe('builtin');
+    expect(coding?.file).toBe(join(agentScratch, 'builtin', 'skills', 'coding', 'SKILL.md'));
+    // Never materialized: the authored write root stays empty.
+    expect(readdirSync(skillsPaths(config.runtimeDir).root)).toEqual([]);
+
+    await initSkills(config); // idempotent, still nothing materialized
+    expect(readdirSync(skillsPaths(config.runtimeDir).root)).toEqual([]);
+    expect(isBuiltinSkill('coding')).toBe(true);
+    expect(isBuiltinSkill('nope')).toBe(false);
   });
 
-  it('seeds the browse skill with its reference assets', async () => {
+  it('an authored skill with the same name shadows the builtin, annotated', async () => {
     const config = makeConfig();
-    const paths = skillsPaths(config.runtimeDir);
-
+    writeBuiltin('email', 'the shipped email skill');
     await initSkills(config);
+    await writeSkill(config, { name: 'email', description: 'my email etiquette', body: 'custom' });
 
-    const browse = loadAllSkills(config).find((s) => s.name === 'browse');
-    expect(browse?.description).toMatch(/agent-browser/);
-    // Deeper engine + per-site docs travel with the skill (progressive disclosure).
-    const dir = paths.skillDir('browse');
-    expect(existsSync(join(dir, 'references/agent-browser.md'))).toBe(true);
-    expect(existsSync(join(dir, 'references/per-site-skills.md'))).toBe(true);
+    const all = loadAllSkills(config);
+    const email = all.filter((s) => s.name === 'email');
+    expect(email).toHaveLength(1); // one entry per name
+    expect(email[0]?.trust).toBe('authored');
+    expect(email[0]?.shadowsBuiltin).toBe(true);
+    expect(renderSkillIndex(all, BUDGET)).toContain('- email (your fork of a builtin):');
+    // The fork is what loads; the builtin body is hidden until the fork is deleted.
+    expect(loadSkillBody(skillsPaths(config.runtimeDir), 'email')).toBe('custom');
   });
 
-  it('does not overwrite a user-edited seed', async () => {
+  it('writeSkill/deleteSkill explain the fork lifecycle for builtin names', async () => {
     const config = makeConfig();
-    const paths = skillsPaths(config.runtimeDir);
+    writeBuiltin('browse');
     await initSkills(config);
 
-    await writeSkill(config, { name: 'email', description: 'my edit', body: 'custom' });
-    await initSkills(config); // seed is present → left alone
+    const wrote = await writeSkill(config, { name: 'browse', description: 'd', body: 'b' });
+    expect(wrote).toMatch(/fork of the builtin/);
 
-    expect(loadSkillBody(paths, 'email')).toBe('custom');
+    const deleted = await deleteSkill(config, 'browse');
+    expect(deleted).toMatch(/no longer shadowed/);
+
+    // With no fork present, delete refuses and points at the fork path instead.
+    const refused = await deleteSkill(config, 'browse');
+    expect(refused).toMatch(/builtin skill/);
+    expect(refused).toMatch(/code deploy/);
+  });
+
+  it('the REAL repo ships the full builtin set, machine-agnostic', () => {
+    delete process.env.SUNNY_AGENT_DIR; // read the actual agent/builtin/skills
+    // The builtin cut line: only skills that depend solely on surfaces that SHIP
+    // with Sunny (native tools, the repo CLI, the skill system itself). Learned
+    // capabilities riding host-installed tools (email/himalaya, browse/agent-browser,
+    // website-builder/devbox) live in the authored skills repo instead.
+    const names = loadBuiltinSkills().map((s) => s.name);
+    expect(names).toEqual(['coding', 'delegation', 'dreaming', 'find-skills', 'skill-authoring']);
+    // Builtin content must never embed a machine-specific path — the dreaming
+    // skill addresses the repo via $SUNNY_REPO (portability D10).
+    for (const rec of loadBuiltinSkills()) {
+      const body = loadSkillBody(
+        { root: '', skillDir: () => '', skillFile: () => rec.file },
+        rec.name,
+      );
+      expect(body, `${rec.name} SKILL.md must not hardcode a home path`).not.toMatch(/\/home\//);
+    }
   });
 });
 

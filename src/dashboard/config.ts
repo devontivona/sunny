@@ -12,8 +12,11 @@ export interface DashboardConfig {
   mode: DashboardMode;
   /** HMAC secret for signing session cookies; null unless mode === 'auth'. */
   sessionSecret: string | null;
-  /** Public base URL used to build owner-facing approve links. */
-  publicUrl: string;
+  /** Public base URL used to build owner-facing approve links. Null when
+   *  DASHBOARD_PUBLIC_URL is unset — features needing an outward URL degrade
+   *  loudly rather than fall back to a host this machine doesn't own
+   *  (portability D12). */
+  publicUrl: string | null;
 }
 
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
@@ -25,9 +28,6 @@ export function loadDashboardConfig(): DashboardConfig {
   const sessionSecret = process.env.DASHBOARD_SESSION_SECRET?.trim() || null;
   const devOpen = process.env.DASHBOARD_DEV_OPEN === '1';
   const mode: DashboardMode = sessionSecret ? 'auth' : devOpen ? 'open' : 'unconfigured';
-  const publicUrl = (process.env.DASHBOARD_PUBLIC_URL ?? 'https://sunny.waywardlane.com').replace(
-    /\/+$/,
-    '',
-  );
+  const publicUrl = process.env.DASHBOARD_PUBLIC_URL?.replace(/\/+$/, '') ?? null;
   return { mode, sessionSecret, publicUrl };
 }

@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { start } from 'workflow/api';
 import { runConversation } from '../../workflows/conversation.js';
-import { listSchedules } from '../../src/scheduler/index.js';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { listSchedules, standingSchedulesDir } from '../../src/scheduler/index.js';
 import {
   setTurnModel,
   setupTestRuntime,
@@ -17,7 +19,9 @@ import { makeChannelEvent } from '../factories.js';
  * but never re-registered `createScheduleTools`, so Sunny lost the ability to schedule itself
  * (it told a family member "I can't run my own timer in the background"). These drive the REAL
  * `runConversation` workflow against the in-process WDK Local World with a scripted model that
- * calls `schedule_create`, and assert a persisted schedule row + a delivered confirmation.
+ * calls `schedule_create`, and assert the created schedule + a delivered confirmation.
+ * Recurring (cron) schedules become STANDING FILES in state/schedules/ (portability D14);
+ * one-off reminders stay DB rows.
  *
  * The tool is gated on `trustedDm` (any DM — owner OR family), NOT owner-only, so a family
  * member can schedule for themselves; the second test proves the non-owner path.
@@ -50,15 +54,20 @@ describe('self-scheduling on a trusted-DM turn (run-audiences Phase 1a)', () => 
     await run.returnValue;
     expect(await run.status).toBe('completed');
 
-    const rows = await listSchedules(ctx.db.db);
-    expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({
+    // Recurring = STANDING (portability D14): a state-repo file, not a DB row.
+    expect(await listSchedules(ctx.db.db)).toHaveLength(0);
+    const standing = ctx.fileSchedules.list();
+    expect(standing).toHaveLength(1);
+    expect(standing[0]).toMatchObject({
+      fileClass: 'standing',
       kind: 'cron',
       spec: '0 8 * * *',
       label: 'leo-check',
-      threadId: event.threadId, // delivered back to the thread it was created in
       active: true,
     });
+    expect(
+      existsSync(join(standingSchedulesDir(ctx.config.runtimeDir), 'leo-check.md')),
+    ).toBe(true);
     expect(ctx.gateway.texts()).toContain("Done — I'll check every morning at 8.");
   });
 
@@ -197,10 +206,10 @@ describe('self-scheduling on a trusted-DM turn (run-audiences Phase 1a)', () => 
     await run.returnValue;
     expect(await run.status).toBe('completed');
 
-    const rows = await listSchedules(ctx.db.db);
-    expect(rows).toHaveLength(1);
+    const standing = ctx.fileSchedules.list();
+    expect(standing).toHaveLength(1);
     // Owner DM → the full host bundle, registries included.
-    expect(rows[0]?.authority).toEqual([
+    expect(standing[0]?.authority).toEqual([
       'file_read',
       'memory_read',
       'runs_read',
@@ -241,12 +250,15 @@ describe('self-scheduling on a trusted-DM turn (run-audiences Phase 1a)', () => 
     await run.returnValue;
     expect(await run.status).toBe('completed');
 
-    const rows = await listSchedules(ctx.db.db);
-    expect(rows).toHaveLength(1);
+    const standing = ctx.fileSchedules.list();
+    expect(standing).toHaveLength(1);
     // Host preset ∩ family-DM authority: everything except credentials/mcp (owner-DM only).
-    expect(rows[0]?.authority).toContain('bash');
-    expect(rows[0]?.authority).not.toContain('credentials');
-    expect(rows[0]?.authority).not.toContain('mcp');
+    expect(standing[0]?.authority).toContain('bash');
+    expect(standing[0]?.authority).not.toContain('credentials');
+    expect(standing[0]?.authority).not.toContain('mcp');
+    // A family member's standing schedule captures its subject as an explicit audience —
+    // the file carries no machine thread id, so this keeps it delivering to Kate.
+    expect(standing[0]?.audience).toBe('person:Kate');
   });
 
   it('authority: readonly preset stores only the read-side grants', async () => {
@@ -271,8 +283,8 @@ describe('self-scheduling on a trusted-DM turn (run-audiences Phase 1a)', () => 
     await run.returnValue;
     expect(await run.status).toBe('completed');
 
-    const rows = await listSchedules(ctx.db.db);
-    expect(rows[0]?.authority).toEqual(['file_read', 'memory_read', 'runs_read']);
+    const standing = ctx.fileSchedules.list();
+    expect(standing[0]?.authority).toEqual(['file_read', 'memory_read', 'runs_read']);
   });
 
   it('list_runs shows the owner all schedules', async () => {

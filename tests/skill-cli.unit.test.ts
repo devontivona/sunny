@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-// The `skill` helper CLI (bundled into the skill-authoring seed) — pure helpers.
+// The `skill` helper CLI (ships with the builtin skill-authoring skill) — pure helpers.
 // The git/filesystem commands are exercised manually; here we lock down the slug +
 // validation logic that mirrors src/skills/index.ts so the two stay consistent.
 import {
@@ -7,7 +7,7 @@ import {
   parseFrontmatter,
   sanitizeName,
   validate,
-} from '../src/skills/seed-assets/skill.mjs';
+} from '../agent/builtin/skills/skill-authoring/scripts/skill.mjs';
 
 describe('skill CLI helpers', () => {
   it('sanitizeName slugifies and blocks path traversal', () => {
