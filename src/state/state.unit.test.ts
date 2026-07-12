@@ -1,11 +1,19 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { makeConfig } from '../../tests/factories.js';
-import { stateDir } from '../config/index.js';
+import { dataDir, stateDir } from '../config/index.js';
 import { applyMemoryWrite, memoryPaths } from '../memory/index.js';
-import { commitState, initStateRepo, pushState } from './index.js';
+import {
+  commitState,
+  initDataRepo,
+  initStateRepo,
+  pushData,
+  pushState,
+  sweepData,
+  warnIfStateDirty,
+} from './index.js';
 
 /** Init `~/.sunny/state` as a git repo with a committer identity (so commits work in
  *  any CI sandbox). Returns the state dir. */
@@ -116,5 +124,134 @@ describe('memory commit-on-write (runtime-home)', () => {
       encoding: 'utf8',
     });
     expect(tracked).toContain('- Likes tea');
+  });
+});
+
+describe('data repo (runtime-home-data-split)', () => {
+  it('initDataRepo git-inits data/ in place and is idempotent', async () => {
+    const config = makeConfig();
+    await initDataRepo(config);
+    const dir = dataDir(config.runtimeDir);
+    expect(existsSync(join(dir, '.git'))).toBe(true);
+
+    writeFileSync(join(dir, 'sentinel.txt'), 'x');
+    await sweepData(config);
+    await initDataRepo(config); // must not re-init / clobber
+    expect(gitLog(dir)).toContain('data: sweep');
+  });
+
+  it('sweepData commits agent writes with the sweep message and no-ops when clean', async () => {
+    const config = makeConfig();
+    await initDataRepo(config);
+    const dir = dataDir(config.runtimeDir);
+    mkdirSync(join(dir, 'sites', 'demo'), { recursive: true });
+    writeFileSync(join(dir, 'sites', 'demo', 'index.html'), '<h1>hi</h1>');
+
+    await sweepData(config);
+    await sweepData(config); // clean tree → no second commit
+
+    const sweeps = gitLog(dir)
+      .split('\n')
+      .filter((l) => l.includes('data: sweep'));
+    expect(sweeps).toHaveLength(1);
+    const tracked = execFileSync('git', ['show', 'HEAD:sites/demo/index.html'], {
+      cwd: dir,
+      encoding: 'utf8',
+    });
+    expect(tracked).toContain('<h1>hi</h1>');
+  });
+
+  it('pushData is a no-op without a remote and non-fatal with an unreachable one', async () => {
+    const noRemote = makeConfig();
+    await initDataRepo(noRemote);
+    await expect(pushData(noRemote)).resolves.toBeUndefined();
+
+    const bogus = makeConfig({ data: { repo: 'file:///nonexistent-sunny-data-remote.git' } });
+    // Non-empty dir → init-in-place (an empty dir + remote would take the clone path,
+    // which fails against the bogus remote and leaves no repo — a different scenario).
+    mkdirSync(dataDir(bogus.runtimeDir), { recursive: true });
+    writeFileSync(join(dataDir(bogus.runtimeDir), 'keep.txt'), 'v');
+    await initDataRepo(bogus);
+    writeFileSync(join(dataDir(bogus.runtimeDir), 'post-init.txt'), 'v');
+    await sweepData(bogus);
+    await expect(pushData(bogus)).resolves.toBeUndefined();
+    // The failed push left the sweep commit local.
+    expect(gitLog(dataDir(bogus.runtimeDir))).toContain('data: sweep');
+  });
+});
+
+describe('commitState stray surfacing (runtime-home-data-split)', () => {
+  it('warns on dirty paths outside the expected prefixes and still commits them', async () => {
+    const { runtimeDir } = makeConfig();
+    const dir = initStateGit(runtimeDir);
+    mkdirSync(join(dir, 'memory'), { recursive: true });
+    writeFileSync(join(dir, 'memory', 'USER.md'), '- fact');
+    writeFileSync(join(dir, 'stray.json'), '{}');
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await commitState(runtimeDir, 'memory: add USER.md', ['memory/']);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('changes outside this write'),
+        expect.objectContaining({ strays: ['stray.json'] }),
+      );
+    } finally {
+      warn.mockRestore();
+    }
+    // Surfaced, not dropped: the stray is committed anyway.
+    const tracked = execFileSync('git', ['show', 'HEAD:stray.json'], {
+      cwd: dir,
+      encoding: 'utf8',
+    });
+    expect(tracked).toBe('{}');
+  });
+
+  it('does not warn when only expected paths changed', async () => {
+    const { runtimeDir } = makeConfig();
+    const dir = initStateGit(runtimeDir);
+    mkdirSync(join(dir, 'memory'), { recursive: true });
+    writeFileSync(join(dir, 'memory', 'USER.md'), '- fact');
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await commitState(runtimeDir, 'memory: add USER.md', ['memory/']);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
+
+describe('warnIfStateDirty', () => {
+  it('warns naming the dirty paths at boot', async () => {
+    const { runtimeDir } = makeConfig();
+    const dir = initStateGit(runtimeDir);
+    writeFileSync(join(dir, 'dropped-by-bash.txt'), 'oops');
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await warnIfStateDirty(runtimeDir);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('dirty at boot'),
+        expect.objectContaining({ paths: ['dropped-by-bash.txt'] }),
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('is silent when the tree is clean', async () => {
+    const { runtimeDir } = makeConfig();
+    const dir = initStateGit(runtimeDir);
+    writeFileSync(join(dir, 'note.txt'), 'v');
+    await commitState(runtimeDir, 'seed');
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await warnIfStateDirty(runtimeDir);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

@@ -1,5 +1,12 @@
-import { describe, it, expect } from 'vitest';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { makeConfig } from '../../../tests/factories.js';
@@ -258,5 +265,63 @@ describe('execBash credential injection (D-TA5)', () => {
     } finally {
       delete process.env.OP_SERVICE_ACCOUNT_TOKEN;
     }
+  });
+});
+
+describe('state write-authority guard (runtime-home-data-split)', () => {
+  let home: string;
+  let prevHome: string | undefined;
+
+  beforeEach(() => {
+    prevHome = process.env.SUNNY_HOME;
+    home = mkdtempSync(join(tmpdir(), 'sunny-guard-'));
+    mkdirSync(join(home, 'state', 'memory'), { recursive: true });
+    mkdirSync(join(home, 'data'), { recursive: true });
+    process.env.SUNNY_HOME = home;
+  });
+
+  afterEach(() => {
+    if (prevHome === undefined) delete process.env.SUNNY_HOME;
+    else process.env.SUNNY_HOME = prevHome;
+  });
+
+  it('refuses file_write directly into state/ and points at data/ and scratch/', () => {
+    const target = join(home, 'state', 'note.txt');
+    const out = writeFileSafe(target, 'litter');
+    expect(out).toContain('ERROR');
+    expect(out).toContain('code-managed');
+    expect(out).toContain('~/.sunny/data/');
+    expect(out).toContain('~/.sunny/scratch/');
+    expect(existsSync(target)).toBe(false);
+  });
+
+  it('refuses a `..` traversal into state/', () => {
+    const sneaky = join(home, 'data', '..', 'state', 'note.txt');
+    expect(writeFileSafe(sneaky, 'litter')).toContain('ERROR');
+    expect(existsSync(join(home, 'state', 'note.txt'))).toBe(false);
+  });
+
+  it('refuses a symlink that resolves into state/', () => {
+    symlinkSync(join(home, 'state'), join(home, 'not-state'));
+    const viaLink = join(home, 'not-state', 'note.txt');
+    expect(writeFileSafe(viaLink, 'litter')).toContain('ERROR');
+    expect(existsSync(join(home, 'state', 'note.txt'))).toBe(false);
+  });
+
+  it('refuses file_edit inside state/ and leaves the file unchanged (reads still work)', () => {
+    const target = join(home, 'state', 'memory', 'USER.md');
+    writeFileSync(target, '- original');
+    const out = editFileSafe(target, '- original', '- tampered');
+    expect(out).toContain('ERROR');
+    expect(readFileSync(target, 'utf8')).toBe('- original');
+    // file_read of the same path is unrestricted.
+    expect(readFileSafe(target)).toContain('- original');
+  });
+
+  it('allows writes to data/ and scratch/', () => {
+    expect(
+      writeFileSafe(join(home, 'data', 'sites', 'demo', 'index.html'), '<h1>ok</h1>'),
+    ).toContain('Wrote');
+    expect(writeFileSafe(join(home, 'scratch', 'tmp.txt'), 'working')).toContain('Wrote');
   });
 });

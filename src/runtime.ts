@@ -5,6 +5,7 @@ import { DurableTurnRouter } from './agent/durableRouter.js';
 import { DelegationSupervisor } from './agent/delegationSupervisor.js';
 import { mkdirSync } from 'node:fs';
 import { loadConfig, scratchDir, type SunnyConfig } from './config/index.js';
+import { gcScratch } from './scratch/index.js';
 import { createDb, runMigrations, type Db } from './db/client.js';
 import { messages, scheduleRuns } from './db/schema.js';
 import { ConversationStore } from './gateway/store.js';
@@ -16,7 +17,8 @@ import type { ChannelEvent, Gateway } from './gateway/types.js';
 import { assertAgentSurface } from './agentDir.js';
 import { initMemory } from './memory/index.js';
 import { initSkills, startSkillSync } from './skills/index.js';
-import { pushState } from './state/index.js';
+import { initDataRepo, pushData, pushState, sweepData, warnIfStateDirty } from './state/index.js';
+import { migrateAgentArtifactsToData } from './state/migrateData.js';
 import {
   FileScheduleRegistry,
   loadBuiltinSchedules,
@@ -126,7 +128,7 @@ async function start(): Promise<Runtime> {
     log.warn(
       'DASHBOARD_PUBLIC_URL is not set — outbound media links, MCP OAuth, and dashboard ' +
         'approve links need a public URL and will degrade until it is configured (there is ' +
-        'deliberately no default: it must be THIS host\'s URL).',
+        "deliberately no default: it must be THIS host's URL).",
     );
   }
 
@@ -134,14 +136,27 @@ async function start(): Promise<Runtime> {
   await runMigrations(db);
   await initMemory(config);
   await initSkills(config);
+  // The agent-data repo (runtime-home-data-split): init `~/.sunny/data/`, relocate any
+  // agent artifacts stranded in `state/` or the legacy `~/.sunny/sites/` (idempotent),
+  // sweep-commit whatever the agent wrote since the last boot, and surface a dirty
+  // state tree (state/ is code-managed — a dirty tree at boot means an outside write).
+  await initDataRepo(config);
+  await migrateAgentArtifactsToData(config);
+  await sweepData(config);
+  await warnIfStateDirty(config.runtimeDir);
 
   // Media storage (messaging-media D-MM2/4): create + gitignore the media tree,
   // and sweep the short-TTL public outbox hourly so hosted send-files don't pile
   // up. Inbound media is retained durably (cleanup deferred).
   ensureMediaDirs(config.runtimeDir);
-  // Scratch space for the agent's working files (portability: keeps throwaway files
-  // out of the state repo, whose history is durable and synced).
-  mkdirSync(scratchDir(config.runtimeDir), { recursive: true });
+  // Scratch space for the agent's working files (runtime-home-data-split): created at
+  // boot and garbage-collected — entries older than `scratch.gcDays` (a directory ages
+  // by its newest file) are deleted now and on a daily tick, so "temporary" stays true.
+  const scratch = scratchDir(config.runtimeDir);
+  const scratchMaxAgeMs = config.scratch.gcDays * 24 * 60 * 60_000;
+  mkdirSync(scratch, { recursive: true });
+  gcScratch(scratch, scratchMaxAgeMs, Date.now());
+  setInterval(() => gcScratch(scratch, scratchMaxAgeMs, Date.now()), 24 * 60 * 60_000).unref();
   cleanupOutbox(config.runtimeDir, Date.now());
   setInterval(() => cleanupOutbox(config.runtimeDir, Date.now()), 60 * 60_000).unref();
 
@@ -157,9 +172,9 @@ async function start(): Promise<Runtime> {
   // usable), which is how a new machine gets far enough to be configured at all.
   const sendblueConfigured = Boolean(
     process.env.SENDBLUE_API_KEY &&
-      process.env.SENDBLUE_API_SECRET &&
-      process.env.SENDBLUE_FROM_NUMBER &&
-      process.env.SENDBLUE_WEBHOOK_SECRET,
+    process.env.SENDBLUE_API_SECRET &&
+    process.env.SENDBLUE_FROM_NUMBER &&
+    process.env.SENDBLUE_WEBHOOK_SECRET,
   );
   let gateway: Gateway;
   if (sendblueConfigured) {
@@ -331,10 +346,16 @@ async function start(): Promise<Runtime> {
   // On divergence Sunny tells the owner once (via the owner's DM thread, if known).
   // The same tick also pushes the `state` repo to its private remote best-effort
   // (runtime-home, task 2.4): commits land per-write, network sync batches here.
+  // And it sweep-commits + pushes the `data` repo (runtime-home-data-split): the agent
+  // just writes files there; this cadence is what makes them durable.
   startSkillSync({
     config,
     onDiverged: (text) => void notifyOwner(db, gateway, text),
-    onTick: () => pushState(config),
+    onTick: async () => {
+      await pushState(config);
+      await sweepData(config);
+      await pushData(config);
+    },
   });
 
   log.info('runtime started');

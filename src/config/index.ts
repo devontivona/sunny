@@ -111,7 +111,8 @@ export const ConfigSchema = z.object({
     })
     .default({ userMaxChars: 8000, sunnyMaxChars: 6000, indexMaxChars: 2000 }),
   /** Durable `state` repository (runtime-home). Names the owner-controlled PRIVATE
-   *  remote that backs `~/.sunny/state/` (memory + credentials + sites). Mirrors how
+   *  remote that backs `~/.sunny/state/` (memory + credentials + schedules + mcp.json —
+   *  the code-written record; agent-authored artifacts live in `data/`). Mirrors how
    *  `skills.repo` bootstraps the skills clone: on a fresh host the state dir is cloned
    *  from here; otherwise it's pushed to here on the periodic sync cadence. Optional —
    *  with no remote, state is still committed locally (history, no offsite backup). */
@@ -122,6 +123,25 @@ export const ConfigSchema = z.object({
       repo: z.string().optional(),
     })
     .default({}),
+  /** The `data` repository (runtime-home-data-split): agent-authored durable artifacts —
+   *  sites, projects, structured working state skills keep across runs. Persisted by a
+   *  periodic sweep commit (the agent never runs git there). Optional remote — with none
+   *  the repo exists locally and pushing is a no-op. */
+  data: z
+    .object({
+      /** PRIVATE data remote (owner/repo or URL), e.g. a `sunny-data` sibling of the
+       *  state remote. Owner-private: it carries whatever the agent builds. */
+      repo: z.string().optional(),
+    })
+    .default({}),
+  /** Scratch-space GC (runtime-home-data-split): top-level `~/.sunny/scratch/` entries
+   *  older than this many days (mtime; directories age by their newest file) are deleted
+   *  at boot and daily. Scratch is documented to the agent as disposable. */
+  scratch: z
+    .object({
+      gcDays: z.number().int().positive().default(14),
+    })
+    .default({ gcDays: 14 }),
   /** Always-on skills index budget (agent-skills D-SK2) + optional dedicated repo (D-SK8). */
   skills: z
     .object({
@@ -162,25 +182,35 @@ export function runtimeDir(): string {
 }
 
 /** The `state` repository working tree (`~/.sunny/state`, runtime-home). A git repo
- *  tracking durable, portable state — memory, the credential registry, and sites —
- *  backed by an owner-controlled private remote (`config.state.repo`). A sibling of
- *  `skills/` and `media/`, so no repo nests inside another's tracked tree. */
+ *  tracking the CODE-WRITTEN durable record — memory, the credential registry, standing
+ *  schedules, and the MCP registry — backed by an owner-controlled private remote
+ *  (`config.state.repo`). Written only by the runtime's own code paths (the agent's file
+ *  tools refuse it); agent-authored artifacts live in `data/`. A sibling of `data/`,
+ *  `skills/`, and `media/`, so no repo nests inside another's tracked tree. */
 export function stateDir(runtimeDir: string): string {
   return join(runtimeDir, 'state');
 }
 
-/** Site working dirs (e.g. the website-builder skill's output): `~/.sunny/state/sites`,
- *  tracked by the `state` repo. */
+/** The `data` repository working tree (`~/.sunny/data`, runtime-home-data-split). A git
+ *  repo holding durable artifacts the AGENT authors — sites, projects, structured working
+ *  state — persisted by a periodic sweep commit (the agent just writes files, never git).
+ *  Optional private remote (`config.data.repo`). A sibling of `state/`. */
+export function dataDir(runtimeDir: string): string {
+  return join(runtimeDir, 'data');
+}
+
+/** Site working dirs (e.g. the website-builder skill's output): `~/.sunny/data/sites`,
+ *  tracked by the `data` repo. */
 export function sitesDir(runtimeDir: string): string {
-  return join(stateDir(runtimeDir), 'sites');
+  return join(dataDir(runtimeDir), 'sites');
 }
 
 /** The agent's scratch space (`~/.sunny/scratch`): temporary/working files — downloads,
- *  intermediate outputs, one-off script results. Machine-local and untracked (a SIBLING
- *  of `state/`, never inside it) so throwaway files don't get committed to the state
- *  repo's history. Durable artifacts have homes: sites → `state/sites`, skills → the
- *  authored repo, knowledge → memory. Created at boot; the prompt teaches the agent
- *  to use it. */
+ *  intermediate outputs, one-off script results. Machine-local, untracked (a SIBLING of
+ *  `state/` and `data/`, never inside either), and garbage-collected (`config.scratch.gcDays`)
+ *  so throwaway files neither pile up nor get committed anywhere. Durable artifacts have
+ *  homes: sites/projects → `data/`, skills → the authored repo, knowledge → memory.
+ *  Created at boot; the prompt teaches the agent the convention. */
 export function scratchDir(runtimeDir: string): string {
   return join(runtimeDir, 'scratch');
 }

@@ -1,9 +1,16 @@
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import { tool } from 'ai';
-import type { SunnyConfig } from '../../config/index.js';
+import { runtimeDir, stateDir, type SunnyConfig } from '../../config/index.js';
 import { resolveByName, type CredentialResolver } from '../../credentials/index.js';
 import { SECRET_ENV_KEYS } from '../../observability/redact.js';
 import { BASH_TOOL_SPECS } from './bashSpecs.js';
@@ -209,6 +216,36 @@ function loadTextFile(path: string): { text: string } | { error: string } {
   }
 }
 
+/**
+ * Write-authority guard (runtime-home-data-split): `~/.sunny/state/` is the CODE-MANAGED
+ * record — the agent's mutation tools refuse it, which is what keeps the state repo's
+ * commit-on-write history truthful. Reads stay unrestricted. Resolution is symlink- and
+ * `..`-safe: the target is resolved lexically, then the real path of its deepest EXISTING
+ * ancestor is swapped in, so neither a symlink into `state/` nor a `../` path can smuggle
+ * a write past the check. Returns the refusal message, or null when the path is fine.
+ */
+function refuseStateWrite(path: string): string | null {
+  const state = stateDir(runtimeDir());
+  const stateReal = existsSync(state) ? realpathSync(state) : resolve(state);
+  let full = resolve(expandHome(path));
+  let ancestor = full;
+  while (!existsSync(ancestor)) {
+    const parent = dirname(ancestor);
+    if (parent === ancestor) break;
+    ancestor = parent;
+  }
+  if (existsSync(ancestor)) {
+    full = join(realpathSync(ancestor), full.slice(ancestor.length));
+  }
+  if (full !== stateReal && !full.startsWith(stateReal + sep)) return null;
+  return (
+    `ERROR: "${path}" is inside ~/.sunny/state — Sunny's code-managed record, written only ` +
+    `by the runtime itself. Nothing was changed. Durable files you author go in ` +
+    `~/.sunny/data/ (sites → data/sites/, projects → data/projects/); temporary working ` +
+    `files go in ~/.sunny/scratch/.`
+  );
+}
+
 export interface FileReadOpts {
   /** 1-based first line of the window (default 1). */
   offset?: number;
@@ -270,6 +307,8 @@ export function readFileSafe(path: string, opts: FileReadOpts = {}): string {
  */
 export function writeFileSafe(path: string, content: string): string {
   try {
+    const refused = refuseStateWrite(path);
+    if (refused) return refused;
     const full = expandHome(path);
     const existed = existsSync(full);
     if (existed && statSync(full).isDirectory()) {
@@ -299,6 +338,12 @@ export function editFileSafe(
   if (oldString === '') return 'ERROR: old_string is empty — provide the exact text to replace.';
   if (oldString === newString) {
     return 'ERROR: old_string and new_string are identical — nothing to change.';
+  }
+  try {
+    const refused = refuseStateWrite(path);
+    if (refused) return refused;
+  } catch (err) {
+    return `ERROR: ${err instanceof Error ? err.message : String(err)}`;
   }
   const loaded = loadTextFile(path);
   if ('error' in loaded) return loaded.error;
