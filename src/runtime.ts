@@ -195,6 +195,7 @@ async function start(): Promise<Runtime> {
       modelId: config.modelId,
       effort: config.thinking === 'off' ? null : config.effort,
       turnWatchdogMs: config.turnWatchdogMs,
+      turnInactivityMs: config.turnInactivityMs,
     });
     gateway.onInbound(async (event: ChannelEvent) => durableRouter!.route(event));
   }

@@ -43,6 +43,7 @@ describe('DurableTurnRouter orphan adoption (restart safety)', () => {
     modelId: 'claude-sonnet-5',
     effort: 'high' as string | null,
     turnWatchdogMs: 5000,
+    turnInactivityMs: 5000,
   };
 
   it('recovery queues BEHIND a healthy adopted orphan — never a duplicate run', async () => {
@@ -127,7 +128,7 @@ describe('DurableTurnRouter orphan adoption (restart safety)', () => {
     const router = new DurableTurnRouter(
       gateway,
       store,
-      { ...meta, turnWatchdogMs: 50 },
+      { ...meta, turnWatchdogMs: 50, turnInactivityMs: 50 },
       async () => {
         throw new Error('no fresh runs expected — every orphan should be driven');
       },
@@ -155,7 +156,7 @@ describe('DurableTurnRouter orphan adoption (restart safety)', () => {
     const router = new DurableTurnRouter(
       gateway,
       store,
-      { ...meta, turnWatchdogMs: 60 },
+      { ...meta, turnWatchdogMs: 60, turnInactivityMs: 60 },
       async () => {
         throw new Error('no fresh runs expected');
       },

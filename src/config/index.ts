@@ -42,9 +42,18 @@ export const ConfigSchema = z.object({
    * budget the router abandons + cancels it, retires the inbound it was answering (never a
    * silent re-run — a fresh run re-answers from scratch and would re-send anything the hung
    * run already delivered, the PR #29 duplicate-reply class), and tells the user on-thread.
-   * Generous by design: legitimate tool-heavy turns run 5–8 minutes.
+   * Since watchdog-activity this is the HARD CAP (runaway-but-active turns); true hangs
+   * are caught earlier by `turnInactivityMs`. Generous by design.
    */
   turnWatchdogMs: z.number().int().positive().default(600_000),
+  /**
+   * Inactivity budget for the activity-aware watchdog (watchdog-activity): abandon a
+   * turn-run only after this long with NO run-stream activity (model deltas, tool
+   * results) — a true hang. `turnWatchdogMs` above is the HARD CAP on total runtime
+   * for runaway-but-active turns. Default = the old flat budget, so hang detection
+   * keeps its historical latency while healthy long turns run to the cap.
+   */
+  turnInactivityMs: z.number().int().positive().default(600_000),
   /** Devon's timezone (used by scheduling later). */
   timezone: z.string().default('America/New_York'),
   /** Owner identity allowlist — phone numbers / emails (messaging-gateway D-MG6, task 2.4). */

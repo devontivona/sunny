@@ -34,6 +34,14 @@ intermediate state?
 - Isolation WINS for bounded, read-only, parallelizable work where children don't need each
   other's state: research, search, multi-source digest, summarizing a long thread,
   untrusted-content triage, an adversarial verify of a finding. Delegate freely.
+- LONG SWEEPS are a delegation case even when sequential: a task that will take MANY tool
+  calls against one source — searching a mailbox message by message, batch-processing a list,
+  crawling a set of pages — should run as ONE subagent, not inline in your turn. Grinding it
+  inline holds the whole conversation hostage (you can't hear new messages as fresh turns,
+  and a very long turn risks the runtime's hard cap); a child does the sweep in its own run
+  while you stay responsive, and its report comes back for you to summarize. Rule of thumb:
+  if you can see 10+ tool calls coming for one bounded job, brief a child and tell the owner
+  it's underway.
 - Isolation FAILS for coupled work SPLIT ACROSS children — one child's choices constrain
   another's (two children editing the same codebase, a multi-file build divided up): split
   decisions produce silently conflicting assumptions. Never divide coupled edits. But ONE
