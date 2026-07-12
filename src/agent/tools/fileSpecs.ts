@@ -20,7 +20,8 @@ export const FILE_TOOL_SPECS = {
       'content (missing parent directories are created). Use this — not bash heredocs — ' +
       'to create files. To change part of an existing file, prefer file_edit. The content ' +
       'is written verbatim: never include file_read line-number prefixes in it — those are ' +
-      'display-only.',
+      'display-only. Paths inside ~/.sunny/state are refused (code-managed): durable files ' +
+      'go in ~/.sunny/data, temporary files in ~/.sunny/scratch.',
     inputSchema: z.object({
       path: z.string().describe('File path (absolute, ~-relative, or $SUNNY_REPO-relative).'),
       content: z.string().describe('The complete file contents to write, exactly as given.'),
@@ -34,9 +35,12 @@ export const FILE_TOOL_SPECS = {
       'immediately before editing and copy the text verbatim, WITHOUT the line-number ' +
       'prefixes (they are display-only, not file content). If the edit is refused (no ' +
       'match, or multiple matches), re-read the file and widen old_string until it is ' +
-      'unique. Use this — not sed or bash heredocs — for surgical file changes.',
+      'unique. Use this — not sed or bash heredocs — for surgical file changes. Paths ' +
+      'inside ~/.sunny/state are refused (code-managed): durable files go in ~/.sunny/data.',
     inputSchema: z.object({
-      path: z.string().describe('File path (absolute, ~-relative, or $SUNNY_REPO-relative). Must exist.'),
+      path: z
+        .string()
+        .describe('File path (absolute, ~-relative, or $SUNNY_REPO-relative). Must exist.'),
       old_string: z
         .string()
         .describe('The exact text to replace (must match the file verbatim, once).'),

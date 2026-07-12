@@ -91,7 +91,7 @@ function migrateLegacyRegistry(runtimeDir: string): void {
     mkdirSync(dirname(current), { recursive: true });
     renameSync(legacy, current);
     log.info('migrated mcp registry into the state repo', { from: legacy, to: current });
-    void commitState(runtimeDir, 'mcp: migrate registry into state repo');
+    void commitState(runtimeDir, 'mcp: migrate registry into state repo', ['mcp.json']);
   } catch (err) {
     log.warn('could not migrate legacy mcp registry (non-fatal)', { err: String(err) });
   }
@@ -164,7 +164,7 @@ function writeRegistry(runtimeDir: string, registry: McpRegistry): void {
   writeFileSync(tmp, `${JSON.stringify(registry, null, 2)}\n`, { mode: 0o644 });
   renameSync(tmp, file);
   // Registry writes are state writes (runtime-home): commit-on-write, push batched.
-  void commitState(runtimeDir, 'mcp: update registry');
+  void commitState(runtimeDir, 'mcp: update registry', ['mcp.json']);
 }
 
 const HTTP_URL_RE = /^https?:\/\/[^/\s]+/i;

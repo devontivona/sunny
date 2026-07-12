@@ -243,7 +243,7 @@ export function registerCredential(
     renameSync(tmp, file);
     // Commit the registry update to the `state` repo (runtime-home). Best-effort:
     // never fails the registration, even with no repo.
-    await commitState(runtimeDir, `credentials: register ${key}`);
+    await commitState(runtimeDir, `credentials: register ${key}`, ['credentials.json']);
     return entry;
   });
 }

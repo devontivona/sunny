@@ -61,6 +61,24 @@ function mediaSection(owner: string): string[] {
   ];
 }
 
+/** Where files go (runtime-home-data-split): the three write-authority domains under
+ *  ~/.sunny. Shared VERBATIM by the interactive turn and durable jobs — static text, so
+ *  the cached prefix stays byte-stable between turns (D-PS4). Meaningful whenever a run
+ *  holds bash/file tools; harmless (and cache-preserving) when it doesn't. */
+function placementSection(): string[] {
+  return [
+    `Where files go — three homes under ~/.sunny:`,
+    `- ~/.sunny/scratch/ — temporary working files: downloads, intermediate outputs, one-off`,
+    `  scripts. Machine-local and garbage-collected after ~2 weeks; assume it can vanish.`,
+    `- ~/.sunny/data/ — durable artifacts you author: sites → data/sites/<slug>/, code projects →`,
+    `  data/projects/<name>/, plus any structured working state a skill keeps across runs.`,
+    `  Versioned and synced automatically — just write files; never run git there yourself.`,
+    `- ~/.sunny/state/ — Sunny's code-managed record (memory, credentials, schedules). NEVER`,
+    `  write there — the file tools refuse it. Durable facts → memory; procedures → skills.`,
+    `Never leave working files in the ~/.sunny root itself.`,
+  ];
+}
+
 /** Memory guidance — only meaningful when the run has the memory tools. */
 function memorySection(owner: string): string[] {
   return [
@@ -191,6 +209,8 @@ export function buildSystemPrompt(
     ``,
     ...mediaSection(owner),
     ``,
+    ...placementSection(),
+    ``,
     ...memorySection(owner),
   ].join('\n');
 
@@ -254,10 +274,7 @@ export function buildJobPrompt(
       `- file_read: read a file's contents (line-numbered; window big files with offset/limit).`,
       `- file_write / file_edit: create or surgically edit files — prefer these over bash`,
       `  heredocs or sed for any file mutation.`,
-      `Working files go in ~/.sunny/scratch/ — downloads, intermediate outputs, one-off scripts,`,
-      `anything temporary. Never drop working files in ~/.sunny or ~/.sunny/state (state/ is your`,
-      `synced permanent record; litter there gets committed forever). Durable artifacts have`,
-      `homes: sites → state/sites, skills → the authored repo, knowledge → memory.`,
+      ...placementSection(),
       `NEVER write tool calls as text (no "Tool: …", no JSON code blocks describing a call) —`,
       `actually call the tool. Text you emit is NOT executed; only real tool calls do anything.`,
       ``,

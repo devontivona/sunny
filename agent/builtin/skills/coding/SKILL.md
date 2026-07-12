@@ -14,8 +14,11 @@ You have the same primitives every good coding agent is built on: bash, and the 
   README. They override this skill's generic advice (conventions, test commands, warnings).
 - Find the entry points: package.json scripts (or Makefile, pyproject.toml, …) tell you how the
   project builds, tests, and runs.
-- New scratch projects live under ~/.sunny/state/projects/<name>/ (create the folder). Existing
-  repos live wherever they live — pass cwd to bash.
+- New code projects live under ~/.sunny/data/projects/<name>/ (create the folder; data/ is
+  versioned and synced automatically — never run git there yourself). Existing repos live
+  wherever they live — pass cwd to bash. A throwaway experiment you won't keep can go in
+  ~/.sunny/scratch/ instead (garbage-collected). Never write under ~/.sunny/state — the file
+  tools refuse it.
 
 ## 1. Search, read, then edit
 
@@ -54,8 +57,8 @@ You have the same primitives every good coding agent is built on: bash, and the 
   URL).
 - Long builds/test suites: raise timeout_ms, or background and poll:
 
-    bash(command: "nohup npm run build > /tmp/build.log 2>&1 & echo started")
-    bash(command: "tail -20 /tmp/build.log")
+    bash(command: "nohup npm run build > ~/.sunny/scratch/build.log 2>&1 & echo started")
+    bash(command: "tail -20 ~/.sunny/scratch/build.log")
 
   tmux is also available for genuinely interactive processes.
 

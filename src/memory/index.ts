@@ -129,7 +129,7 @@ export async function ensureAndLoadPeople(
     }
     docs.push({ id: p.id, name: p.name, content: readIfExists(file) });
   }
-  if (created) await commitState(config.runtimeDir, 'memory: seed person doc(s)');
+  if (created) await commitState(config.runtimeDir, 'memory: seed person doc(s)', ['memory/']);
   return docs;
 }
 
@@ -147,11 +147,14 @@ export async function initMemory(config: SunnyConfig): Promise<void> {
   mkdirSync(paths.topicsDir, { recursive: true });
   mkdirSync(paths.peopleDir, { recursive: true });
 
-  seedIfAbsent(paths.USER, renderTemplate(readSeedFile('memory', 'USER.md'), { ownerName: config.owner.name }));
+  seedIfAbsent(
+    paths.USER,
+    renderTemplate(readSeedFile('memory', 'USER.md'), { ownerName: config.owner.name }),
+  );
   seedIfAbsent(paths.SUNNY, readSeedFile('memory', 'SUNNY.md'));
   seedIfAbsent(paths.INDEX, readSeedFile('memory', 'INDEX.md'));
 
-  await commitState(config.runtimeDir, 'memory: seed core');
+  await commitState(config.runtimeDir, 'memory: seed core', ['memory/']);
 }
 
 // --- Serialized writer (agent-memory R7 / D-MG / task 3.8) -----------------
@@ -224,7 +227,7 @@ export function applyMemoryWrite(config: SunnyConfig, input: MemoryWriteInput): 
     }
     // Capture the edit in the `state` repo's history (runtime-home). Best-effort:
     // never fails the write, even with no repo (committed on the periodic push).
-    await commitState(config.runtimeDir, `memory: ${input.action} ${label}`);
+    await commitState(config.runtimeDir, `memory: ${input.action} ${label}`, ['memory/']);
     return `ok: ${input.action} on ${label} (${next.length} chars)${indexNote}`;
   });
 }
@@ -327,4 +330,3 @@ function readIfExists(path: string): string {
 function seedIfAbsent(path: string, content: string): void {
   if (!existsSync(path)) writeFileSync(path, content, { mode: 0o644 });
 }
-

@@ -344,7 +344,7 @@ export class FileScheduleRegistry {
     const dir = standingSchedulesDir(this.opts.runtimeDir);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, `${name}.md`), composeScheduleFile(def), { mode: 0o644 });
-    await commitState(this.opts.runtimeDir, `schedule: create standing ${name}`);
+    await commitState(this.opts.runtimeDir, `schedule: create standing ${name}`, ['schedules/']);
     const resolved = this.register(def, 'standing');
     log.info('standing schedule created', { name, cron: input.cron });
     return resolved;
@@ -359,7 +359,9 @@ export class FileScheduleRegistry {
     );
     if (!item) return null;
     rmSync(join(standingSchedulesDir(this.opts.runtimeDir), `${item.label}.md`), { force: true });
-    await commitState(this.opts.runtimeDir, `schedule: delete standing ${item.label}`);
+    await commitState(this.opts.runtimeDir, `schedule: delete standing ${item.label}`, [
+      'schedules/',
+    ]);
     this.items.delete(item.id);
     log.info('standing schedule deleted', { name: item.label });
     return item;
