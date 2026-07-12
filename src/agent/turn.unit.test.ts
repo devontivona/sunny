@@ -161,6 +161,36 @@ describe('toModelMessages — strips reasoning (extended-thinking) parts from hi
   });
 });
 
+describe('toModelMessages — an empty user message never reaches the API empty', () => {
+  // 2026-07-12 incident: a carrier-side media failure stored an inbound row with empty text
+  // and no attachment; it rendered to `content: []` and the Anthropic API 400'd every turn
+  // whose window contained it ("user messages must have non-empty content").
+  it('renders a no-content user row as a bracketed note', async () => {
+    const row = makeStoredMessage({
+      role: 'user',
+      text: '',
+      payload: { id: 'u1', role: 'user', parts: [{ type: 'text', text: '' }] },
+    });
+    const messages = await toModelMessages([row], false);
+    const user = messages.find((m) => m.role === 'user');
+    expect(user).toBeTruthy();
+    const content = user!.content;
+    expect(Array.isArray(content) ? content.length : content.trim().length).toBeGreaterThan(0);
+    expect(JSON.stringify(content)).toContain('no readable content');
+  });
+
+  it('leaves normal user messages alone', async () => {
+    const row = makeStoredMessage({
+      role: 'user',
+      text: 'hi there',
+      payload: { id: 'u2', role: 'user', parts: [{ type: 'text', text: 'hi there' }] },
+    });
+    const messages = await toModelMessages([row], false);
+    expect(JSON.stringify(messages)).toContain('hi there');
+    expect(JSON.stringify(messages)).not.toContain('no readable content');
+  });
+});
+
 describe('renderTranslatorParts — read-time rendering of relayed progress updates', () => {
   const payload = {
     id: 'a1',
