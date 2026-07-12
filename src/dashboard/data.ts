@@ -436,6 +436,16 @@ export class DashboardData {
     };
   }
 
+  /** Total stored stream chunks for a run (single `_user` stream per run) — the live view's
+   *  tail-window replay needs the absolute index to keep SSE resume ids correct. */
+  async jobStreamChunkCount(runId: string): Promise<number> {
+    const res = await this.db.execute(sql`
+      select count(*)::int as n from workflow.workflow_stream_chunks where run_id = ${runId}
+    `);
+    const rows = rowsOf(res);
+    return Number(rows[0]?.n ?? 0);
+  }
+
   // --- Live runs (active now) ----------------------------------------------
   // The unified "what is Sunny doing right now" feed for the home indicator and
   // the live views (live-conversation-streaming). Two sources, one shape:

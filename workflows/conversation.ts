@@ -1100,6 +1100,23 @@ async function cancelRunStep(
   const link = await getLinkByChildThread(db, id);
   if (link && link.parentThreadId === threadId && link.status === 'running') {
     await completeLink(db, id, 'cancelled');
+    // Cancel the child's underlying WDK run too (subagent-hardening): the link row is our
+    // bookkeeping, but the run is what spends money and what the dashboard's Jobs view reads —
+    // without this the "cancelled" child kept computing (and showing as running) forever. Link
+    // first: the child's terminal-report suppression and the supervisor's failure-report
+    // suppression both key off the link already being terminal when the run dies.
+    if (link.childRunId) {
+      try {
+        const { getRun } = await import('workflow/api');
+        await getRun(link.childRunId).cancel();
+      } catch (err) {
+        const { logger } = await import('../src/logger.js');
+        logger('conversation').warn('cancel_run: WDK run cancel failed (link closed anyway)', {
+          childRunId: link.childRunId,
+          err: String(err),
+        });
+      }
+    }
     return `Cancelled subagent ${id}; it will stop reporting to this conversation.`;
   }
   return `No run with id ${id} that you can cancel.`;

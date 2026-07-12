@@ -65,6 +65,12 @@ The brief (the task argument) is the ONLY channel. Every delegation states four 
 Vague briefs ("research the trip options") cause duplicated work, gaps, and overlap. For
 dependent work, pass the relevant decisions/trace, not a one-liner.
 
+A child's run is hard-bounded (a ~$50 usage budget, a step cap, and a runtime cap) — it is
+force-stopped at the ceiling and reports what it has. Size the task to finish well inside
+that: one bounded job, not an open-ended mandate. If a task might not fit, say in the brief
+what a good partial deliverable looks like ("if you can't finish, report findings + a
+recommendation").
+
 ## 3. The tools
 
 - delegate_task(task, label?, toolset?) — start a child. Returns its id immediately. label

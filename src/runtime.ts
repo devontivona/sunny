@@ -126,7 +126,7 @@ async function start(): Promise<Runtime> {
     log.warn(
       'DASHBOARD_PUBLIC_URL is not set — outbound media links, MCP OAuth, and dashboard ' +
         'approve links need a public URL and will degrade until it is configured (there is ' +
-        'deliberately no default: it must be THIS host\'s URL).',
+        "deliberately no default: it must be THIS host's URL).",
     );
   }
 
@@ -157,9 +157,9 @@ async function start(): Promise<Runtime> {
   // usable), which is how a new machine gets far enough to be configured at all.
   const sendblueConfigured = Boolean(
     process.env.SENDBLUE_API_KEY &&
-      process.env.SENDBLUE_API_SECRET &&
-      process.env.SENDBLUE_FROM_NUMBER &&
-      process.env.SENDBLUE_WEBHOOK_SECRET,
+    process.env.SENDBLUE_API_SECRET &&
+    process.env.SENDBLUE_FROM_NUMBER &&
+    process.env.SENDBLUE_WEBHOOK_SECRET,
   );
   let gateway: Gateway;
   if (sendblueConfigured) {
@@ -221,6 +221,9 @@ async function start(): Promise<Runtime> {
         return { runId: run.runId, returnValue: run.returnValue };
       },
       wakeThread,
+      // Wall-clock cap teeth (subagent-hardening): the supervisor cancels a child's WDK run
+      // when it exceeds SUBAGENT_MAX_RUNTIME_MS.
+      { cancelRun: (runId) => getRun(runId).cancel() },
     );
     supervisor = sup;
     spawnChild = (input) => sup.spawn(input);
@@ -387,7 +390,16 @@ async function reattachRunningChildren(db: Db, supervisor: DelegationSupervisor)
       }
       try {
         const rv = getRun<unknown>(link.childRunId).returnValue;
-        supervisor.reattach(link.childThreadId, link.parentThreadId, 'subagent', rv);
+        supervisor.reattach(
+          link.childThreadId,
+          link.parentThreadId,
+          'subagent',
+          rv,
+          link.childRunId,
+          // Anchor the wall-clock cap at the ORIGINAL spawn, not the restart — a child that
+          // was already 3h old resumes with 1h of cap left, not a fresh 4h.
+          link.createdAt?.getTime(),
+        );
       } catch {
         await completeLink(db, link.childThreadId, 'failed').catch(() => {});
       }

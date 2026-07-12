@@ -6,7 +6,13 @@ import type {
 import { WorkflowAgent } from '@ai-sdk/workflow';
 import { jsonSchema, tool } from '@ai-sdk/provider-utils';
 import { getWritable } from 'workflow';
-import { AGENT_STEP_LIMIT } from '../src/agent/limits.js';
+import { AGENT_STEP_LIMIT, SUBAGENT_BUDGET_SOFT_FRACTION } from '../src/agent/limits.js';
+import {
+  estimateStepsCostUsd,
+  moveCacheBreakpoint,
+  restoreNarration,
+  type TokenRatesUsdPerMtok,
+} from '../src/agent/stepHistory.js';
 import { BASH_TOOL_SPECS } from '../src/agent/tools/bashSpecs.js';
 import type { BashToolInput, FileReadToolInput } from '../src/agent/tools/bashSpecs.js';
 import { FILE_TOOL_SPECS } from '../src/agent/tools/fileSpecs.js';
@@ -91,6 +97,16 @@ export interface StreamAgentOpts {
    * text never reach a prepareStep — the caller handles those terminally.
    */
   reportBlocks?: { send: (text: string) => Promise<unknown> };
+  /**
+   * Run bounds (subagent-hardening): `stepLimit` overrides the AGENT_STEP_LIMIT backstop;
+   * `budget` is a HARD dollar ceiling metered from per-step usage — at
+   * SUBAGENT_BUDGET_SOFT_FRACTION a wrap-up notice folds into the prompt (report now, stop
+   * working), at 1.0 the loop stops. Omitted for the conversation (the turn watchdog owns it).
+   */
+  limits?: {
+    stepLimit?: number;
+    budget?: { usd: number; rates: TokenRatesUsdPerMtok };
+  };
 }
 
 /**
@@ -143,6 +159,15 @@ export async function streamAgent(opts: StreamAgentOpts): Promise<{
   const reportsSent: string[] = [];
   let reportCursor = 0;
 
+  // Run-bounds state (subagent-hardening). Both derive purely from journaled step results
+  // (usage is part of each step), so — like `foldedIds` — they reconstruct identically on
+  // replay. The moving cache-breakpoint index tracks OUR breakpoint only; profile statics
+  // (window-tail, compaction summary) live at other indices and are never touched.
+  const stepLimit = opts.limits?.stepLimit ?? AGENT_STEP_LIMIT;
+  const budget = opts.limits?.budget;
+  let budgetNoticeFolded = false;
+  let movingBreakpointIdx = -1;
+
   // `prepareStep` is always present so its params infer from `agent.stream` (contextual typing); a
   // run with no `steering`/`translator` (a one-shot job) just no-ops it. For a steerable run it
   // folds mid-run arrivals on `inboxThreadId` via `loadSteers` — the double-text seam,
@@ -150,11 +175,14 @@ export async function streamAgent(opts: StreamAgentOpts): Promise<{
   const result = await agent.stream({
     messages: opts.messages,
     writable: getWritable<ModelCallStreamPart>(),
-    stopWhen: ({ steps }) => steps.length >= AGENT_STEP_LIMIT,
+    stopWhen: ({ steps }) =>
+      steps.length >= stepLimit ||
+      (budget != null && estimateStepsCostUsd(steps, budget.rates) >= budget.usd),
     telemetry: { isEnabled: false },
     prepareStep: async ({ stepNumber, messages, steps }) => {
       if (stepNumber === 0) return {};
-      let folded: typeof messages | undefined;
+      let working = messages;
+      let folded = false;
       if (steering) {
         const steers = await loadSteersStep(
           steering.inboxThreadId,
@@ -165,7 +193,8 @@ export async function streamAgent(opts: StreamAgentOpts): Promise<{
           foldedIds.push(...steers.ids);
           // Steers are pre-converted model messages (text AND media — multipart-coalesce v2),
           // rendered by the same pipeline as the prompt window.
-          folded = [...messages, ...(steers.messages as typeof messages)];
+          working = [...working, ...(steers.messages as typeof messages)];
+          folded = true;
         }
       }
 
@@ -208,7 +237,43 @@ export async function streamAgent(opts: StreamAgentOpts): Promise<{
         }
       }
 
-      return folded ? { messages: folded } : {};
+      // Budget soft landing (subagent-hardening): once, at the soft fraction, tell the child
+      // its money is nearly gone so it takes the report-and-stop exit ON PURPOSE instead of
+      // being cut off mid-thought by `stopWhen` at the hard ceiling.
+      if (budget && !budgetNoticeFolded) {
+        const spent = estimateStepsCostUsd(steps, budget.rates);
+        if (spent >= budget.usd * SUBAGENT_BUDGET_SOFT_FRACTION) {
+          budgetNoticeFolded = true;
+          working = [
+            ...working,
+            {
+              role: 'user',
+              content: [
+                {
+                  type: 'text',
+                  text:
+                    `[RUN BUDGET NOTICE — you have spent ~$${spent.toFixed(0)} of this run's ` +
+                    `$${budget.usd.toFixed(0)} model-usage budget; the run is force-stopped at ` +
+                    `the ceiling. Stop investigating NOW. Write your findings as your report: ` +
+                    `what you established, what remains open, and your best recommendation. ` +
+                    `Do not start new work.]`,
+                },
+              ],
+            },
+          ];
+        }
+      }
+
+      // Narration repair + incremental cache breakpoint (subagent-hardening; see
+      // src/agent/stepHistory.ts). Upstream drops each step's TEXT from the conversation
+      // prompt — restore it so the model can see its own conclusions — then move the cache
+      // breakpoint to the new tail so step N+1 reads everything before it at cached price.
+      // The returned array REPLACES the loop's conversation prompt, so both survive to
+      // every later step.
+      const repaired = restoreNarration(working, steps);
+      const moved = moveCacheBreakpoint(repaired.messages, movingBreakpointIdx);
+      movingBreakpointIdx = moved.index;
+      return { messages: moved.messages };
     },
   });
 

@@ -62,7 +62,7 @@ function JobRow({ j }: { j: JobRunView }) {
  *  ones). Uses the shared LivePane so it gets the same auto-stick-to-bottom, jump
  *  button, and no-horizontal-scroll behavior as the Conversation thread. */
 function JobRunPage({ runId }: { runId: string }) {
-  const { message, run, version } = useLiveRun(runId, 'job');
+  const { message, run, version, truncatedChunks } = useLiveRun(runId, 'job');
   return (
     <LivePane
       runId={runId}
@@ -75,6 +75,12 @@ function JobRunPage({ runId }: { runId: string }) {
       }
     >
       <div className="min-w-0">
+        {truncatedChunks > 0 && (
+          <p className="mb-sm text-fg-dim">
+            Long run — showing the latest activity only ({truncatedChunks.toLocaleString()} earlier
+            stream chunks not replayed).
+          </p>
+        )}
         <RunView message={message} run={run} />
       </div>
     </LivePane>

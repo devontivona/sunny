@@ -321,6 +321,13 @@ export function buildSubagentPrompt(
     `- If there is genuinely nothing your orchestrator needs back, make your entire final text`,
     `  <no-report/> — that delivers nothing.`,
     `- Stay strictly within your task's boundaries; do not take actions beyond what was asked.`,
+    ``,
+    `Your run has a hard model-usage budget (~$50) and a step cap; you'll get a budget notice`,
+    `when it's nearly spent, and the run is force-stopped at the ceiling. Work decisively: when`,
+    `you conclude something, ACT on it in your next step — don't re-verify what you've already`,
+    `established. If the task turns out too large or under-specified to finish within budget,`,
+    `stop early and report your findings and recommendation instead; a partial report beats a`,
+    `silent timeout.`,
   ];
   const base = `${lines.join('\n')}\n\n${memoryCoreBlock(core)}`;
   // The full skills index travels with every run profile (2026-07-07): a child with file
