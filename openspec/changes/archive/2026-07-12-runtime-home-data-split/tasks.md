@@ -33,14 +33,14 @@
 ## 6. Verification and deploy (ops — with Devon)
 
 - [x] 6.1 Full local check: typecheck, unit tests, production vite build (build is NOT in CI — build locally before merging)
-- [ ] 6.2 Deploy at a Devon-approved restart window; confirm migration ran (state repo shows the relocation commit, `~/.sunny/data/` populated, boot warnings clean)
-- [ ] 6.3 Same window: re-point devbox serves for existing sites — both those moved from `~/.sunny/state/sites/*` and those from legacy `~/.sunny/sites/*` — to `~/.sunny/data/sites/*`
-- [ ] 6.4 Update ALL authored skills with stale paths (commit+push the authored repo once):
+- [x] 6.2 Deploy at a Devon-approved restart window; confirm migration ran (state repo shows the relocation commit, `~/.sunny/data/` populated, boot warnings clean)
+- [x] 6.3 Same window: re-point devbox serves for existing sites — both those moved from `~/.sunny/state/sites/*` and those from legacy `~/.sunny/sites/*` — to `~/.sunny/data/sites/*`
+- [x] 6.4 Update ALL authored skills with stale paths (commit+push the authored repo once):
   - website-builder SKILL.md (~line 74): `~/.sunny/sites/<slug>/` → `~/.sunny/data/sites/<slug>/`
   - decision-coach SKILL.md (~lines 188, 191): `~/.sunny/sites/decisions/` → `~/.sunny/data/sites/decisions/`
   - task-assistant SKILL.md (~lines 106, 143): `~/.sunny/state/task-assistant/history.json` → `~/.sunny/data/task-assistant/history.json`
   - craft SKILL.md (~lines 267, 340): `~/.sunny/state/craft-resource-tagger.json` → `~/.sunny/data/craft-resource-tagger.json`
   - then re-grep the authored + trusted tiers for `~/.sunny/state` and `~/.sunny/sites` to confirm zero remaining references
-- [ ] 6.5 Create the private `sunny-data` remote and add it to `~/.sunny/config.json` (or explicitly defer — local-only is safe), then verify a sweep push lands
-- [ ] 6.6 Sweep runtime-home root litter with Devon (working files violating the namespace rule: `amazon_check.png`, `amz_search.png`, `download.html`, `hero.png`, `tmp/`) — move keepers into `data/` or `scratch/`, delete the rest
-- [ ] 6.7 Live smoke: ask Sunny to build a throwaway site and a task note — confirm site lands in `data/sites/`, a `file_write` aimed at `state/` is refused with the redirect error, and the next sweep commits the new files
+- [x] 6.5 Create the private `sunny-data` remote and add it to `~/.sunny/config.json` (or explicitly defer — local-only is safe), then verify a sweep push lands
+- [x] 6.6 Sweep runtime-home root litter with Devon (working files violating the namespace rule: `amazon_check.png`, `amz_search.png`, `download.html`, `hero.png`, `tmp/`) — move keepers into `data/` or `scratch/`, delete the rest
+- [x] 6.7 Live smoke: ask Sunny to build a throwaway site and a task note — confirm site lands in `data/sites/`, a `file_write` aimed at `state/` is refused with the redirect error, and the next sweep commits the new files

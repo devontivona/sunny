@@ -9,10 +9,10 @@ TBD - created by archiving change restructure-runtime-home. Update Purpose after
 #### Scenario: Home directory has no repository
 - **WHEN** the runtime home is initialized
 - **THEN** `~/.sunny` contains no `.git` directory
-- **AND** `~/.sunny/state/`, `~/.sunny/skills/`, and `~/.sunny/media/` exist as independent siblings
+- **AND** `~/.sunny/state/`, `~/.sunny/data/`, `~/.sunny/skills/`, `~/.sunny/scratch/`, and `~/.sunny/media/` exist as independent siblings
 
 #### Scenario: No nested working trees
-- **WHEN** a git repository (the `state` repo or any skill clone) exists under `~/.sunny`
+- **WHEN** a git repository (the `state` repo, the `data` repo, or any skill clone) exists under `~/.sunny`
 - **THEN** it is not contained within another git repository's tracked tree
 - **AND** no `.gitignore` is required to exclude one repository's working tree from another
 
@@ -29,11 +29,12 @@ TBD - created by archiving change restructure-runtime-home. Update Purpose after
 - **THEN** `config.json` is not among its tracked files
 
 ### Requirement: State repository with private-remote backup
-`~/.sunny/state/` SHALL be a git repository tracking Sunny's durable, portable state — at minimum `memory/` (core files and `topics/`), `credentials.json` (symbolic `op://` references only, never secret values), `sites/`, `schedules/` (standing schedule files — the agent's portable recurring intents), and `mcp.json` (the MCP server registry: URLs, names, purposes, and auth REFERENCES only — OAuth tokens remain machine-local outside the repository). It SHALL be configured with an owner-controlled private remote and SHALL maintain a clean working tree (no untracked-and-unignored state files).
+`~/.sunny/state/` SHALL be a git repository tracking exactly Sunny's code-written durable record — `memory/` (core files and `topics/`), `credentials.json` (symbolic `op://` references only, never secret values), `schedules/` (standing schedule files — the agent's portable recurring intents), and `mcp.json` (the MCP server registry: URLs, names, purposes, and auth REFERENCES only — OAuth tokens remain machine-local outside the repository). Agent-authored artifacts (sites, projects, working state) SHALL live in `~/.sunny/data/` instead. The state repository SHALL be configured with an owner-controlled private remote and SHALL maintain a clean working tree (no untracked-and-unignored state files).
 
-#### Scenario: State tracks memory, credentials, sites, standing schedules, and the MCP registry
+#### Scenario: State tracks memory, credentials, standing schedules, and the MCP registry
 - **WHEN** the `state` repository is initialized
-- **THEN** `memory/`, `credentials.json`, `sites/`, `schedules/`, and `mcp.json` are tracked
+- **THEN** `memory/`, `credentials.json`, `schedules/`, and `mcp.json` are tracked
+- **AND** no `sites/` directory is present (sites live in the data repository)
 - **AND** the working tree is clean after each state write
 
 #### Scenario: No secret values are stored
@@ -118,13 +119,69 @@ Migrating an existing host where `~/.sunny` is itself a git repository SHALL mov
 - **AND** an initial commit is pushed
 
 ### Requirement: Scratch space for working files
-The runtime home SHALL provide `~/.sunny/scratch/` — a machine-local, untracked sibling of `state/` — created at boot, and the agent's prompt SHALL direct temporary/working files (downloads, intermediate outputs, one-off scripts) there. Working files SHALL NOT be written into the runtime-home root or into `state/` (whose history is durable and synced); durable artifacts continue to use their homes (`state/sites`, the authored skills repository, memory).
+The runtime home SHALL provide `~/.sunny/scratch/` — a machine-local, untracked sibling of `state/` — created at boot and garbage-collected: at boot and on a daily cadence, top-level entries whose age (mtime; for directories, the newest mtime within) exceeds a configurable threshold (default 14 days) SHALL be deleted. The agent's prompt SHALL teach the three-domain convention on every surface that holds the file/bash tools — interactive turns and durable jobs alike: temporary/working files (downloads, intermediate outputs, one-off scripts) → `scratch/` (may vanish); durable agent-authored artifacts → `data/` (sites → `data/sites`, projects → `data/projects`); `state/` is never written by the agent (the file tools refuse it); facts → memory; procedures → skills.
 
 #### Scenario: Scratch exists on boot
 - **WHEN** the runtime starts
 - **THEN** `~/.sunny/scratch/` exists and is not inside any git repository's tracked tree
 
-#### Scenario: The agent is taught the convention
-- **WHEN** a run holds the host tools
-- **THEN** its prompt names `~/.sunny/scratch/` as the place for temporary files and warns against littering `state/`
+#### Scenario: Old scratch entries are collected
+- **WHEN** a top-level scratch entry's age exceeds the threshold at boot or the daily tick
+- **THEN** it is deleted
+- **AND** entries newer than the threshold are untouched
 
+#### Scenario: The agent is taught the convention on every tool-holding surface
+- **WHEN** any run holds the file/bash tools — an interactive conversation turn or a durable job
+- **THEN** its prompt names `scratch/` for temporary files, `data/` for durable artifacts, and states that `state/` is code-managed and refused by the file tools
+
+### Requirement: Data repository for agent-authored durable artifacts
+`~/.sunny/data/` SHALL be a git repository, a sibling of `state/`, holding durable artifacts the agent authors with its own tools — at minimum `sites/` (built websites) and `projects/` (code projects), plus any structured working state (ledgers, indexes) a skill needs to keep across runs. It SHALL be the sanctioned home for every durable agent-written file that is not a memory fact (→ memory) or a procedure (→ the authored skills repository). Its remote SHALL be named in `~/.sunny/config.json` and SHALL be optional: when unset, the repository exists locally and pushing is a no-op. The agent SHALL NOT be required to run git here — persistence is the runtime's job.
+
+#### Scenario: Data directory exists on boot as its own repository
+- **WHEN** the runtime starts
+- **THEN** `~/.sunny/data/` exists as a git repository that is a sibling of `state/`, not nested in any tracked tree
+
+#### Scenario: No remote configured is not an error
+- **WHEN** `config.json` names no data remote
+- **THEN** the data repository operates locally and push attempts are silent no-ops
+
+### Requirement: Data repository sweep persistence
+The runtime SHALL persist the data repository by sweep: on the existing periodic push cadence and once at boot, it SHALL commit all outstanding changes in `~/.sunny/data/` (message `data: sweep`) and push best-effort to the configured remote. A failed push SHALL be non-fatal and SHALL leave commits local for the next attempt.
+
+#### Scenario: Agent writes are committed within one sweep interval
+- **WHEN** the agent writes a file under `~/.sunny/data/` and the next sweep tick fires
+- **THEN** the change is committed to the data repository with the sweep message
+
+#### Scenario: Boot sweep catches strandings
+- **WHEN** the runtime starts with uncommitted changes in the data repository (e.g. after a crash)
+- **THEN** they are committed before normal operation continues
+
+### Requirement: State repository accepts writes only from deterministic code
+The `state` repository SHALL be written only by the runtime's own code paths (memory, credential registry, MCP registry, standing schedules) through the shared commit helper. The agent-facing file mutation tools SHALL refuse paths under `~/.sunny/state/` (per the tool-access spec), and the runtime SHALL surface — not silently absorb — foreign changes: when the commit helper or a boot-time check finds tree changes outside what code just wrote, it SHALL log a warning naming the stray paths before committing them.
+
+#### Scenario: Stray files are surfaced, not laundered
+- **WHEN** the state working tree contains files the current code write did not produce (e.g. dropped there via bash)
+- **THEN** a warning naming those paths is logged
+- **AND** the changes are still committed (data is never dropped)
+
+#### Scenario: Dirty tree at boot is reported
+- **WHEN** the runtime starts and the state working tree is not clean
+- **THEN** a warning naming the dirty paths is logged before the tree is reconciled
+
+### Requirement: Migration relocates agent artifacts into the data repository
+Migration SHALL be idempotent and boot-time, and SHALL apply a reserved-set rule: every top-level entry of `state/` that is not `memory/`, `credentials.json`, `schedules/`, `mcp.json`, or git plumbing SHALL be moved into `~/.sunny/data/` — tracked or untracked alike. Migration SHALL also relocate a legacy `~/.sunny/sites/` directory (the pre-runtime-home path that stale skill guidance kept populating) into `~/.sunny/data/sites/`, merging with any sites moved from `state/sites/`. On slug collision the more recently modified copy (newest content mtime) SHALL win in the working tree, and the older copy SHALL be committed to the data repository's history before being overwritten, so no content is lost. The removal SHALL be committed in the state repository and the arrival committed in the data repository, both pushed best-effort.
+
+#### Scenario: Sites and stray entries relocate
+- **WHEN** migration runs against a state repository containing `sites/` and non-reserved entries (ad-hoc directories, stray root files)
+- **THEN** all of them move under `~/.sunny/data/` with content intact
+- **AND** the state repository records their removal in a dedicated migration commit
+- **AND** re-running the migration is a no-op
+
+#### Scenario: Legacy root-level sites relocate and merge
+- **WHEN** migration runs on a host that also has a legacy `~/.sunny/sites/` directory
+- **THEN** its sites move into `~/.sunny/data/sites/` alongside those from `state/sites/`
+
+#### Scenario: Slug collision resolves to the more recent copy without data loss
+- **WHEN** the same site slug exists in both `state/sites/` and legacy `~/.sunny/sites/`
+- **THEN** the copy with the newest content mtime ends up at `data/sites/<slug>/` in the working tree
+- **AND** the older copy is present in the data repository's git history

@@ -54,6 +54,11 @@ The file primitives SHALL behave as follows:
   error the model can recover from — when the target string matches zero times, or matches
   more than once without an explicit replace-all flag. Editing binary content SHALL be
   refused.
+- `file-write` and `file-edit` SHALL refuse any target that resolves inside `~/.sunny/state/`
+  (the code-managed state repository), with a recoverable error that names `~/.sunny/data/`
+  as the home for durable files and `~/.sunny/scratch/` for temporary ones. Resolution SHALL
+  be symlink- and `..`-safe (judged against the real path of the deepest existing ancestor),
+  and `file-read` SHALL remain unrestricted.
 - The file mutation tools SHALL be registered on exactly the surfaces that hold `bash` (the
   same trust gate); they SHALL NOT widen any run's privilege beyond what its bash access
   already grants.
@@ -73,6 +78,12 @@ The file primitives SHALL behave as follows:
 #### Scenario: File write creates the file and its directories
 - **WHEN** Sunny writes a file whose parent directory does not exist
 - **THEN** the directories are created and the file is written with exactly the given content
+
+#### Scenario: Writes into the state repository are refused with redirection
+- **WHEN** Sunny invokes file-write or file-edit on a path that resolves inside `~/.sunny/state/` (including via symlink or `..` traversal)
+- **THEN** the call fails with a recoverable error naming `~/.sunny/data/` (durable) and `~/.sunny/scratch/` (temporary) as the correct homes
+- **AND** the file is unchanged
+- **AND** file-read of the same path still succeeds
 
 #### Scenario: File tools ride the bash trust gate
 - **WHEN** a run does not have the bash tool (e.g. a readonly or tool-less child)
