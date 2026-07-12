@@ -61,16 +61,21 @@ export async function runTranslatorPass(opts: TranslatorOptions): Promise<string
   const sections = [
     // The "longness" signal (2026-07-05 investigation: without it, every beat of a long
     // turn looked like quick work and the translator declined 9/9 on a 15-step task).
-    `Sunny is on step ${opts.stepNumber} of this task. ` +
+    // Framed in second person ("you're"/"your") throughout — NOT third person ("Sunny
+    // is"/"Sunny's") — to match the system prompt's "you ARE Sunny" framing. Talking
+    // ABOUT Sunny here, right after telling the model it IS Sunny, is exactly the mixed
+    // signal that let the translator drift into addressing Sunny as "you" instead of
+    // speaking AS Sunny (the second-person-drift bug).
+    `You're on step ${opts.stepNumber} of this task. ` +
       (opts.recentUpdates.length > 0
         ? `The last update went out ${opts.stepsSinceUpdate} steps ago.`
         : `${opts.subject} has heard NOTHING yet this turn (${opts.stepsSinceUpdate} steps and counting).`),
-    `Sunny's working notes since the last update:\n${opts.interim}`,
+    `Your working notes since the last update:\n${opts.interim}`,
     opts.recentUpdates.length > 0
       ? `Updates already sent to ${opts.subject} this turn (do not repeat their news):\n` +
         opts.recentUpdates.map((u) => `- ${u}`).join('\n')
       : `No update has been sent yet this turn.`,
-    `Write the one short progress update Sunny should text ${opts.subject} now, or ${SILENCE}.`,
+    `Write the one short progress update you should text ${opts.subject} now, or ${SILENCE}.`,
   ];
   const result = await generateText({
     model: opts.model,
@@ -109,17 +114,17 @@ function translatorSystem(subject: string): string {
     `  voice; compress rather than invent. Standard sentence capitalization and punctuation.`,
     `  Never all-lowercase.`,
     `- SUMMARIZE ONLY. Never add facts, guesses, or results the notes don't contain.`,
-    `- Never imply the task is finished — Sunny is still working, and its real reply arrives`,
+    `- Never imply the task is finished — you're still working, and your real reply arrives`,
     `  when it's done. No "all set", no final answers, no promises about timing.`,
     `- THE FIRST UPDATE of a turn is special: if nothing has been sent yet and the notes show`,
     `  real multi-step work underway (research, building, several tool calls ahead), ALWAYS send`,
-    `  a brief opener naming the work. Build it by compressing Sunny's own first note — its`,
+    `  a brief opener naming the work. Build it by compressing your own first note — its`,
     `  acknowledgment is already varied and in-voice. Don't develop a signature opener: if your`,
     `  update would start the way most turns' updates start, take the phrasing from a different`,
-    `  part of Sunny's note instead (usually the part that names the work). ${subject} should`,
+    `  part of your note instead (usually the part that names the work). ${subject} should`,
     `  never sit through a long task in total silence — output ${SILENCE} on the first beat`,
     `  only when the notes show the task is already wrapping up (a quick lookup or a saved`,
-    `  note — Sunny's own reply will arrive before an update would help).`,
+    `  note — your own reply will arrive before an update would help).`,
     `- AFTER the opener, silence is your DEFAULT. Output exactly ${SILENCE} when there's no`,
     `  user-relevant news since the last update: internal bookkeeping, retries, or nothing`,
     `  beyond what the already-sent updates said.`,
