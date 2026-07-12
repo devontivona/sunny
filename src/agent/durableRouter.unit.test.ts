@@ -34,6 +34,7 @@ const META = {
   // Generous: these tests exercise the serial worker, never the watchdog (see
   // tests/durableRouterWatchdog.integration.test.ts for the abandon path).
   turnWatchdogMs: 600_000,
+  turnInactivityMs: 600_000,
 };
 
 /** Serial-worker tests opt out of the inbound quiet period (multipart-coalesce) — the

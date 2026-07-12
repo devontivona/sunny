@@ -69,10 +69,13 @@ describe('DurableTurnRouter watchdog (hung turn-runs)', () => {
     await tdb.teardown();
   });
 
-  const meta = (turnWatchdogMs: number) => ({
+  // Legacy shape: one flat budget = inactivity and cap equal (the fake hung runs
+  // produce no activity, so these fire at the inactivity threshold as before).
+  const meta = (turnWatchdogMs: number, turnInactivityMs = turnWatchdogMs) => ({
     modelId: 'claude-sonnet-5',
     effort: 'high' as string | null,
     turnWatchdogMs,
+    turnInactivityMs,
   });
 
   it('abandons a hung run within the threshold: cancels it, retires the inbound, tells the user — and never re-runs', async () => {
@@ -244,6 +247,57 @@ describe('DurableTurnRouter watchdog (hung turn-runs)', () => {
     });
     expect(call).toBeGreaterThanOrEqual(2); // it re-ran rather than swallowing the messages
     expect(await store.hasUnansweredInbound(event.threadId)).toBe(false);
+  });
+
+  it('activity-aware: a turn that keeps moving survives past the inactivity budget, and the cap fires with reason cap', async () => {
+    const event = makeChannelEvent({ text: 'long healthy grind' });
+    await store.appendInbound(event);
+
+    const run = fakeRunHandle('run-active-grind');
+    const router = new DurableTurnRouter(
+      gateway,
+      store,
+      meta(700, 120), // cap 700ms, inactivity 120ms
+      async () => run.handle, // never settles on its own — but keeps "moving"
+    );
+    // Simulate a busy stream: activity every 30ms (well inside the 120ms budget).
+    const feeder = setInterval(() => router.touchRunActivity('run-active-grind'), 30);
+
+    router.route(event);
+
+    // Past several multiples of the inactivity budget: still alive (no watchdog note).
+    await sleep(400);
+    expect(run.cancelled()).toBe(false);
+    expect(gateway.sendCount).toBe(0);
+
+    // The hard cap still bounds it — and reports the 'cap' reason path (partial/nothing
+    // wording is orthogonal; nothing was sent, so it's the resend note).
+    await vi.waitFor(() => expect(gateway.sendCount).toBe(1), { timeout: 3000 });
+    clearInterval(feeder);
+    expect(run.cancelled()).toBe(true);
+    expect(gateway.texts()[0]).toMatch(/stuck on my end/i);
+    expect(await store.hasUnansweredInbound(event.threadId)).toBe(false);
+  });
+
+  it('abandon settles the LiveBus entry (dashboard phantom-running fix)', async () => {
+    const { getLiveBus } = await import('../src/observability/live.js');
+    const event = makeChannelEvent({ text: 'will hang; dashboard must not show running' });
+    await store.appendInbound(event);
+
+    const run = fakeRunHandle('run-phantom-1');
+    const router = new DurableTurnRouter(gateway, store, meta(60), async () => run.handle);
+    router.route(event);
+
+    await vi.waitFor(() => expect(gateway.sendCount).toBe(1), { timeout: 3000 });
+    // The bridge registered the turn as running; the abandon path must have settled it
+    // WITHOUT waiting for the (never-closing) stream to end.
+    await vi.waitFor(
+      () => expect(getLiveBus().getTurn('run-phantom-1')?.status).toBe('errored'),
+      { timeout: 1000 },
+    );
+    // Idempotence: a late bridge settle must not flip the terminal status.
+    getLiveBus().finishTurn('run-phantom-1', 'finished');
+    expect(getLiveBus().getTurn('run-phantom-1')?.status).toBe('errored');
   });
 
   it('leaves the thread healthy after an abandon: the next inbound gets a fresh turn', async () => {

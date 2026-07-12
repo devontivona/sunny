@@ -194,6 +194,10 @@ export class LiveBus {
   ): void {
     const entry = this.turns.get(runId);
     if (!entry) return;
+    // Idempotent (watchdog-activity): the abandon path settles eagerly AND the stream
+    // bridge settles on teardown — the second arrival must not re-emit terminal events
+    // or overwrite the first terminal status.
+    if (entry.run.status !== 'running') return;
     entry.run.status = status;
     if (patch?.steps != null) entry.run.steps = patch.steps;
     if (patch?.usage !== undefined) entry.run.usage = patch.usage;

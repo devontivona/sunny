@@ -109,6 +109,13 @@ export class DurableTurnRouter {
   /** Threads that received inbound while their worker was finishing (re-check signal). */
   private readonly dirty = new Set<string>();
   private readonly lastTyped = new Map<string, number>();
+  /** Epoch ms of each live run's most recent stream chunk (the watchdog's activity
+   *  signal, watchdog-activity D1) — touched by the bridge, read by the race. */
+  private readonly runActivity = new Map<string, number>();
+  /** Cancel handles for live stream bridges, so the abandon path can tear a bridge
+   *  down instead of leaving it blocked on a cancelled run's never-closing stream
+   *  (the dashboard phantom-running bug, watchdog-activity D3). */
+  private readonly bridgeCancels = new Map<string, () => void>();
   /** The newest live inbound per thread (multipart-coalesce): when it landed and how long
    *  the thread must be quiet before a turn starts. In-memory only — recovery/wake paths
    *  have no entry and start immediately. */
@@ -117,7 +124,14 @@ export class DurableTurnRouter {
   constructor(
     private readonly gateway: Gateway,
     private readonly store: ConversationStore,
-    private readonly meta: { modelId: string; effort: string | null; turnWatchdogMs: number },
+    private readonly meta: {
+      modelId: string;
+      effort: string | null;
+      /** HARD CAP: abandon a turn past this total runtime even if still active. */
+      turnWatchdogMs: number;
+      /** Abandon a turn with NO run-stream activity for this long (a true hang). */
+      turnInactivityMs: number;
+    },
     /** Test seam: how a turn-run is started (production = the real WDK run). */
     private readonly runs: TurnRunner = startConversationRun,
     /** How the worker bounds a repeatedly-failing turn (R7). Injectable so tests can use a tiny
@@ -126,6 +140,13 @@ export class DurableTurnRouter {
     /** Quiet-period lengths (multipart-coalesce). Injectable so tests use tiny windows. */
     private readonly coalesce: CoalescePolicy = DEFAULT_COALESCE,
   ) {}
+
+  /** Record observable activity for a live run (the watchdog's signal, watchdog-activity
+   *  D1). Called by the stream bridge on every chunk; public as a seam for tests and any
+   *  future non-stream activity source. */
+  touchRunActivity(runId: string): void {
+    this.runActivity.set(runId, Date.now());
+  }
 
   /** Route one inbound (already persisted + deduped by the gateway): ensure this thread's
    *  serial worker is draining its unanswered inbound as durable turn-runs. Also tells the
@@ -282,12 +303,18 @@ export class DurableTurnRouter {
     try {
       this.bridgeRunStream(run.runId, threadId);
       // Durable: resolves when the turn (incl. its delivery step) is done. Raced against the
-      // watchdog so a hung stream costs one abandoned turn, not the whole thread.
-      await raceTurnWatchdog(run.returnValue, this.meta.turnWatchdogMs);
+      // activity-aware watchdog (watchdog-activity D2): a healthy tool-heavy turn keeps
+      // running as long as its stream keeps moving; a stalled stream is caught at the
+      // inactivity budget; the hard cap bounds runaway-but-active turns.
+      await raceTurnWatchdog(run.returnValue, {
+        inactivityMs: this.meta.turnInactivityMs,
+        maxMs: this.meta.turnWatchdogMs,
+        lastActivityAt: () => this.runActivity.get(run.runId) ?? 0,
+      });
       return true;
     } catch (err) {
       if (err instanceof TurnWatchdogTimeout) {
-        return this.abandonHungTurn(threadId, run, startedAt, err.timeoutMs);
+        return this.abandonHungTurn(threadId, run, startedAt, err);
       }
       log.error('conversation turn-run failed', {
         threadId,
@@ -324,13 +351,14 @@ export class DurableTurnRouter {
     threadId: string,
     run: TurnRunHandle,
     startedAt: number,
-    timeoutMs: number,
+    timeout: TurnWatchdogTimeout,
   ): Promise<boolean> {
     const sentThisTurn = (this.gateway.lastSentAt?.(threadId) ?? 0) > startedAt;
-    log.error('turn watchdog fired — abandoning hung turn-run', {
+    log.error('turn watchdog fired — abandoning turn-run', {
       threadId,
       runId: run.runId,
-      timeoutMs,
+      reason: timeout.reason, // 'inactivity' = true hang; 'cap' = runaway-but-active
+      timeoutMs: timeout.timeoutMs,
       hungForMs: Date.now() - startedAt,
       sentThisTurn,
     });
@@ -344,6 +372,14 @@ export class DurableTurnRouter {
         err: String(err),
       });
     }
+
+    // Settle the observable state NOW (watchdog-activity D3 — the dashboard phantom-
+    // running bug): tear down the stream bridge (a cancelled run's stream may never
+    // close, leaving the bridge blocked on read() and its own settle unreached), and
+    // eagerly mark the LiveBus entry terminal. finishTurn is idempotent, so the
+    // bridge's own settle landing later is a no-op.
+    this.bridgeCancels.get(run.runId)?.();
+    getLiveBus().finishTurn(run.runId, 'errored');
 
     try {
       await this.gateway.stopTyping?.(threadId).catch(() => {});
@@ -439,8 +475,13 @@ export class DurableTurnRouter {
       effort: this.meta.effort,
     });
     const runStartedAt = Date.now();
+    this.runActivity.set(runId, runStartedAt);
     void (async () => {
       let reader: ReadableStreamDefaultReader<UIMessageChunk> | null = null;
+      // The abandon path tears this bridge down via the cancel handle: reader.cancel()
+      // makes the blocked read() settle, so the finally below (typing stop + LiveBus
+      // settle) actually runs for a cancelled run whose stream never closes (D3).
+      this.bridgeCancels.set(runId, () => void reader?.cancel().catch(() => {}));
       try {
         // The run stream carries raw model-call parts (v7 WorkflowAgent writable); convert to
         // UIMessageChunk here at the reader boundary (the transform can't run in the workflow sandbox).
@@ -451,6 +492,9 @@ export class DurableTurnRouter {
         for (;;) {
           const { done, value } = await reader.read();
           if (done) break;
+          // Every chunk — model deltas, tool calls, tool results at step boundaries —
+          // is the watchdog's activity signal (watchdog-activity D1).
+          this.touchRunActivity(runId);
           bus.publishTurnChunk(runId, value);
           // Typing shows while the turn streams (throttled), then is cleared two ways at turn end
           // (belt-and-suspenders against the stuck-on-after-reply bug): an explicit `stopTyping`
@@ -491,7 +535,9 @@ export class DurableTurnRouter {
         } catch {
           /* keep optimistic 'finished' */
         }
-        bus.finishTurn(runId, status);
+        bus.finishTurn(runId, status); // no-op if the abandon path settled first (idempotent)
+        this.bridgeCancels.delete(runId);
+        this.runActivity.delete(runId);
       }
     })();
   }
