@@ -236,6 +236,9 @@ async function start(): Promise<Runtime> {
         return { runId: run.runId, returnValue: run.returnValue };
       },
       wakeThread,
+      // Wall-clock cap teeth (subagent-hardening): the supervisor cancels a child's WDK run
+      // when it exceeds SUBAGENT_MAX_RUNTIME_MS.
+      { cancelRun: (runId) => getRun(runId).cancel() },
     );
     supervisor = sup;
     spawnChild = (input) => sup.spawn(input);
@@ -408,7 +411,16 @@ async function reattachRunningChildren(db: Db, supervisor: DelegationSupervisor)
       }
       try {
         const rv = getRun<unknown>(link.childRunId).returnValue;
-        supervisor.reattach(link.childThreadId, link.parentThreadId, 'subagent', rv);
+        supervisor.reattach(
+          link.childThreadId,
+          link.parentThreadId,
+          'subagent',
+          rv,
+          link.childRunId,
+          // Anchor the wall-clock cap at the ORIGINAL spawn, not the restart — a child that
+          // was already 3h old resumes with 1h of cap left, not a fresh 4h.
+          link.createdAt?.getTime(),
+        );
       } catch {
         await completeLink(db, link.childThreadId, 'failed').catch(() => {});
       }

@@ -1,5 +1,10 @@
 import { buildTurnModel, type MockResponseDescriptor } from '../src/agent/turnModel.js';
 import { authorityForToolset } from '../src/agent/audience.js';
+import {
+  SUBAGENT_BUDGET_USD,
+  SUBAGENT_STEP_LIMIT,
+  SUBAGENT_TOKEN_RATES_USD_PER_MTOK,
+} from '../src/agent/limits.js';
 import type { McpToolDef } from '../src/mcp/turnTools.js';
 import { extractReportBlocks, stripNoReport } from '../src/agent/delivery.js';
 import {
@@ -92,7 +97,22 @@ export async function runSubagent(input: SubagentInput): Promise<void> {
     providerOptions: {
       anthropic: { thinking: { type: 'adaptive', display: 'omitted' }, effort: 'high' },
     },
-    messages: [{ role: 'user', content: input.task }],
+    // The brief carries the run's STATIC cache breakpoint: it caches the whole prefix above it
+    // (tools + system + task, the ~123k-token baseline) from the first generation; the loop's
+    // moving breakpoint (stepHistory) covers the growing tail from step 1 on.
+    messages: [
+      {
+        role: 'user',
+        content: input.task,
+        providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
+      },
+    ],
+    // Hard run bounds (subagent-hardening): a child never spends more than the dollar budget,
+    // caching included; the step cap is the secondary backstop. See src/agent/limits.ts.
+    limits: {
+      stepLimit: SUBAGENT_STEP_LIMIT,
+      budget: { usd: SUBAGENT_BUDGET_USD, rates: SUBAGENT_TOKEN_RATES_USD_PER_MTOK },
+    },
     steering: { inboxThreadId: input.childThreadId, isGroup: false, baseExcludeIds: [] },
     // Mid-task <report> blocks deliver to the parent as they complete (memoized bus step).
     reportBlocks: { send: (text) => deliver(parentAudience, text) },

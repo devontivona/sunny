@@ -178,6 +178,71 @@ describe('DelegationSupervisor', () => {
     expect(link?.status).toBe('running');
   });
 
+  it('wall-clock cap: a child still running at the cap gets its run cancelled + link timed out', async () => {
+    const wake = vi.fn();
+    const cancelRun = vi.fn(async () => {});
+    const never = new Promise<unknown>(() => {}); // a child that never finishes
+    const startSubagent = vi.fn(
+      async (): Promise<ChildRunHandle> => ({ runId: 'run-x', returnValue: never }),
+    );
+    const sup = new DelegationSupervisor(tdb.db, store, startSubagent, wake, {
+      cancelRun,
+      maxRuntimeMs: -1, // elapsed immediately; watch clamps the remaining wait to its floor
+    });
+    // The watch clamps remaining time to a 60s floor in production; shrink it for the test by
+    // anchoring the spawn in the past via reattach (which accepts startedAtMs) instead.
+    await createLink(tdb.db, {
+      parentThreadId: PARENT,
+      childThreadId: 'subagent:capme',
+      task: 't',
+      depth: 1,
+      orchestrator: false,
+    });
+    vi.useFakeTimers();
+    try {
+      sup.reattach('subagent:capme', PARENT, 'capme', never, 'run-x', Date.now());
+      await vi.advanceTimersByTimeAsync(61_000);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    await vi.waitFor(async () => {
+      expect((await getLinkByChildThread(tdb.db, 'subagent:capme'))?.status).toBe('timeout');
+    });
+    expect(cancelRun).toHaveBeenCalledWith('run-x');
+    const window = await store.recentWindow(PARENT);
+    expect(window.some((m) => m.text.includes('runtime cap'))).toBe(true);
+    expect(wake).toHaveBeenCalledWith(PARENT);
+  });
+
+  it('watchdog stays silent when the child died because its link was already cancelled', async () => {
+    // cancel_run closes the link and then cancels the WDK run; the rejection that follows is
+    // the cancel WORKING, not a failure — no second death notice to the parent.
+    const wake = vi.fn();
+    let rejectChild!: (err: Error) => void;
+    const returnValue = new Promise<unknown>((_res, rej) => {
+      rejectChild = rej;
+    });
+    const { sup } = makeSupervisor(returnValue, wake);
+    const res = await sup.spawn({
+      parentThreadId: PARENT,
+      task: 'cancel me',
+      depth: 1,
+      parentAuthority: TRUSTED_DM_AUTHORITY,
+    });
+    expect('childThreadId' in res).toBe(true);
+    if (!('childThreadId' in res)) return;
+
+    await completeLink(tdb.db, res.childThreadId, 'cancelled'); // cancel_run's link close
+    rejectChild(new Error('WorkflowRunCancelled')); // the WDK cancel landing
+    await new Promise((r) => setTimeout(r, 50)); // let the watchdog observe it
+
+    expect((await getLinkByChildThread(tdb.db, res.childThreadId))?.status).toBe('cancelled');
+    const window = await store.recentWindow(PARENT);
+    expect(window.some((m) => m.text.includes('failed'))).toBe(false);
+    expect(wake).not.toHaveBeenCalled();
+  });
+
   it('watchdog: a child that dies has its link failed + a failure event sent to the parent', async () => {
     const wake = vi.fn();
     const { sup } = makeSupervisor(Promise.reject(new Error('child exploded')), wake);

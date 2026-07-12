@@ -50,6 +50,9 @@ export interface LiveRunState {
   /** Increments on every streamed chunk — a stable "content grew" signal for
    *  keeping the view scrolled to the bottom while streaming. */
   version: number;
+  /** Chunks the server skipped on connect (long runs replay a bounded tail only);
+   *  0 when the replay was complete. */
+  truncatedChunks: number;
 }
 
 /**
@@ -64,12 +67,14 @@ export function useLiveRun(runId: string | null, kind: RunKind): LiveRunState {
   const [done, setDone] = useState(false);
   const [error, setError] = useState(false);
   const [version, setVersion] = useState(0);
+  const [truncatedChunks, setTruncatedChunks] = useState(0);
 
   useEffect(() => {
     setMessage(null);
     setRun(null);
     setDone(false);
     setError(false);
+    setTruncatedChunks(0);
     if (!runId) return;
 
     let cancelled = false;
@@ -94,6 +99,15 @@ export function useLiveRun(runId: string | null, kind: RunKind): LiveRunState {
     es.addEventListener('status', (e) => {
       try {
         if (!cancelled) setRun(JSON.parse((e as MessageEvent).data) as LiveRun);
+      } catch {
+        /* ignore */
+      }
+    });
+    // Long runs replay a bounded tail; the server says how much history it skipped.
+    es.addEventListener('truncated', (e) => {
+      try {
+        const { skipped } = JSON.parse((e as MessageEvent).data) as { skipped: number };
+        if (!cancelled) setTruncatedChunks(skipped);
       } catch {
         /* ignore */
       }
@@ -145,7 +159,7 @@ export function useLiveRun(runId: string | null, kind: RunKind): LiveRunState {
     };
   }, [runId, kind]);
 
-  return { message, run, done, error, version };
+  return { message, run, done, error, version, truncatedChunks };
 }
 
 export interface LiveThreadState {

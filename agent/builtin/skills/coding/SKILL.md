@@ -43,8 +43,17 @@ You have the same primitives every good coding agent is built on: bash, and the 
 
 ## 3. Git hygiene
 
-- Branch before changing a repo that has real history: git checkout -b <topic>. Never work
-  directly on main in a repo the owner cares about.
+- Work in a WORKTREE, not in the shared checkout: a repo you did not create this run is likely
+  someone's live working copy (the owner's editor, a running service). Never switch its branch
+  or dirty its tree. Instead:
+
+    git -C <repo> worktree add ../<repo>-<topic> -b <topic>
+
+  and do all work in that worktree. It must live OUTSIDE the repo directory (a sibling path,
+  as above — never inside it). When the work is merged or abandoned, clean up:
+  git -C <repo> worktree remove ../<repo>-<topic>.
+- Branch before changing a repo that has real history: git checkout -b <topic> (inside your
+  worktree). Never work directly on main in a repo the owner cares about.
 - Commit only when the owner asks (or the task clearly implies it), with a real message that
   says WHY. Never force-push, never rewrite history, never push to a remote unless asked.
 - git status + git diff before reporting — know exactly what you changed.

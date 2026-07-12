@@ -197,7 +197,7 @@ export default defineEventHandler(async (event) => {
         if (!cfg.publicUrl) {
           log.error(
             'DASHBOARD_PUBLIC_URL is not set — cannot build an owner-facing approve link ' +
-              '(portability D12: no personal-domain fallback). Set it to this host\'s public URL.',
+              "(portability D12: no personal-domain fallback). Set it to this host's public URL.",
           );
           return json(503, { error: 'dashboard public URL not configured on this host' });
         }
@@ -406,7 +406,7 @@ export default defineEventHandler(async (event) => {
           const run = String(query.run ?? '');
           if (!run) return json(400, { error: 'missing run or thread id' });
           if (String(query.kind ?? 'turn') === 'job')
-            void startJobStream(stream, run, getHeader(event, 'last-event-id'));
+            void startJobStream(stream, run, data, getHeader(event, 'last-event-id'));
           else startTurnStream(stream, run);
           return stream.send();
         }
@@ -501,11 +501,18 @@ function startThreadStream(stream: LiveStream, threadId: string): void {
   });
 }
 
+/** Fresh-connect replay window (subagent-hardening): a marathon run stored 4k+ chunks
+ *  (~5MB); replaying them all from index 0 froze/killed the browser tab. A fresh connect
+ *  replays at most this many trailing chunks (~1MB at the observed ~1.2KB median) and tells
+ *  the client how many it skipped. */
+const JOB_STREAM_TAIL_CHUNKS = 800;
+
 /** Stream a Tier-2 job's live chunks from its durable WDK run stream over SSE:
- *  replay the last chunks (negative startIndex), then tail until the run completes. */
+ *  replay a bounded tail of stored chunks, then tail until the run completes. */
 async function startJobStream(
   stream: LiveStream,
   runId: string,
+  data: DashboardData,
   lastEventId?: string,
 ): Promise<void> {
   const redactor = defaultRedactor();
@@ -521,9 +528,23 @@ async function startJobStream(
   // Resume after the last chunk the client already received. EventSource sends the
   // `Last-Event-ID` header on auto-reconnect, so a reconnect (e.g. a tunnel idle-drop
   // during a long job) continues the fold instead of replaying+duplicating chunks the
-  // client already folded. A fresh connect starts at 0 (the client needs the opening
-  // chunks for readUIMessageStream to assemble the message).
-  const resumeFrom = lastEventId != null && /^\d+$/.test(lastEventId) ? Number(lastEventId) + 1 : 0;
+  // client already folded. A fresh connect replays the last JOB_STREAM_TAIL_CHUNKS only
+  // (absolute index via the chunk count, so reconnect ids stay correct).
+  let resumeFrom = 0;
+  let skipped = 0;
+  if (lastEventId != null && /^\d+$/.test(lastEventId)) {
+    resumeFrom = Number(lastEventId) + 1;
+  } else {
+    try {
+      const total = await data.jobStreamChunkCount(runId);
+      if (total > JOB_STREAM_TAIL_CHUNKS) {
+        resumeFrom = total - JOB_STREAM_TAIL_CHUNKS;
+        skipped = resumeFrom;
+      }
+    } catch {
+      /* full replay fallback */
+    }
+  }
 
   // Reflect the real run status on connect so a completed run viewed historically
   // doesn't flash "live".
@@ -535,6 +556,10 @@ async function startJobStream(
     /* default running */
   }
   await stream.push({ event: 'status', data: JSON.stringify(await jobRunMeta(runId, initStatus)) });
+  if (skipped > 0) {
+    // Old clients ignore unknown SSE event names, so this is backward-compatible.
+    await stream.push({ event: 'truncated', data: JSON.stringify({ skipped }) });
+  }
   try {
     // The run stream carries raw model-call parts (v7 WorkflowAgent writable); convert to
     // UIMessageChunk here at the reader boundary (the transform can't run in the workflow sandbox).
@@ -543,11 +568,25 @@ async function startJobStream(
       .pipeThrough(createModelCallToUIChunkTransform())
       .getReader();
     let idx = resumeFrom;
+    // A tail cut lands mid content block; forward the synthetic message envelope
+    // ('start'/'start-step', which the transform always emits) but drop dangling deltas
+    // until the first complete block begins, so readUIMessageStream never folds a
+    // headless delta.
+    let aligned = skipped === 0;
+    const blockStart = new Set(['text-start', 'reasoning-start', 'tool-input-start']);
     try {
       for (;;) {
         if (closed) break;
         const { done, value } = await reader.read();
         if (done) break;
+        if (!aligned) {
+          const t = (value as { type?: string }).type ?? '';
+          if (blockStart.has(t)) aligned = true;
+          else if (t !== 'start' && t !== 'start-step') {
+            idx++;
+            continue;
+          }
+        }
         // `id` is the absolute chunk index, so a reconnect resumes right after it.
         await stream.push({
           id: String(idx),

@@ -10,9 +10,11 @@ import {
   appendInterRunMessage,
   completeLink,
   createLink,
+  getLinkByChildThread,
   newChildThreadId,
   setChildRunId,
 } from './delegation.js';
+import { SUBAGENT_MAX_RUNTIME_MS } from './limits.js';
 import { logger } from '../logger.js';
 
 const log = logger('delegation-supervisor');
@@ -59,6 +61,12 @@ export class DelegationSupervisor {
     private readonly store: ConversationStore,
     private readonly startSubagent: (input: SubagentInput) => Promise<ChildRunHandle>,
     private readonly wake: (threadId: string) => void,
+    /** Cancel a child's WDK run by id (the wall-clock cap's teeth) + the cap itself.
+     *  Injected like `startSubagent` so the supervisor stays unit-testable without the WDK. */
+    private readonly runControl?: {
+      cancelRun: (runId: string) => Promise<void>;
+      maxRuntimeMs?: number;
+    },
   ) {}
 
   /** Per-parent serial chains: makes each parent's cap-check → createLink atomic in-process. */
@@ -143,6 +151,8 @@ export class DelegationSupervisor {
       input.parentThreadId,
       input.label ?? 'subagent',
       run.returnValue,
+      run.runId,
+      Date.now(),
     );
 
     return { childThreadId, childRunId: run.runId };
@@ -160,31 +170,81 @@ export class DelegationSupervisor {
     parentThreadId: string,
     label: string,
     returnValue: Promise<unknown>,
+    runId?: string,
+    startedAtMs?: number,
   ): void {
-    void this.watch(childThreadId, parentThreadId, label, returnValue);
+    void this.watch(childThreadId, parentThreadId, label, returnValue, runId, startedAtMs);
   }
 
-  /** Await the child's completion; on terminal failure, deliver a failure event to the parent. */
+  /**
+   * Await the child's completion; on terminal failure, deliver a failure event to the parent.
+   * Wall-clock cap (subagent-hardening): a child that is still running at `maxRuntimeMs` gets
+   * its WDK run CANCELLED — the failure mode this catches is a run that never finishes without
+   * burning budget (a hung stream, an endless wait), which the in-loop dollar budget can't see.
+   * `startedAtMs` anchors the cap across restarts (reattach passes the link's createdAt).
+   */
   private async watch(
     childThreadId: string,
     parentThreadId: string,
     label: string,
     returnValue: Promise<unknown>,
+    runId?: string,
+    startedAtMs?: number,
   ): Promise<void> {
-    try {
-      await returnValue;
-      // Success: the child closes its own link (run-to-completion, D-DS7). Nothing to do.
-    } catch (err) {
-      log.error('child failed', { childThreadId, err: String(err) });
-      await completeLink(this.db, childThreadId, 'failed').catch(() => {});
+    const capMs = this.runControl?.maxRuntimeMs ?? SUBAGENT_MAX_RUNTIME_MS;
+    const remainingMs = Math.max(60_000, capMs - (Date.now() - (startedAtMs ?? Date.now())));
+    let timer: NodeJS.Timeout | undefined;
+    const cap = new Promise<'cap'>((resolve) => {
+      timer = setTimeout(() => resolve('cap'), remainingMs);
+      timer.unref?.();
+    });
+    const settled = returnValue.then(
+      () => ({ kind: 'done' as const }),
+      (err: unknown) => ({ kind: 'failed' as const, err }),
+    );
+    const outcome =
+      this.runControl?.cancelRun && runId ? await Promise.race([settled, cap]) : await settled;
+    clearTimeout(timer);
+
+    if (outcome === 'cap') {
+      log.error('child exceeded max runtime — cancelling', { childThreadId, runId, capMs });
+      // Link first (same ordering as cancel_run): the cancel makes returnValue reject, and the
+      // failure branch below must find the link already terminal so it stays silent.
+      await completeLink(this.db, childThreadId, 'timeout').catch(() => {});
+      await this.runControl!.cancelRun(runId!).catch((err) => {
+        log.error('child run cancel failed', { childThreadId, runId, err: String(err) });
+      });
+      settled.catch(() => {}); // defuse: the raced promise settles later, unobserved
       await appendInterRunMessage(
         this.store,
         parentThreadId,
         { id: 'watchdog', name: label },
-        `[delegated task "${label}" failed before it could report: ${truncate(String(err))}]`,
+        `[delegated task "${label}" exceeded its ${Math.round(capMs / 60_000)}-minute runtime ` +
+          `cap and was cancelled before it could report]`,
       ).catch(() => {});
       this.wake(parentThreadId);
+      return;
     }
+
+    if (outcome.kind === 'done') return; // the child closes its own link (D-DS7)
+
+    // A run whose link is ALREADY terminal died on purpose (cancel_run / the cap above set it
+    // before cancelling) — the parent was told by whoever cancelled; a failure report here
+    // would be a spurious second death notice.
+    const link = await getLinkByChildThread(this.db, childThreadId).catch(() => undefined);
+    if (link && link.status !== 'running') {
+      log.info('child ended after its link closed (intentional cancel)', { childThreadId });
+      return;
+    }
+    log.error('child failed', { childThreadId, err: String(outcome.err) });
+    await completeLink(this.db, childThreadId, 'failed').catch(() => {});
+    await appendInterRunMessage(
+      this.store,
+      parentThreadId,
+      { id: 'watchdog', name: label },
+      `[delegated task "${label}" failed before it could report: ${truncate(String(outcome.err))}]`,
+    ).catch(() => {});
+    this.wake(parentThreadId);
   }
 }
 
