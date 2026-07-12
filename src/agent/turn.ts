@@ -82,7 +82,37 @@ export function toModelMessages(
       ),
     ),
   );
-  return convertToModelMessages(ui, { ignoreIncompleteToolCalls: true });
+  return convertToModelMessages(ui, { ignoreIncompleteToolCalls: true }).then((messages) =>
+    messages.map(ensureNonEmptyUserContent),
+  );
+}
+
+/**
+ * A user message that renders to NO content becomes a bracketed note instead of an empty
+ * message. Real case (2026-07-12): a carrier-side media failure delivers an inbound webhook
+ * with empty text and no attachment → the row renders to `content: []` → the Anthropic API
+ * 400s the whole turn ("user messages must have non-empty content") UNLESS merge-geometry
+ * happens to fold it into an adjacent tool message — so one such row poisoned every
+ * subsequent turn on the owner thread. An empty arrival is also real information the model
+ * should see (it can say "your image didn't come through") rather than a hole.
+ */
+function ensureNonEmptyUserContent(m: ModelMessage): ModelMessage {
+  if (m.role !== 'user') return m;
+  const empty =
+    typeof m.content === 'string'
+      ? m.content.trim() === ''
+      : m.content.length === 0 ||
+        m.content.every((p) => p.type === 'text' && p.text.trim() === '');
+  if (!empty) return m;
+  return {
+    ...m,
+    content: [
+      {
+        type: 'text',
+        text: '[a message arrived here with no readable content — e.g. an attachment the carrier failed to deliver]',
+      },
+    ],
+  };
 }
 
 /**
