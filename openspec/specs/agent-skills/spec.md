@@ -4,15 +4,15 @@
 TBD - created by syncing change agent-tooling. Update Purpose after archive.
 ## Requirements
 ### Requirement: SKILL.md standard, stored as files
-Skills SHALL follow the `agentskills.io` `SKILL.md` format — a `skills/<name>/SKILL.md` with YAML frontmatter (at least `name` and `description`) and a markdown body, plus optional `scripts/`, `references/`, and `assets/`. Skills SHALL be stored as plain files in a dedicated git repository the user controls, with `~/.sunny/skills/` as the local working copy.
+Skills SHALL follow the `agentskills.io` `SKILL.md` format — a `skills/<name>/SKILL.md` with YAML frontmatter (at least `name` and `description`) and a markdown body, plus optional `scripts/`, `references/`, and `assets/`. Agent- and owner-authored skills SHALL be stored as plain files in a dedicated git repository the user controls, with `~/.sunny/skills/` as the local working copy. Builtin skills SHALL be stored as plain files in the application repository under `agent/builtin/skills/` and read in place.
 
 #### Scenario: A skill is a standard SKILL.md directory
 - **WHEN** a skill exists
-- **THEN** it is a directory containing a `SKILL.md` with `name` and `description` frontmatter, stored in the skill repository
+- **THEN** it is a directory containing a `SKILL.md` with `name` and `description` frontmatter, stored either in the skill repository (authored/trusted/installed) or in the application repository (builtin)
 
 #### Scenario: Skills are version-controlled
-- **WHEN** the skill repository is inspected
-- **THEN** it consists of plain files whose history records every skill change
+- **WHEN** the skill repository or the application repository is inspected
+- **THEN** skills consist of plain files whose git history records every skill change
 
 ### Requirement: Unified skill store and install path
 Self-authored and externally found skills SHALL share one workflow: both live in the dedicated skill repository and are installed/updated through the same `npx skills` path (`npx skills add owner/repo`). A self-authored skill SHALL be committed to the repository and become installable by that same path; an external skill MAY be vendored into the repository. Sunny committing to the repository SHALL use a declared credential reference for git authentication.
@@ -77,37 +77,6 @@ A skill SHALL be validated against the `SKILL.md` schema when created or install
 - **WHEN** a created or installed skill fails schema validation
 - **THEN** it is not activated
 
-### Requirement: Seeded skill-management and capability skills
-Sunny SHALL ship with a set of seeded known-good skills so it can extend itself from day one,
-including: a skill-authoring skill (how to write a good `SKILL.md`, e.g. from
-`anthropics/skills`), a skill-discovery/installation skill (how to find and install skills via
-`npx skills` and related installers), the `devbox` skill (build/run/host), a single
-**delegation & scheduling** skill covering the whole spawn taxonomy — when to delegate to a
-subagent (now) vs. schedule for later, how to choose the audience, how to brief completely,
-and how to endow least authority, taught in one place rather than per-tool skills — and a
-**coding** skill (the coding workflow over the thin tools and host CLIs: orient on the target
-repo's agent/readme docs first, search with `rg`, read before editing, prefer the
-file-edit/file-write tools over shell heredocs, verify changes with the project's
-tests/typecheck, git hygiene, backgrounding long-running processes around the bash timeout,
-serving via devbox, and channel-appropriate reporting of results). Seeded skills SHALL be
-installable through the same install path as any other skill.
-
-#### Scenario: Skill-authoring and discovery skills are present
-- **WHEN** Sunny needs to author a new skill or find an existing one
-- **THEN** a seeded skill-authoring skill and a seeded skill-discovery/installation skill are available to guide it
-
-#### Scenario: One skill covers the spawn taxonomy
-- **WHEN** Sunny must decide between delegating to a subagent and creating a schedule
-- **THEN** a single seeded delegation & scheduling skill guides the choice of timing, audience, and least authority
-
-#### Scenario: Coding skill guides coding tasks
-- **WHEN** Sunny takes on a coding task (editing a repo, building or fixing software)
-- **THEN** a seeded coding skill is available describing the search → read → edit → verify → report workflow over the thin tools
-
-#### Scenario: Seeded skills use the standard install path
-- **WHEN** a seeded skill is installed
-- **THEN** it is installed through the same `SKILL.md` install path as any other skill
-
 ### Requirement: Skill index may be filtered by run authority
 The skill index presented to a run MAY be filtered to the skills that run can actually act on given its endowed authority, so a run is not offered a skill whose required tools it was not granted. Filtering SHALL only ever narrow the index; it SHALL NOT grant access to a skill outside the run's authority.
 
@@ -118,3 +87,29 @@ The skill index presented to a run MAY be filtered to the skills that run can ac
 #### Scenario: Filtering never expands access
 - **WHEN** the skill index is filtered for a run
 - **THEN** no skill outside the run's authority becomes usable as a result
+
+### Requirement: Builtin skill class
+Sunny SHALL ship a `builtin` skill class: skills stored in the application repository under `agent/builtin/skills/<name>/`, read in place at runtime, trusted by location, and never materialized into `~/.sunny` or the authored skills repository. Builtin skills SHALL be read-only at runtime — the skill write boundary SHALL reject agent edits to builtin skills exactly as it does for `trusted/` clones. A skill SHALL ship builtin only when it depends solely on surfaces that ship with Sunny — the native tool surface, the repo's own CLI, or the skill system itself; a capability that rides a host-installed, owner-configured tool (e.g. himalaya, agent-browser, devbox) SHALL live in the authored skills repository instead, so the skill travels with the tool setup it needs. The shipped set SHALL cover at least: skill authoring, skill discovery/installation, delegation & scheduling, coding, and dreaming (recurring memory maintenance).
+
+#### Scenario: Builtin skills track the deployed runtime
+- **WHEN** the runtime's tool surface changes (e.g. the authority model or file tools) and the code is redeployed
+- **THEN** the builtin skills documenting that surface are already updated in the same deploy, with no per-machine re-seed
+
+#### Scenario: Agent cannot edit a builtin skill
+- **WHEN** Sunny attempts to write to a builtin skill's files
+- **THEN** the write boundary rejects the edit and directs it to fork the skill into `authored/` instead
+
+#### Scenario: Builtins never enter the authored repository
+- **WHEN** the authored skills repository is inspected after any number of boots
+- **THEN** it contains no automatically materialized copies of builtin skills
+
+### Requirement: Authored skills shadow builtins
+An authored skill with the same name as a builtin SHALL take precedence (shadow the builtin) — this is the customization path: fork the builtin into `authored/`, then edit. The skill index SHALL present exactly one entry for a shadowed name and SHALL annotate it as shadowing a builtin, so stale forks are visible when the underlying builtin changes.
+
+#### Scenario: Fork-to-customize
+- **WHEN** an authored skill exists with the same name as a builtin
+- **THEN** the authored version is the one loaded, and the index annotates it as shadowing a builtin
+
+#### Scenario: Deleting the fork restores the builtin
+- **WHEN** the owner deletes an authored skill that was shadowing a builtin
+- **THEN** the builtin version is served again on the next index render

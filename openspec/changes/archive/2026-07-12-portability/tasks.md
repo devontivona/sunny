@@ -39,7 +39,7 @@
 ## 5. One-time authored-repo cleanup
 
 - [x] 5.1 Write `scripts/cleanup-materialized-seeds.mjs`: embedded hashes of the last-shipped content of all 8 seed skills, dry-run diff by default, `--apply` deletes byte-identical copies from `authored/` and commits/pushes via the existing skill-repo git path
-- [ ] 5.2 Run the cleanup against the live authored repo (`devontivona/skills`); verify the skill index serves builtins (not shadows) for unmodified names, and intentional forks (if any) are annotated as shadows
+- [x] 5.2 DONE 2026-07-11 at deploy: ran the cleanup against the live authored repo (`devontivona/skills`); verify the skill index serves builtins (not shadows) for unmodified names, and intentional forks (if any) are annotated as shadows
 
 ## 6. First-run provisioning
 
@@ -58,7 +58,7 @@
 ## 7. Verification
 
 - [x] 7.1 Full test suite + typecheck + local production vite build (production build is not covered by CI)
-- [ ] 7.2 Restart the devbox service and smoke-test: skill index includes builtins, dreaming fires from the file definition (or is due-scheduled correctly), legacy rows gone, no seed writes into the authored repo, loud warnings absent on the fully-configured host, dashboard Skills/Schedules pages show both classes
+- [x] 7.2 DONE 2026-07-11 at deploy — restarted the devbox service and smoke-tested: skill index includes builtins, dreaming fires from the file definition (or is due-scheduled correctly), legacy rows gone, no seed writes into the authored repo, loud warnings absent on the fully-configured host, dashboard Skills/Schedules pages show both classes
 - [x] 7.3 Fresh-machine rehearsal: DONE 2026-07-11 (scratch working-tree copy + scratch SUNNY_HOME + scratch Postgres, no Sendblue secrets): WDK tables auto-provisioned, migrations applied, transport-disabled boot + loud warnings (transport, builtin schedules, public URL), memory/config seeds materialized with the fixed Sunny git identity, /health ok, no machine paths/domains in the scratch home; doctor failed exactly on the missing owner identity. Caught + fixed a real bug: importing @workflow/world-postgres/cli gets bundled by Nitro (CJS __dirname breaks) — setup now runs the package's bin as a child process
 
 ## 8. Builtin cut-line refinement (owner decision, 2026-07-11)
