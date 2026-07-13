@@ -121,8 +121,10 @@ export async function runSubagent(input: SubagentInput): Promise<void> {
   // Terminal report (subagent text-unification): the child's FINAL text IS its report —
   // the same shape as a scheduled run's deliverable. Blocks in the final text were never seen
   // by the step-boundary scan (no prepareStep follows the last step), so deliver them here,
-  // then the remaining text as the report. A bare <no-report/> sentinel delivers nothing (the
-  // deliberate no-op). An empty final WITHOUT the sentinel falls back to the raw interim
+  // then the remaining text as the report. A final containing <no-report/> delivers nothing
+  // (the deliberate no-op — sentinel presence means silence, unified 2026-07-13; working
+  // notes around the token are never delivered). An empty final WITHOUT the sentinel falls
+  // back to the raw interim
   // narration (a parent-agent reads messy notes better than a placeholder; no model pass),
   // then the fixed notice. If the parent `cancel_run`'d this child mid-flight (link no
   // longer `running`), SUPPRESS all terminal delivery — "it will stop reporting" must be

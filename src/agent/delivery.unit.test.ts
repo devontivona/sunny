@@ -89,12 +89,13 @@ describe('text-as-reply extraction (text delivery mode)', () => {
     });
   });
 
-  it('stripNoReply: real content alongside a stray sentinel is DELIVERED, token stripped', () => {
-    // Nothing genuinely written for the user is ever swallowed — the safety property
-    // the terminal-stay_silent design lacked.
-    const parsed = stripNoReply('<no-reply/> actually — take the earlier flight.');
-    expect(parsed).toEqual({ text: 'actually — take the earlier flight.', sentinel: true });
-    expect(classifyTextDelivery(parsed.text, '', parsed.sentinel)).toBe('text');
+  it('stripNoReply: sentinel PRESENCE means silence — surrounding text is not delivered', () => {
+    // Unified 2026-07-13: production runs (the heartbeat job) showed that when the model
+    // writes the token it means "don't send this" for the whole reply — the text around it
+    // is working notes, not a message. The raw text still persists in the row for inspection.
+    const parsed = stripNoReply('All four sources checked; nothing new.\n\n<no-reply/>');
+    expect(parsed).toEqual({ text: '', sentinel: true });
+    expect(classifyTextDelivery(parsed.text, '', parsed.sentinel)).toBe('silence');
   });
 
   it('final text WINS over a legacy stay_silent tool part (the spam pathology, replayed rows)', () => {
@@ -121,8 +122,9 @@ describe('text-as-reply extraction (text delivery mode)', () => {
 
   it('stripNoReport: the child sentinel mirrors stripNoReply mechanics', () => {
     expect(stripNoReport('<no-report/>')).toEqual({ text: '', sentinel: true });
+    // Presence means silence for the child too (unified 2026-07-13).
     expect(stripNoReport('<no-report/> but actually: found it')).toEqual({
-      text: 'but actually: found it',
+      text: '',
       sentinel: true,
     });
     expect(stripNoReport('normal report')).toEqual({ text: 'normal report', sentinel: false });

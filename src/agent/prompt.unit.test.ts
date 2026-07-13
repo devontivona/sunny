@@ -135,7 +135,8 @@ describe('buildJobPrompt', () => {
   it('an autonomous (memory-only) job gets memory guidance + the skills index, but no host tools', () => {
     const p = buildJobPrompt(config, core(), skills, { autonomous: true, memoryTools: true });
     expect(p).toContain('Record durable facts with memory_write');
-    expect(p).toContain('Reply with nothing if there is nothing worth sending.');
+    // Silence-by-sentinel, same contract as the conversation turn (unified 2026-07-13).
+    expect(p).toContain('make your reply exactly <no-reply/>');
     // Every run profile carries the full skills index (2026-07-07) — even memory-only runs.
     expect(p).toContain('=== SKILLS');
     // But the prompt never tells a run to use a tool it doesn't hold.

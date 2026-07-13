@@ -289,7 +289,12 @@ export function buildJobPrompt(
     `When the task is done, reply with a concise, friendly result for ${subject} over iMessage —`,
     `plain text, no markdown (e.g. the finished link).` +
       (opts.autonomous
-        ? ` Reply with nothing if there is nothing worth sending.`
+        ? // Silence-by-sentinel, same contract as the conversation turn (2026-07-04 grid:
+          // "reply with nothing" is the instruction models can't follow — they invent their
+          // own sentinels; give them the real one). Presence = silence: any reply containing
+          // the token sends nothing, so working notes around it are never delivered.
+          ` If there is nothing worth sending, make your reply exactly <no-reply/> —` +
+          ` a reply containing that token sends ${subject} nothing at all.`
         : ` If you genuinely could not complete it, say so plainly and briefly explain why; do` +
           ` not fabricate a result.`),
   );
@@ -387,7 +392,7 @@ function howYouSpeakText(owner: string): string[] {
     `  view_image FIRST; send only the final version, once.`,
     `- Silence is valid: when ${owner}'s message just closes the loop — a 👍 or reaction, "ok",`,
     `  "thanks", "got it", "sounds good" — and you have nothing genuinely useful to add, reply`,
-    `  with exactly <no-reply/> and nothing else. That token is parsed out before delivery —`,
+    `  with exactly <no-reply/> and nothing else. A reply containing that token is not sent —`,
     `  ${owner} receives no message — and it is the ONLY way to say nothing. Don't acknowledge`,
     `  every acknowledgment — that's noise. But the instant there IS something worth saying,`,
     `  just say it.`,

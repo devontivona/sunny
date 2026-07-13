@@ -239,16 +239,19 @@ export const NO_REPORT_SENTINEL = '<no-report/>';
 
 /**
  * Parse a silence sentinel out of a final text. `sentinel` reports whether it appeared;
- * `text` is what remains. A final that is ONLY the sentinel parses to silence; real
- * content alongside a (stray) sentinel is delivered with the token stripped — nothing
- * genuinely written is ever swallowed.
+ * `text` is what remains to deliver. The sentinel's PRESENCE means silence (2026-07-13,
+ * unified across all run profiles): production runs showed that when the model writes the
+ * token it means "don't send this" for the whole reply — the surrounding text is working
+ * notes/self-narration, not a message (the heartbeat runs appended the token after a
+ * "nothing to report" summary; delivering the summary was the bug). The raw text still
+ * persists in the row/run record, so nothing is lost to inspection.
  */
 export function stripSentinel(
   finalText: string,
   token: string,
 ): { text: string; sentinel: boolean } {
   if (!finalText.includes(token)) return { text: finalText, sentinel: false };
-  return { text: finalText.split(token).join('').trim(), sentinel: true };
+  return { text: '', sentinel: true };
 }
 
 /** The conversation turn's silence parse (see NO_REPLY_SENTINEL). */
@@ -282,10 +285,11 @@ export function extractReportBlocks(text: string): { reports: string[]; rest: st
 
 /**
  * Classify a TEXT-mode turn from its extracted signals. Callers pass the final text
- * AFTER `stripNoReply` (a sentinel-only reply arrives here as empty + silent=true).
- * Final text wins FIRST — by design: the stay_silent-spam pathology (PR #30
- * transcripts) showed the model can write a real reply and ALSO signal silence; when
- * final text exists it is the reply and must be delivered, never swallowed.
+ * AFTER `stripNoReply` (any reply containing the sentinel arrives here as empty +
+ * silent=true — sentinel presence means silence, see `stripSentinel`). Final text wins
+ * FIRST — this ordering now only bites legacy rows: the stay_silent-spam pathology
+ * (PR #30 transcripts) showed the model can write a real reply and ALSO call the old
+ * stay_silent tool; when final text exists it is the reply and must be delivered.
  *
  * - final text present → `text` (delivered directly as bubbles)
  * - no final, silence signaled (sentinel; or a legacy row's stay_silent call) → `silence`

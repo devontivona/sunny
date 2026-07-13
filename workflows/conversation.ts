@@ -188,7 +188,7 @@ export async function runConversation(input: ConversationInput): Promise<void> {
 
 /** Deliver the turn's reply and persist one row per turn (text-as-reply, PR #31; D-MG9).
  *  The FINAL text (after the last tool call) IS the reply, delivered here as blank-line
- *  bubbles via the memoized send step; a bare `<no-reply/>` sentinel is deliberate silence;
+ *  bubbles via the memoized send step; a final containing `<no-reply/>` is deliberate silence;
  *  interim narration is the translator's source material; an empty final with narration is
  *  an ABNORMAL turn end (step limit / length / error finish) that the backstop composes a
  *  status message from. Relayed translator updates persist as `data-translator` parts.

@@ -547,24 +547,31 @@ describe('runConversation (workflow integration — real Local World)', () => {
     ).toBe(true);
   });
 
-  it('text mode: real content alongside a stray sentinel is delivered with the token stripped', async () => {
-    // The safety property the terminal-stay_silent design lacked: a genuine reply is
-    // never swallowed just because a silence signal also appeared.
+  it('text mode: the sentinel silences the WHOLE reply, even with text around it', async () => {
+    // Unified 2026-07-13: production runs (the heartbeat job) showed the model writes the
+    // token to mean "don't send this" for the whole reply — the surrounding text is working
+    // notes, not a message. The raw text still persists in the row for inspection.
     ctx = await setupTestRuntime();
     const event = makeChannelEvent({ text: 'so what should I do?' });
     await ctx.store.appendInbound(event);
-    setTurnModel([{ type: 'text', text: '<no-reply/> actually — take the earlier flight.' }]);
+    setTurnModel([{ type: 'text', text: 'Nothing new to add here.\n\n<no-reply/>' }]);
 
     const run = await start(runConversation, [{ threadId: event.threadId }]);
     await run.returnValue;
     expect(await run.status).toBe('completed');
 
-    expect(ctx.gateway.texts()).toEqual(['actually — take the earlier flight.']);
+    expect(ctx.gateway.sendCount).toBe(0);
     const window = await ctx.store.recentWindow(event.threadId);
-    const meta = (window.find((m) => m.role === 'assistant')!.payload as UIMessage).metadata as {
-      delivered?: string;
-    };
-    expect(meta.delivered).toBe('text');
+    const payload = window.find((m) => m.role === 'assistant')!.payload as UIMessage;
+    expect((payload.metadata as { delivered?: string }).delivered).toBe('silence');
+    // The raw reply (notes + sentinel) persists verbatim in the row's text part.
+    expect(
+      payload.parts.some(
+        (p) =>
+          p.type === 'text' &&
+          (p as { text?: string }).text === 'Nothing new to add here.\n\n<no-reply/>',
+      ),
+    ).toBe(true);
   });
 
   it('text mode: empty final with interim narration takes the recovery backstop (recovered=true)', async () => {
