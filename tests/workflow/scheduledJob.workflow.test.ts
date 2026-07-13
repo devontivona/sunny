@@ -90,6 +90,36 @@ describe('runScheduledJob (workflow integration — real Local World)', () => {
     expect(ctx.gateway.texts()).toEqual(['your 9am reminder']);
   });
 
+  it('sentinel: a <no-reply/> final delivers nothing but records the raw output (the heartbeat fix)', async () => {
+    // 2026-07-13: heartbeat runs ended on working notes + <no-reply/> and the whole text —
+    // sentinel included — was delivered verbatim. Presence means silence, same contract as
+    // the conversation profile; the raw text still lands in schedule_runs for inspection.
+    ctx = await setupTestRuntime();
+    const { runId } = await seedScheduleRun('user');
+    const rawFinal = 'All four sources checked; nothing new.\n\n<no-reply/>';
+    setTurnModel([{ type: 'text', text: rawFinal }]);
+
+    const run = await start(runScheduledJob, [
+      {
+        scheduleId: 's',
+        runId,
+        prompt: 'heartbeat',
+        ownerName: 'Devon',
+        audience: { kind: 'thread', threadId: 'imessage:owner' },
+      },
+    ]);
+    await run.returnValue;
+    expect(await run.status).toBe('completed');
+
+    expect(ctx.gateway.sendCount).toBe(0); // nothing delivered
+    const [row] = await ctx.db.db
+      .select()
+      .from(scheduleRuns)
+      .where(eq(scheduleRuns.id, runId));
+    expect(row?.status).toBe('completed');
+    expect(row?.output).toBe(rawFinal); // raw text (sentinel included) still recorded
+  });
+
   it('family-correct: a schedule fired for a family member delivers to THEIR thread, not the owner', async () => {
     ctx = await setupTestRuntime({ family: [{ name: 'Kate', identities: ['+17193146820'] }] });
     const { runId } = await seedScheduleRun('user');

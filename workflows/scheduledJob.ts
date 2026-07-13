@@ -3,6 +3,7 @@ import { buildTurnModel, type MockResponseDescriptor } from '../src/agent/turnMo
 import { MESSAGE_SPEC } from '../src/agent/tools/messageSpec.js';
 import { SEND_IMAGE_SPEC } from '../src/agent/tools/sendImageSpec.js';
 import { type Audience, subjectName } from '../src/agent/audience.js';
+import { stripNoReply } from '../src/agent/delivery.js';
 import type { McpToolDef } from '../src/mcp/turnTools.js';
 import { deliver, finalAssistantText, grantTools, streamAgent } from './runShell.js';
 
@@ -102,10 +103,13 @@ export async function runScheduledJob(input: ScheduledJobInput): Promise<void> {
 
   // Record-always ⟂ emit-by-target (D-DS14): the outcome is recorded regardless of output target
   // (so a `silent` run is still inspectable), then reported only when not silent. `recoverOnMiss:
-  // 'rawtext'` — the agent's final text is the deliverable.
+  // 'rawtext'` — the agent's final text is the deliverable. Silence is the same <no-reply/>
+  // sentinel as the conversation profile (unified 2026-07-13): its presence means the run has
+  // nothing to send — the RAW text (sentinel and any working notes included) still lands in
+  // `schedule_runs`, but nothing reaches the audience.
   const text = finalAssistantText(result.messages);
   await recordRun(input.runId, text);
-  await deliver(input.audience, text);
+  await deliver(input.audience, stripNoReply(text).text);
 }
 
 interface ScheduledSetup {
