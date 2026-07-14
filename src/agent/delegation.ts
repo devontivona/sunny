@@ -154,23 +154,30 @@ export async function appendInterRunMessage(
   return store.appendInbound(event);
 }
 
+/** The report's origin lane, named in its attribution so the relay turn (and recorded
+ *  history) can tell a delegated child from a fired schedule (unified-voice-layer D-VL2). */
+export type ReportLane = 'subagent' | 'scheduled';
+
 /**
- * Child → parent report (D-DS4): deliver `text` into the parent run's inbox thread, then wake the
- * parent's run-supply so an idle parent is restarted (an in-flight parent folds it via
- * `loadSteers`). Runs inside `emitStep`'s `'use step'`, so it's memoized on replay.
+ * Worker → conversation report (D-DS4; unified-voice-layer D-VL1): deliver `text` into the
+ * recipient run's inbox thread, then wake the thread's run-supply so an idle conversation is
+ * restarted as the mediating relay turn (an in-flight one folds it via `loadSteers`). Used by
+ * both a child reporting to its parent AND a scheduled run reporting to its audience's
+ * conversation loop. Runs inside `emitStep`'s `'use step'`, so it's memoized on replay.
  */
 export async function reportToParent(
   runtime: Runtime,
   out: { threadId: string; fromId?: string; fromName?: string },
   text: string,
+  lane: ReportLane = 'subagent',
 ): Promise<void> {
   const name = sanitizeLabel(out.fromName);
-  // Attribute the report so the parent reads it as a message from a NAMED subagent, not from the
-  // owner — the parent inbox can be the owner's own DM thread (D-DS12), where a bare report would
+  // Attribute the report so the recipient reads it as a message from a NAMED worker, not from the
+  // owner — the inbox can be the owner's own DM thread (D-DS12), where a bare report would
   // be indistinguishable from the owner speaking. `Name: text` is the same speaker convention the
   // model already follows in group threads, so no DM-specific rendering is needed; `sanitizeLabel`
   // keeps a model-supplied label from breaking that convention (no embedded newline/colon).
-  const attributed = `${name} (subagent): ${text}`;
+  const attributed = `${name} (${lane}): ${text}`;
   const inserted = await appendInterRunMessage(
     runtime.store,
     out.threadId,

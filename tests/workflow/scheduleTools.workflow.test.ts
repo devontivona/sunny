@@ -133,7 +133,7 @@ describe('self-scheduling on a trusted-DM turn (run-audiences Phase 1a)', () => 
     expect(await listSchedules(ctx.db.db)).toHaveLength(0);
   });
 
-  it('cross-person (#4): the owner can schedule FOR a family member via `for`', async () => {
+  it('cross-person (#4): the owner can schedule FOR a family member via deliver_to', async () => {
     ctx = await setupTestRuntime({
       owner: { name: 'Devon', identities: ['+15551230000'] },
       family: [{ name: 'Kate', identities: ['+17193146820'] }],
@@ -148,7 +148,7 @@ describe('self-scheduling on a trusted-DM turn (run-audiences Phase 1a)', () => 
           kind: 'once',
           spec: '2027-01-01T15:00:00.000Z',
           prompt: 'Remind about the pediatrician',
-          for: 'Kate',
+          deliver_to: 'Kate',
         }),
       },
       { type: 'text', text: "Set for Kate." },
@@ -160,9 +160,36 @@ describe('self-scheduling on a trusted-DM turn (run-audiences Phase 1a)', () => 
 
     const rows = await listSchedules(ctx.db.db);
     expect(rows).toHaveLength(1);
-    // The schedule is stored as a person: audience for Kate — the fired run will act for + deliver
-    // to Kate, NOT Devon's thread.
+    // The schedule is stored as a person: audience for Kate — the fired run reports to Kate's
+    // conversation loop, NOT Devon's thread.
     expect(rows[0]?.audience).toBe('person:Kate');
+  });
+
+  it('silent pipeline (D-VL6): deliver_to "nobody" stores a household audience', async () => {
+    ctx = await setupTestRuntime();
+    const event = makeChannelEvent({ text: 'process the newsletter feed hourly' });
+    await ctx.store.appendInbound(event);
+    setTurnModel([
+      {
+        type: 'tool-call',
+        toolName: 'schedule_create',
+        input: JSON.stringify({
+          kind: 'cron',
+          spec: '0 * * * *',
+          prompt: 'Process new newsletter emails into RSS entries per the skill.',
+          label: 'newsletter-pipeline',
+          deliver_to: 'nobody',
+        }),
+      },
+      { type: 'text', text: 'Scheduled silently.' },
+    ]);
+
+    const run = await start(runConversation, [{ threadId: event.threadId }]);
+    await run.returnValue;
+    expect(await run.status).toBe('completed');
+
+    const standing = ctx.fileSchedules.list().find((s) => s.label === 'newsletter-pipeline');
+    expect(standing?.audience).toBe('household'); // record-only: no conversation is ever woken
   });
 
   it('cross-person: scheduling for a NON-roster name is refused', async () => {
@@ -173,7 +200,7 @@ describe('self-scheduling on a trusted-DM turn (run-audiences Phase 1a)', () => 
       {
         type: 'tool-call',
         toolName: 'schedule_create',
-        input: JSON.stringify({ kind: 'once', spec: '2027-01-01T09:00:00.000Z', prompt: 'x', for: 'Stranger' }),
+        input: JSON.stringify({ kind: 'once', spec: '2027-01-01T09:00:00.000Z', prompt: 'x', deliver_to: 'Stranger' }),
       },
       { type: 'text', text: 'ok' },
     ]);

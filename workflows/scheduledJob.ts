@@ -1,9 +1,8 @@
 import { tool } from '@ai-sdk/provider-utils';
 import { buildTurnModel, type MockResponseDescriptor } from '../src/agent/turnModel.js';
 import { MESSAGE_SPEC } from '../src/agent/tools/messageSpec.js';
-import { SEND_IMAGE_SPEC } from '../src/agent/tools/sendImageSpec.js';
 import { type Audience, subjectName } from '../src/agent/audience.js';
-import { stripNoReply } from '../src/agent/delivery.js';
+import { finalizeSpeech } from '../src/agent/voice.js';
 import type { McpToolDef } from '../src/mcp/turnTools.js';
 import { deliver, finalAssistantText, grantTools, streamAgent } from './runShell.js';
 
@@ -19,21 +18,26 @@ import { deliver, finalAssistantText, grantTools, streamAgent } from './runShell
  * through the shared `grantTools` builder. Legacy rows (null authority, pre-preset) get the
  * memory tools. How the run SPEAKS is the AUDIENCE axis, not a grant: every scheduled run can
  * `message` the roster (a household run's only voice — its terminal result is recorded, not
- * sent), and delivering runs get `send_image`. No `schedule`/`delegate` grants ever
- * (anti-recursion, D-SC4 — a scheduled run
+ * sent). No `schedule`/`delegate` grants ever (anti-recursion, D-SC4 — a scheduled run
  * cannot create schedules or spawn children). Tool `execute`s are step-wrapped so a replay
- * never re-applies a non-idempotent action. The outcome is always recorded (`recordRun`); the
- * reply is reported to the schedule's audience via the shared bus — so a `household`
- * maintenance schedule (nightly memory consolidation) records its result but sends NO 2am text.
+ * never re-applies a non-idempotent action. The outcome is always recorded (`recordRun`);
+ * the run is a REPORTER (unified-voice-layer D-VL1): its final text is an attributed report
+ * to its audience's conversation loop, mediated by a woken relay turn — never a direct
+ * gateway send — and a `household` maintenance schedule (nightly memory consolidation)
+ * records its result while waking nothing.
  */
 export interface ScheduledJobInput {
   scheduleId: string;
   runId: string;
   prompt: string;
   ownerName: string;
-  /** Who the fired run is for — resolved to a delivery thread through the bus (run-audiences
-   *  D-RA2). `household` = record-only (structurally silent, e.g. nightly consolidation). */
+  /** Who the fired run is for — its reports land on this audience's conversation loop
+   *  (unified-voice-layer D-VL1). `household` = record-only (structurally silent, e.g.
+   *  nightly consolidation). */
   audience: Audience;
+  /** The schedule's label, used to attribute the run's reports (`<label> (scheduled): …`,
+   *  D-VL2); omitted → a generic "schedule". */
+  label?: string;
   /** The grants this run is endowed (D-RA5); omitted → the memory-maintenance default. */
   authority?: string[];
   /** Model id for this run (D-DS9); defaults to the standard job model. */
@@ -78,22 +82,13 @@ export async function runScheduledJob(input: ScheduledJobInput): Promise<void> {
       // - message: EVERY scheduled run can deliberately fan out to roster members — including a
       //   household run (whose terminal result is recorded only; the message tool is its one way
       //   to reach people, e.g. a household job briefing each member). Roster-only; a delivering
-      //   run is refused its OWN subject (that person gets the terminal result — no double-send).
-      // - send_image: delivering (thread/person) audiences get the one outbound-media verb, same
-      //   as the conversation profile — a household run has no single recipient for it.
+      //   run is refused its OWN subject (that person gets the terminal report — no double-send).
+      // No send_image (unified-voice-layer D-VL9): a reporter references produced media by path
+      // in its report; the mediating conversation turn sends it with its own send_image.
       message: tool({
         ...MESSAGE_SPEC,
         execute: ({ recipient, text }) => scheduledMessageStep(input.audience, recipient, text),
       }),
-      ...(input.audience.kind !== 'household'
-        ? {
-            send_image: tool({
-              ...SEND_IMAGE_SPEC,
-              execute: ({ pathOrUrl, caption }) =>
-                scheduledSendImageStep(input.audience, caption ?? '', pathOrUrl),
-            }),
-          }
-        : {}),
     },
     providerOptions: {
       anthropic: { thinking: { type: 'adaptive', display: 'omitted' }, effort: 'high' },
@@ -101,15 +96,24 @@ export async function runScheduledJob(input: ScheduledJobInput): Promise<void> {
     messages: [{ role: 'user', content: input.prompt }],
   });
 
-  // Record-always ⟂ emit-by-target (D-DS14): the outcome is recorded regardless of output target
-  // (so a `silent` run is still inspectable), then reported only when not silent. `recoverOnMiss:
-  // 'rawtext'` — the agent's final text is the deliverable. Silence is the same <no-reply/>
-  // sentinel as the conversation profile (unified 2026-07-13): its presence means the run has
-  // nothing to send — the RAW text (sentinel and any working notes included) still lands in
-  // `schedule_runs`, but nothing reaches the audience.
+  // Record-always ⟂ report-by-audience (D-DS14; unified-voice-layer D-VL1): the RAW outcome is
+  // recorded first (so every run is inspectable), then the parsed speech is dispatched as
+  // attributed REPORTS to the audience's conversation loop — never a direct gateway send. A
+  // `household` audience records only (deliver no-ops). A final containing <no-report/>
+  // delivers nothing (reporter-lane silence); deliberate <report> blocks in the final text
+  // (never seen by a step-boundary scan) deliver ahead of the terminal report, like a child's.
   const text = finalAssistantText(result.messages);
   await recordRun(input.runId, text);
-  await deliver(input.audience, stripNoReply(text).text);
+  const speech = finalizeSpeech(text, 'reporter');
+  const as = {
+    fromId: input.scheduleId,
+    fromName: input.label ?? 'schedule',
+    lane: 'scheduled' as const,
+  };
+  for (const report of speech.reports) {
+    await deliver(input.audience, report, as);
+  }
+  await deliver(input.audience, speech.final, as);
 }
 
 interface ScheduledSetup {
@@ -205,7 +209,7 @@ async function scheduledMessageStep(
   // No self-send on a DELIVERING run: its own subject already receives the terminal result.
   // A household run delivers nothing terminally, so nobody is excluded.
   if (audience.kind !== 'household' && member.name === subjectName(audience, config)) {
-    return `${member.name} already receives this run's result — put it in your final reply instead of messaging them.`;
+    return `${member.name}'s conversation already receives this run's report — put it in your final report instead of messaging them.`;
   }
   // Existing DM if we have one, else a constructed Sendblue DM id (shared resolve tail). Null ⟺
   // no thread AND no from-number.
@@ -213,34 +217,6 @@ async function scheduledMessageStep(
   if (!threadId) return `I don't have a conversation with ${member.name} yet and can't start one.`;
   await gateway.send(threadId, { text }, { persist: true });
   return `Sent to ${member.name}.`;
-}
-
-/**
- * Send an image from a delivering scheduled run to its OWN audience (the audience axis's one
- * outbound-media verb, mirroring the conversation profile — e.g. a daily chart). Resolves the
- * audience to its bound thread the same way the terminal `deliver` does: thread → direct;
- * person → roster member's DM. `'use step'` — a replay never re-sends.
- */
-async function scheduledSendImageStep(
-  audience: Audience,
-  caption: string,
-  pathOrUrl: string,
-): Promise<string> {
-  'use step';
-
-  const { getRuntime } = await import('../src/runtime.js');
-  const { resolveRosterMember, resolveMemberThread } = await import('../src/agent/audience.js');
-  const { config, store, gateway } = await getRuntime();
-
-  let threadId: string | null = null;
-  if (audience.kind === 'thread') threadId = audience.threadId;
-  else if (audience.kind === 'person') {
-    const member = resolveRosterMember(audience.person, config);
-    if (member) threadId = await resolveMemberThread(store, member.identity);
-  }
-  if (!threadId) return `I can't resolve where to send that image, so I sent nothing.`;
-  await gateway.send(threadId, { text: caption, attachment: { pathOrUrl } }, { persist: true });
-  return 'Image sent.';
 }
 
 async function recordRun(runId: string, output: string): Promise<void> {

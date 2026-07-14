@@ -328,9 +328,10 @@ function stepNarration(
 }
 
 /**
- * The single delivery bus (run-audiences D-RA15). Resolve an `Audience` to a Thread and dispatch on
- * its binding — the ONE outward seam every profile uses (the conversation's reply bubbles, the
- * `message` tool, a child's report, AND a run's terminal deliver). Memoized as a `'use step'`, so a replayed run never re-emits.
+ * The single delivery bus (run-audiences D-RA15; unified-voice-layer D-VL1). Resolve an
+ * `Audience` to a Thread and dispatch on its binding — the ONE outward seam every profile uses
+ * (the conversation's reply bubbles, the `message` tool, a child's report, AND a run's terminal
+ * deliver). Memoized as a `'use step'`, so a replayed run never re-emits.
  *  - household → nothing (no single recipient; the run fans out via the `message` tool). A household
  *                run with no messaging grant is thus structurally silent.
  *  - parent    → append to the parent run's inbox + wake its run-supply (attributed via from*),
@@ -338,8 +339,17 @@ function stepNarration(
  *  - person    → resolve the roster member to their BOUND DM at delivery time; if unresolvable
  *                (never-contacted / removed), record nothing here and notify the owner (D-RA2).
  *  - thread    → bound (a real conversation) → gateway; detached (`subagent:` inbox) → append+wake.
+ *
+ * `as` marks the text as a WORKER REPORT (one-speaker rule, D-VL1): instead of gateway-sending
+ * to a bound thread, it is appended there as an attributed inbound (`<label> (<lane>): …`) and
+ * the thread's run-supply is woken — a normal conversational turn mediates it into user-facing
+ * speech. Only a conversational turn (which omits `as`) ever gateway-sends its own text.
  */
-export async function deliver(audience: Audience, text: string): Promise<void> {
+export async function deliver(
+  audience: Audience,
+  text: string,
+  as?: { fromId?: string; fromName?: string; lane: 'subagent' | 'scheduled' },
+): Promise<void> {
   'use step';
 
   if (!text || audience.kind === 'household') return;
@@ -372,11 +382,18 @@ export async function deliver(audience: Audience, text: string): Promise<void> {
   }
 
   // Dispatch on the mailbox binding: detached (internal `subagent:` inbox) → append only; bound →
-  // gateway. A detached inbox is NOT woken here — an in-flight recipient folds it via `loadSteers`,
-  // a finished one is run-to-completion. This mirrors `reportToParent`, which deliberately does not
-  // wake a child inbox (waking would wrongly start a conversation turn on an internal thread).
+  // gateway (a conversation's own speech) or append+wake (a worker's report, mediated by the
+  // woken relay turn). A detached inbox is NOT woken here — an in-flight recipient folds it via
+  // `loadSteers`, a finished one is run-to-completion.
   if (isChildThread(threadId)) {
     await appendInterRunMessage(runtime.store, threadId, { id: 'run', name: 'run' }, text);
+  } else if (as) {
+    await reportToParent(
+      runtime,
+      { threadId, fromId: as.fromId, fromName: as.fromName },
+      text,
+      as.lane,
+    );
   } else {
     await runtime.gateway.send(threadId, { text });
   }

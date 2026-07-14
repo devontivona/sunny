@@ -29,10 +29,9 @@ export interface CreateScheduleInput {
   threadId: string;
   timezone: string;
   label?: string;
-  /** Output target for the fired run (durable-subagents D-DS1); defaults to 'user'. */
-  outputTarget?: 'user' | 'silent';
-  /** Explicit audience (run-audiences #4), e.g. `person:Kate` — the run is for that party
-   *  regardless of the creating thread. Null/omitted → derived from threadId + outputTarget. */
+  /** Explicit audience (run-audiences #4; D-VL5), e.g. `person:Kate` or `household` — the run
+   *  is for that party regardless of the creating thread. Null/omitted → the creating thread.
+   *  (The DB's legacy `output_target` column survives read-only for pre-migration rows.) */
   audience?: string;
   /** The grants the fired run is endowed ({ audience, authority }; D-RA5) — validated as a
    *  subset of the creator's authority at the tool layer. Omitted → the memory default. */
@@ -79,7 +78,6 @@ export async function createSchedule(db: Db, input: CreateScheduleInput): Promis
       threadId: input.threadId,
       timezone: input.timezone,
       label: input.label ?? null,
-      outputTarget: input.outputTarget ?? 'user',
       audience: input.audience ?? null,
       authority: input.authority ?? null,
       nextRunAt,
@@ -118,14 +116,17 @@ export async function deleteSchedule(db: Db, id: string): Promise<boolean> {
 
 export type FileScheduleClass = 'builtin' | 'standing';
 
-/** A file-defined schedule definition parsed from its markdown (pre-resolution). */
+/** A file-defined schedule definition parsed from its markdown (pre-resolution).
+ *  Addressing is the `audience` REFERENCE alone (unified-voice-layer D-VL5):
+ *  `person:<name>` (reports to that person's conversation loop), `household`
+ *  (record-only — the silent pipeline/maintenance case), or absent → the owner.
+ *  The legacy `outputTarget: user|silent` frontmatter is migrated at load. */
 export interface FileScheduleDef {
   /** Filename stem — the schedule's stable name (also its run-history key via
    *  {@link fileScheduleId}). */
   name: string;
   cron: string;
   prompt: string;
-  outputTarget: 'user' | 'silent';
   audience?: string;
   authority?: string[];
 }
@@ -153,19 +154,54 @@ export function standingSchedulesDir(runtimeDir: string): string {
   return join(stateDir(runtimeDir), 'schedules');
 }
 
+/** Validate an audience REFERENCE as written in schedule frontmatter / tool input. */
+function validateAudienceRef(name: string, audience: string): void {
+  const sep = audience.indexOf(':');
+  const kind = sep === -1 ? audience : audience.slice(0, sep);
+  const rest = sep === -1 ? '' : audience.slice(sep + 1);
+  const ok =
+    kind === 'household' || (kind === 'person' && !!rest) || (kind === 'thread' && !!rest);
+  if (!ok) {
+    throw new Error(
+      `schedule file ${name}: invalid audience '${audience}' — use person:<name>, household, ` +
+        `or omit for the owner`,
+    );
+  }
+}
+
+/** Whether a schedule file's raw text still carries the retired `outputTarget` frontmatter
+ *  (unified-voice-layer D-VL5) — the loader rewrites such files once. */
+export function hasLegacyOutputTarget(raw: string): boolean {
+  return /^outputTarget\s*:/im.test(raw);
+}
+
 /** Parse one schedule file (frontmatter + prompt body). Throws on an invalid
  *  definition — a broken builtin is a code bug and a broken standing file is a bad
- *  write, both surfaced to the caller, never silently skipped. */
+ *  write, both surfaced to the caller, never silently skipped. A legacy
+ *  `outputTarget:` key (retired, D-VL5) is mapped to the audience it implied —
+ *  `silent` → `household`, `user` → absent (owner) — unless an explicit audience
+ *  also exists, which is a conflict and refused. */
 export function parseScheduleFile(name: string, raw: string): FileScheduleDef {
   const { frontmatter, body } = parseSkill(raw);
   const cron = frontmatter.cron;
   if (!cron) throw new Error(`schedule file ${name}: missing frontmatter cron`);
   CronExpressionParser.parse(cron); // validate the expression at load time
   if (!body.trim()) throw new Error(`schedule file ${name}: empty prompt body`);
-  const outputTarget = frontmatter.outputtarget ?? 'user';
-  if (outputTarget !== 'user' && outputTarget !== 'silent') {
-    throw new Error(`schedule file ${name}: invalid outputTarget '${outputTarget}'`);
+  let audience = frontmatter.audience || undefined;
+  const legacy = frontmatter.outputtarget;
+  if (legacy !== undefined) {
+    if (audience) {
+      throw new Error(
+        `schedule file ${name}: has both 'audience' and the retired 'outputTarget' — ` +
+          `remove outputTarget`,
+      );
+    }
+    if (legacy !== 'user' && legacy !== 'silent') {
+      throw new Error(`schedule file ${name}: invalid legacy outputTarget '${legacy}'`);
+    }
+    audience = legacy === 'silent' ? 'household' : undefined;
   }
+  if (audience) validateAudienceRef(name, audience);
   const authority = frontmatter.authority
     ?.split(',')
     .map((s) => s.trim())
@@ -174,15 +210,14 @@ export function parseScheduleFile(name: string, raw: string): FileScheduleDef {
     name,
     cron,
     prompt: body.trim(),
-    outputTarget,
-    audience: frontmatter.audience || undefined,
+    audience,
     authority: authority && authority.length > 0 ? authority : undefined,
   };
 }
 
 /** Compose a standing-schedule file from a definition (parse round-trips). */
 export function composeScheduleFile(def: FileScheduleDef): string {
-  const lines = ['---', `cron: "${def.cron}"`, `outputTarget: ${def.outputTarget}`];
+  const lines = ['---', `cron: "${def.cron}"`];
   if (def.audience) lines.push(`audience: ${def.audience}`);
   if (def.authority && def.authority.length > 0)
     lines.push(`authority: ${def.authority.join(', ')}`);
@@ -225,7 +260,9 @@ function resolveFileSchedule(
     spec: def.cron,
     prompt: def.prompt,
     threadId,
-    outputTarget: def.outputTarget,
+    // ScheduleRow-shape shim only (the DB column survives for one-shot rows): the file
+    // format itself speaks audience alone (D-VL5).
+    outputTarget: def.audience === 'household' ? 'silent' : 'user',
     audience: def.audience ?? null,
     authority: def.authority ?? null,
     timezone,
@@ -242,7 +279,7 @@ export interface CreateStandingInput {
   name: string;
   cron: string;
   prompt: string;
-  outputTarget?: 'user' | 'silent';
+  /** `person:<name>` | `household` | absent (owner) — see {@link FileScheduleDef}. */
   audience?: string;
   authority?: string[];
 }
@@ -284,10 +321,20 @@ export class FileScheduleRegistry {
       for (const entry of readdirSync(dir).sort()) {
         if (!entry.endsWith('.md')) continue;
         try {
-          reg.register(
-            parseScheduleFile(entry.slice(0, -3), readFileSync(join(dir, entry), 'utf8')),
-            'standing',
-          );
+          const path = join(dir, entry);
+          const raw = readFileSync(path, 'utf8');
+          const def = parseScheduleFile(entry.slice(0, -3), raw);
+          // One-shot legacy migration (D-VL5): a file still carrying `outputTarget:` (or one
+          // restored from an older state-repo clone) is rewritten in the audience format the
+          // moment it loads, so the retired key never survives a boot.
+          if (hasLegacyOutputTarget(raw)) {
+            writeFileSync(path, composeScheduleFile(def), { mode: 0o644 });
+            log.info('migrated standing schedule frontmatter: outputTarget → audience', {
+              entry,
+              audience: def.audience ?? '(owner)',
+            });
+          }
+          reg.register(def, 'standing');
         } catch (err) {
           log.warn('skipping malformed standing schedule file', { entry, err: String(err) });
         }
@@ -333,11 +380,11 @@ export class FileScheduleRegistry {
       }
     }
     CronExpressionParser.parse(input.cron); // validate before writing anything
+    if (input.audience) validateAudienceRef(name, input.audience);
     const def: FileScheduleDef = {
       name,
       cron: input.cron,
       prompt: input.prompt,
-      outputTarget: input.outputTarget ?? 'user',
       audience: input.audience,
       authority: input.authority,
     };
@@ -412,8 +459,8 @@ export async function migrateCronRowsToStanding(
         name,
         cron: row.spec,
         prompt: row.prompt,
-        outputTarget: row.outputTarget === 'silent' ? 'silent' : 'user',
-        audience: row.audience ?? undefined,
+        // The legacy row's silent flag becomes the audience it implied (D-VL5).
+        audience: row.audience ?? (row.outputTarget === 'silent' ? 'household' : undefined),
         authority: row.authority ?? undefined,
       });
     } catch (err) {

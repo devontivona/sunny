@@ -6,7 +6,7 @@ import {
   SUBAGENT_TOKEN_RATES_USD_PER_MTOK,
 } from '../src/agent/limits.js';
 import type { McpToolDef } from '../src/mcp/turnTools.js';
-import { extractReportBlocks, stripNoReport } from '../src/agent/delivery.js';
+import { finalizeSpeech } from '../src/agent/voice.js';
 import {
   deliver,
   finalAssistantText,
@@ -20,7 +20,7 @@ import {
  * D-DS2/D-DS4/D-DS5/D-DS7). Started by the delegation supervisor; runs in its OWN isolated
  * context with its OWN inbox thread (`childThreadId`, D-DS12), a least-privilege toolset (its
  * grants are the toolset preset's, attenuated against the parent's authority at spawn — D-RA5),
- * and `output_target = parent`. Its speech is TEXT (subagent text-unification): the FINAL
+ * and a `parent` audience. Its speech is TEXT (subagent text-unification): the FINAL
  * assistant text IS the report, delivered terminally to the parent's inbox via the shared bus;
  * mid-task progress is explicit `<report>…</report>` blocks delivered at step boundaries while
  * the child keeps working; a `<no-report/>` sentinel final delivers nothing. Run-to-completion
@@ -118,29 +118,27 @@ export async function runSubagent(input: SubagentInput): Promise<void> {
     reportBlocks: { send: (text) => deliver(parentAudience, text) },
   });
 
-  // Terminal report (subagent text-unification): the child's FINAL text IS its report —
-  // the same shape as a scheduled run's deliverable. Blocks in the final text were never seen
+  // Terminal report (subagent text-unification; parsed by the shared voice layer, reporter
+  // lane): the child's FINAL text IS its report. Blocks in the final text were never seen
   // by the step-boundary scan (no prepareStep follows the last step), so deliver them here,
   // then the remaining text as the report. A final containing <no-report/> delivers nothing
-  // (the deliberate no-op — sentinel presence means silence, unified 2026-07-13; working
-  // notes around the token are never delivered). An empty final WITHOUT the sentinel falls
-  // back to the raw interim
-  // narration (a parent-agent reads messy notes better than a placeholder; no model pass),
-  // then the fixed notice. If the parent `cancel_run`'d this child mid-flight (link no
-  // longer `running`), SUPPRESS all terminal delivery — "it will stop reporting" must be
-  // true, not a lie. Then close the link (D-DS7; `completeLink` no-ops on a cancelled link).
+  // (sentinel presence means silence — working notes around the token are never delivered).
+  // An empty final WITHOUT the sentinel falls back to the raw interim narration (a
+  // parent-agent reads messy notes better than a placeholder; no model pass), then the fixed
+  // notice. If the parent `cancel_run`'d this child mid-flight (link no longer `running`),
+  // SUPPRESS all terminal delivery — "it will stop reporting" must be true, not a lie. Then
+  // close the link (D-DS7; `completeLink` no-ops on a cancelled link).
   const stillRunning = await linkRunningStep(input.childThreadId);
-  const { reports: finalBlocks, rest } = extractReportBlocks(finalAssistantText(result.messages));
-  const parsed = stripNoReport(rest);
+  const speech = finalizeSpeech(finalAssistantText(result.messages), 'reporter');
   let delivered: 'text' | 'silence' | 'fallback_text' = 'silence';
   if (stillRunning) {
-    for (const report of finalBlocks) {
+    for (const report of speech.reports) {
       await deliver(parentAudience, report);
     }
-    if (parsed.text) {
-      await deliver(parentAudience, parsed.text);
+    if (speech.final) {
+      await deliver(parentAudience, speech.final);
       delivered = 'text';
-    } else if (!parsed.sentinel && finalBlocks.length === 0 && reportsSent.length === 0) {
+    } else if (!speech.sentinel && speech.reports.length === 0 && reportsSent.length === 0) {
       const fallback = interimNarration(result) || '(the subagent produced no result)';
       await deliver(parentAudience, fallback);
       delivered = 'fallback_text';

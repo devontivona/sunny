@@ -23,9 +23,15 @@ export function scheduleToolSpecs(timezone: string) {
         '(e.g. "every 2 hours" → "0 */2 * * *"). A cron schedule becomes a STANDING schedule: ' +
         'a portable file in state/schedules/ that is part of your identity and survives ' +
         'machine moves — give it a meaningful label, and keep its prompt LIGHT (point at a ' +
-        'skill for any nontrivial procedure). prompt = what you should do when it fires. The ' +
-        'result is delivered automatically to whoever the schedule is for (the current person ' +
-        'by default, or the "for" person).',
+        'skill for any nontrivial procedure). prompt = what you should do when it fires. ' +
+        'AUDIENCE (deliver_to): the fired run REPORTS to that person\'s conversation loop — ' +
+        'you relay it to them in your own voice with the conversation\'s context — it never ' +
+        'texts anyone directly. Pick by what the job PRODUCES: an artifact (files, a feed, ' +
+        'tagged docs, DB state) → deliver_to "nobody" (outcomes stay inspectable in run ' +
+        'history; no conversation is woken); a message for a person → their name, and write ' +
+        'the prompt so reporting is CONDITIONAL ("report only if X; otherwise reply exactly ' +
+        '<no-report/>"), never an unconditional "report what was processed" — that is how ' +
+        'hourly spam happens.',
       inputSchema: z.object({
         kind: z
           .enum(['once', 'cron'])
@@ -44,24 +50,24 @@ export function scheduleToolSpecs(timezone: string) {
             'Short kebab-case label. Effectively required for cron (it names the standing ' +
               "schedule's file); optional for once.",
           ),
-        for: z
+        deliver_to: z
           .string()
           .optional()
           .describe(
-            'Optional: schedule this FOR another family member (a roster name, e.g. "Kate") — the ' +
-              'fired run acts for and is delivered to THEM, not you. Omit to schedule for the ' +
-              'current person. Roster members only.',
+            'The AUDIENCE — whose conversation loop receives the fired run\'s reports: a ' +
+              'roster name (e.g. "Kate"; their loop relays to them), or "nobody" for a silent ' +
+              'artifact/pipeline job (record-only). Omit for the current person.',
           ),
         toolset: z
           .enum(['host', 'readonly'])
           .optional()
           .describe(
-            'Toolset preset for the fired run — the same vocabulary as delegate_task: "host" ' +
-              '(the default — full working set: bash, file tools, memory, registries, live MCP ' +
-              'server tools; never broader than yours) or "readonly" (reads only — reserve for ' +
-              'runs needing extra care, e.g. recurring digestion of untrusted content). A ' +
-              'delivering schedule can always message the roster; a scheduled run can never ' +
-              'schedule or delegate.',
+            'The AUTHORITY preset for the fired run — the same vocabulary as delegate_task: ' +
+              '"host" (the default — full working set: bash, file tools, memory, registries, ' +
+              'live MCP server tools; never broader than yours) or "readonly" (reads only — ' +
+              'reserve for runs needing extra care, e.g. recurring digestion of untrusted ' +
+              'content). Every scheduled run can message the roster; none can schedule or ' +
+              'delegate.',
           ),
       }),
     },

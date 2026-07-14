@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildJobPrompt, buildSystemPrompt } from './prompt.js';
+import { buildJobPrompt, buildSubagentPrompt, buildSystemPrompt } from './prompt.js';
 import type { MemoryCore } from '../memory/index.js';
 import { makeConfig } from '../../tests/factories.js';
 
@@ -64,6 +64,9 @@ describe('buildSystemPrompt', () => {
     expect(p).toContain('exactly <no-reply/> and nothing else');
     expect(p).toContain('the ONLY way to say nothing');
     expect(p).not.toContain('stay_silent');
+    // The voice layer's worker-report addressing rule (unified-voice-layer, pathology-2 fix).
+    expect(p).toContain('"<name> (subagent):" or "<name> (scheduled):"');
+    expect(p).toContain('never to a');
   });
 
   it('media guidance: attachments persist + how to re-read; never claims unreachable (context-lifecycle)', () => {
@@ -135,8 +138,11 @@ describe('buildJobPrompt', () => {
   it('an autonomous (memory-only) job gets memory guidance + the skills index, but no host tools', () => {
     const p = buildJobPrompt(config, core(), skills, { autonomous: true, memoryTools: true });
     expect(p).toContain('Record durable facts with memory_write');
-    // Silence-by-sentinel, same contract as the conversation turn (unified 2026-07-13).
-    expect(p).toContain('make your reply exactly <no-reply/>');
+    // Reporter lane (unified-voice-layer D-VL4/7): a job's final text is a mediated REPORT —
+    // <no-report/> silence, no user-facing prose, media by path.
+    expect(p).toContain('Your FINAL text is your report');
+    expect(p).toContain('make your reply exactly <no-report/>');
+    expect(p).not.toContain('<no-reply/>');
     // Every run profile carries the full skills index (2026-07-07) — even memory-only runs.
     expect(p).toContain('=== SKILLS');
     // But the prompt never tells a run to use a tool it doesn't hold.
@@ -147,14 +153,29 @@ describe('buildJobPrompt', () => {
     const owned = buildJobPrompt(config, core(), skills, { hostTools: true });
     // Default (no subject) → owner; identity stays the owner's assistant, no "for X" clause.
     expect(owned).toContain("Devon's personal AI assistant");
-    expect(owned).toContain('a concise, friendly result for Devon');
+    expect(owned).toContain('the conversation that speaks for Devon');
     expect(owned).not.toContain('completing a task for Devon');
 
     // A family-scoped job: identity is still the owner's assistant, but it acts for + reports to Kate.
     const forKate = buildJobPrompt(config, core(), skills, { hostTools: true, subject: 'Kate' });
     expect(forKate).toContain("Devon's personal AI assistant");
     expect(forKate).toContain('completing a task for Kate');
-    expect(forKate).toContain('a concise, friendly result for Kate');
+    expect(forKate).toContain('the conversation that speaks for Kate');
+  });
+
+  it('all three builders embed the same worker-addressing / lane contract from one source', () => {
+    // The voice layer is the ONLY author of speech contracts: the conversation carries the
+    // speaker block, jobs and subagents carry the reporter block — byte-identical up to the
+    // recipient substitution.
+    const conv = buildSystemPrompt(config, core());
+    const job = buildJobPrompt(config, core(), skills, { autonomous: true, hostTools: true });
+    const sub = buildSubagentPrompt(config, core(), 'test-child', skills);
+    expect(conv).toContain('"<name> (subagent):" or "<name> (scheduled):"');
+    for (const p of [job, sub]) {
+      expect(p).toContain('Your FINAL text is your report');
+      expect(p).toContain('exactly <no-report/>');
+      expect(p).toContain('put their paths in the report');
+    }
   });
 
   it('is byte-stable across calls with identical inputs', () => {

@@ -25,11 +25,11 @@ import {
   extractFinalText,
   extractInterimText,
   extractToolResultText,
-  stripNoReply,
   translatorPart,
   usageOf,
   type Delivery,
 } from '../src/agent/delivery.js';
+import { finalizeSpeech } from '../src/agent/voice.js';
 import { grantTools, listRunsStep, streamAgent } from './runShell.js';
 
 /**
@@ -235,14 +235,15 @@ async function finalizeTurn(args: {
   let recovered = false;
 
   const interim = extractInterimText(parts);
-  // Silence is the <no-reply/> sentinel reply, parsed out here; the raw text (sentinel
-  // included) still persists in the row, so history carries the exact silence precedent.
-  const parsed = stripNoReply(extractFinalText(parts));
-  let finalText = parsed.text;
+  // Silence is the <no-reply/> sentinel reply, parsed by the shared voice layer (speaker
+  // lane); the raw text (sentinel included) still persists in the row, so history carries
+  // the exact silence precedent.
+  const speech = finalizeSpeech(extractFinalText(parts), 'speaker');
+  let finalText = speech.final;
   let delivered: Delivery = classifyTextDelivery(
     finalText,
     interim,
-    parsed.sentinel,
+    speech.sentinel,
     args.finishReason,
   );
   // Whether the user actually received something this turn (a reply, or a delivered backstop).
@@ -320,7 +321,7 @@ async function finalizeTurn(args: {
   //  - a failed backstop → NOT answered, even if the turn did tool work (no reply reached the user).
   //  - tool activity but no text/sentinel (e.g. an image sent via a tool) → answered (work landed).
   //  - nothing deliverable at all → NOT answered.
-  if (sent || parsed.sentinel) return true;
+  if (sent || speech.sentinel) return true;
   if (backstopFailed) return false;
   if (parts.some((p) => p.type.startsWith('tool-'))) return true;
   return false;
@@ -977,7 +978,7 @@ async function scheduleCreateStep(
     spec: string;
     prompt: string;
     label?: string;
-    for?: string;
+    deliver_to?: string;
     toolset?: 'host' | 'readonly';
   },
 ): Promise<string> {
@@ -988,16 +989,21 @@ async function scheduleCreateStep(
   const { rosterMatch, attenuate, authorityForToolset } = await import('../src/agent/audience.js');
   const { db, config, fileSchedules } = await getRuntime();
 
-  // "for" schedules this on behalf of ANOTHER family member (run-audiences #4): store an explicit
-  // `person:<name>` audience so the fired run acts for + delivers to them, not the creating thread.
+  // deliver_to is the AUDIENCE axis (unified-voice-layer D-VL6): whose conversation loop
+  // receives the fired run's reports — a roster member (`person:<name>`), or `nobody` →
+  // `household` (a silent artifact/pipeline job, record-only). Omitted → the current subject.
   let audience: string | undefined;
-  if (args.for) {
-    const name = rosterMatch(args.for, config);
-    if (!name) {
-      const known = [config.owner.name, ...config.family.map((f) => f.name)].join(', ');
-      return `I can only schedule for family roster members (${known}); "${args.for}" isn't one.`;
+  if (args.deliver_to) {
+    if (args.deliver_to.trim().toLowerCase() === 'nobody') {
+      audience = 'household';
+    } else {
+      const name = rosterMatch(args.deliver_to, config);
+      if (!name) {
+        const known = [config.owner.name, ...config.family.map((f) => f.name)].join(', ');
+        return `I can only schedule for family roster members (${known}) or "nobody"; "${args.deliver_to}" isn't one.`;
+      }
+      audience = `person:${name}`;
     }
-    audience = `person:${name}`;
   }
 
   // Monotone attenuation (D-RA5): the preset's grants intersected with this turn's authority —
@@ -1024,9 +1030,8 @@ async function scheduleCreateStep(
         audience,
         authority,
       });
-      const forWhom = audience ? ` for ${audience.slice('person:'.length)}` : '';
       return (
-        `Standing schedule "${standing.label}" created (cron ${args.spec})${forWhom}; next run ` +
+        `Standing schedule "${standing.label}" created (cron ${args.spec})${describeAudience(audience)}; next run ` +
         `${standing.nextRunAt?.toISOString() ?? 'n/a'}. It lives at state/schedules/` +
         `${standing.label}.md — part of your portable identity, restored on any machine.`
       );
@@ -1042,11 +1047,17 @@ async function scheduleCreateStep(
       audience,
       authority,
     });
-    const forWhom = audience ? ` for ${audience.slice('person:'.length)}` : '';
-    return `Scheduled ${row.id} (${row.kind})${forWhom}; next run ${row.nextRunAt?.toISOString() ?? 'n/a'}.`;
+    return `Scheduled ${row.id} (${row.kind})${describeAudience(audience)}; next run ${row.nextRunAt?.toISOString() ?? 'n/a'}.`;
   } catch (err) {
     return `ERROR: ${err instanceof Error ? err.message : String(err)}`;
   }
+}
+
+/** Confirmation-string suffix for a schedule's audience (D-VL6). */
+function describeAudience(audience: string | undefined): string {
+  if (!audience) return '';
+  if (audience === 'household') return ' (silent — outcomes recorded, nobody woken)';
+  return audience.startsWith('person:') ? ` for ${audience.slice('person:'.length)}` : '';
 }
 
 /**
