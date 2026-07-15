@@ -28,8 +28,6 @@ Rationale (PR #30/#31, 2026-07): a tool-mediated voice (`send_message`-only) fig
 - **AND** the relay declines (silence) when there is no user-relevant news
 - **AND** relayed updates persist on the turn record and render attributed (or excluded, per config) when the turn replays as history
 
-## ADDED Requirements
-
 ### Requirement: Abnormal-turn-end backstop
 A deliberate turn always ends on reply text or the silence sentinel; if a turn instead ends ABNORMALLY — cut off by the step limit, a length cap, or an error finish — with working notes but no reply, the system SHALL NOT ghost the user: a cheap utility model SHALL compose an honest status message from the turn's notes ("here's where things stand"), returned as plain text (never a forced tool call), which the system delivers and persists as the turn's final reply text (a plain text part — never a synthetic tool call). The backstop SHALL NOT claim or imply the task completed when the notes show it didn't, and SHALL NOT have a silence option. Each firing SHALL be recorded (telemetered as `turn-backstop`, surfaced in the dashboard as recovered) and is expected to be rare.
 
@@ -111,7 +109,6 @@ Sunny SHALL persist every inbound and outbound message to its own store (the Pos
 - **WHEN** Sunny assembles context for a response
 - **THEN** it reads from its own conversation store — the compaction summary plus verbatim tail for compacted threads, the legacy recent window otherwise
 - **AND** does not depend on the transport returning prior message history
-
 
 ### Requirement: Per-channel capability flags with graceful degradation
 Each channel driver SHALL declare its capabilities (at least: reactions, read receipts, typing indicators, group participation, proactive group messaging, and media/attachments). Sunny SHALL feature-detect these capabilities and degrade gracefully rather than assuming any channel's feature set. Where a channel supports typing indicators, Sunny SHALL keep the indicator active for the duration of a conversational turn, refreshing it as the turn makes progress, and SHALL clear it when the turn ends. Refreshing the indicator SHALL be driven from the gateway (which holds the live channel handle), not from inside a durable workflow.
@@ -266,3 +263,15 @@ Inbound messages attributed to the turn's own workers (`<label> (subagent):` / `
 #### Scenario: A redundant report is folded silently
 - **WHEN** a report arrives whose content the live conversation just covered
 - **THEN** the turn may reply `<no-reply/>`, and the report still persists in the thread record
+
+### Requirement: Outbound text passes through the short-link rewrite
+All outbound message text SHALL pass through the short-link rewrite (per the `short-links` capability) inside the Sendblue transport driver immediately before handing text to the adapter, so that every outbound lane — terminal replies, recovery backstop, translator progress updates, proactive/scheduled sends, undeliverable-person notices, and the group-thread image-URL append — is covered by one seam. The rewrite SHALL occur after all other text finalization (e.g. media-URL appends) so no later step reintroduces long URLs. Persisted transcript history SHALL retain the original long URLs; only the wire text carries short links.
+
+#### Scenario: Group image append is shortened
+- **WHEN** an image is sent to a group thread and the driver appends the public media URL as plaintext
+- **THEN** the appended URL is delivered as a short link
+
+#### Scenario: Transcript keeps the original URL
+- **WHEN** a reply containing a long URL is delivered as a short link
+- **THEN** the persisted turn history and model-facing context contain the original long URL, not the short link
+
