@@ -206,7 +206,7 @@ describe('scheduler ticker (integration)', () => {
     const dream = defs.find((d) => d.name === 'dreaming');
     expect(dream).toBeDefined();
     expect(dream!.cron).toBe('30 */4 * * *');
-    expect(dream!.audience).toBe('household'); // record-only — the silent maintenance case
+    expect(dream!.audience).toBe('nobody'); // record-only — the silent maintenance case
     expect(dream!.authority).toEqual([
       'memory_read',
       'memory_write',
@@ -226,10 +226,10 @@ describe('scheduler ticker (integration)', () => {
 
     const def = parseScheduleFile(
       'dreaming',
-      '---\ncron: "30 */4 * * *"\naudience: household\nauthority: memory_read, bash\n---\nDream.',
+      '---\ncron: "30 */4 * * *"\naudience: nobody\nauthority: memory_read, bash\n---\nDream.',
     );
     expect(def.authority).toEqual(['memory_read', 'bash']);
-    expect(def.audience).toBe('household');
+    expect(def.audience).toBe('nobody');
   });
 
   it('legacy outputTarget frontmatter migrates to the audience it implied (D-VL5)', () => {
@@ -237,12 +237,12 @@ describe('scheduler ticker (integration)', () => {
       'x',
       '---\ncron: "* * * * *"\noutputTarget: silent\n---\nbody',
     );
-    expect(silent.audience).toBe('household');
+    expect(silent.audience).toBe('nobody');
     const user = parseScheduleFile('x', '---\ncron: "* * * * *"\noutputTarget: user\n---\nbody');
     expect(user.audience).toBeUndefined(); // absent → the owner's conversation loop
     // The composed round-trip never re-emits the retired key.
     expect(composeScheduleFile(silent)).not.toContain('outputTarget');
-    expect(composeScheduleFile(silent)).toContain('audience: household');
+    expect(composeScheduleFile(silent)).toContain('audience: nobody');
   });
 
   it('parseScheduleFile rejects invalid definitions loudly', () => {
@@ -257,6 +257,10 @@ describe('scheduler ticker (integration)', () => {
     expect(() =>
       parseScheduleFile('x', '---\ncron: "* * * * *"\naudience: everyone\n---\nbody'),
     ).toThrow(/invalid audience/);
+    // The pre-collapse spelling still parses, canonicalized.
+    expect(
+      parseScheduleFile('x', '---\ncron: "* * * * *"\naudience: household\n---\nbody').audience,
+    ).toBe('nobody');
     expect(() =>
       parseScheduleFile(
         'x',
@@ -340,7 +344,7 @@ describe('scheduler ticker (integration)', () => {
     expect(migrated?.fileClass).toBe('standing');
     expect(migrated?.spec).toBe('0 5 * * *');
     // The legacy silent flag became the audience it implied (D-VL5).
-    expect(migrated?.audience).toBe('household');
+    expect(migrated?.audience).toBe('nobody');
     expect(migrated?.authority).toEqual(['memory_read', 'bash']);
     // Round-trips through the file on disk — in the audience format, never the retired key.
     const raw = readFileSync(

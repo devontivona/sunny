@@ -71,6 +71,22 @@
 - [x] 3.4 Sweep for retired vocabulary: no live code path reads `outputTarget` except the
       legacy shims; grep-clean `user|silent` frontmatter references from docs/dashboard copy.
 
+## Phase 3b — The audience collapse (folded in 2026-07-15, D-VL10)
+
+- [x] 3b.1 Collapse the Audience type to `nobody | agent(mailbox) | chat(mailbox)` with
+      `mailbox = byPerson | byThread` (`src/agent/audience.ts`); `subjectName` /
+      `scheduleAudience` / `audienceForSchedule` derive from the mailbox; stored encoding
+      gains canonical `nobody` (`household` = legacy alias, normalized at parse and by the
+      load-time file rewrite; dreaming.md migrated in-repo).
+- [x] 3b.2 Bus dispatch on the audience kind (`deliver` in runShell): nobody → record-only;
+      agent → attributed report via `reportToParent` (identity REQUIRED — unattributed agent
+      delivery throws); chat → gateway. Attribution moved out of the audience onto the run's
+      identity (`{ id?, name, kind }`): subagent + scheduled profiles pass identity; the
+      `parent` audience kind is deleted.
+- [x] 3b.3 Tests + vocabulary sweep: audience unit tests, scheduledJob/scheduleTools workflow
+      tests, scheduler integration tests updated to the collapsed type; `household` survives
+      only as the accepted legacy spelling. Spec deltas + design (D-VL10) + proposal updated.
+
 ## Phase 4 — Deploy + live-state choreography (Devon's restart window)
 
 - [ ] 4.1 Pre-restart: update the four standing-schedule files (`heartbeat`, `task-assistant`,

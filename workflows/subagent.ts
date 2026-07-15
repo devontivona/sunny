@@ -20,7 +20,8 @@ import {
  * D-DS2/D-DS4/D-DS5/D-DS7). Started by the delegation supervisor; runs in its OWN isolated
  * context with its OWN inbox thread (`childThreadId`, D-DS12), a least-privilege toolset (its
  * grants are the toolset preset's, attenuated against the parent's authority at spawn — D-RA5),
- * and a `parent` audience. Its speech is TEXT (subagent text-unification): the FINAL
+ * and an `agent` audience of its parent's thread. Its speech is TEXT (subagent
+ * text-unification): the FINAL
  * assistant text IS the report, delivered terminally to the parent's inbox via the shared bus;
  * mid-task progress is explicit `<report>…</report>` blocks delivered at step boundaries while
  * the child keeps working; a `<no-report/>` sentinel final delivers nothing. Run-to-completion
@@ -72,11 +73,13 @@ export async function runSubagent(input: SubagentInput): Promise<void> {
   // inbox thread, exactly like owner double-text steering on the conversation. The child's inbox
   // starts empty (its brief is the initial message, not a stored window), so the base exclude
   // set is empty — only what we fold.
+  // Audience collapse: the child reports to the AGENT of its parent's thread; its own
+  // identity (label + kind) stamps every report — attribution is who I am, not where I send.
   const parentAudience = {
-    kind: 'parent',
-    threadId: input.parentThreadId,
-    fromName: input.label ?? 'subagent',
+    kind: 'agent',
+    mailbox: { by: 'thread', threadId: input.parentThreadId },
   } as const;
+  const identity = { name: input.label ?? 'subagent', kind: 'subagent' } as const;
   const { result, foldedIds, reportsSent } = await streamAgent({
     // `observe` gives the child exactly-once generation spans in Langfuse, sessioned under the
     // PARENT thread so the whole delegation tree groups with the conversation that spawned it.
@@ -115,7 +118,7 @@ export async function runSubagent(input: SubagentInput): Promise<void> {
     },
     steering: { inboxThreadId: input.childThreadId, isGroup: false, baseExcludeIds: [] },
     // Mid-task <report> blocks deliver to the parent as they complete (memoized bus step).
-    reportBlocks: { send: (text) => deliver(parentAudience, text) },
+    reportBlocks: { send: (text) => deliver(parentAudience, text, identity) },
   });
 
   // Terminal report (subagent text-unification; parsed by the shared voice layer, reporter
@@ -133,14 +136,14 @@ export async function runSubagent(input: SubagentInput): Promise<void> {
   let delivered: 'text' | 'silence' | 'fallback_text' = 'silence';
   if (stillRunning) {
     for (const report of speech.reports) {
-      await deliver(parentAudience, report);
+      await deliver(parentAudience, report, identity);
     }
     if (speech.final) {
-      await deliver(parentAudience, speech.final);
+      await deliver(parentAudience, speech.final, identity);
       delivered = 'text';
     } else if (!speech.sentinel && speech.reports.length === 0 && reportsSent.length === 0) {
       const fallback = interimNarration(result) || '(the subagent produced no result)';
-      await deliver(parentAudience, fallback);
+      await deliver(parentAudience, fallback, identity);
       delivered = 'fallback_text';
     }
   }

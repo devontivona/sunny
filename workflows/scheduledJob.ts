@@ -17,13 +17,13 @@ import { deliver, finalAssistantText, grantTools, streamAgent } from './runShell
  * the same host/readonly vocabulary as delegate_task — attenuated against the creator), mapped
  * through the shared `grantTools` builder. Legacy rows (null authority, pre-preset) get the
  * memory tools. How the run SPEAKS is the AUDIENCE axis, not a grant: every scheduled run can
- * `message` the roster (a household run's only voice — its terminal result is recorded, not
- * sent). No `schedule`/`delegate` grants ever (anti-recursion, D-SC4 — a scheduled run
+ * `message` the roster (a nobody-audience run's only voice — its terminal result is recorded,
+ * not sent). No `schedule`/`delegate` grants ever (anti-recursion, D-SC4 — a scheduled run
  * cannot create schedules or spawn children). Tool `execute`s are step-wrapped so a replay
  * never re-applies a non-idempotent action. The outcome is always recorded (`recordRun`);
  * the run is a REPORTER (unified-voice-layer D-VL1): its final text is an attributed report
  * to its audience's conversation loop, mediated by a woken relay turn — never a direct
- * gateway send — and a `household` maintenance schedule (nightly memory consolidation)
+ * gateway send — and a `nobody`-audience maintenance schedule (nightly memory consolidation)
  * records its result while waking nothing.
  */
 export interface ScheduledJobInput {
@@ -32,7 +32,7 @@ export interface ScheduledJobInput {
   prompt: string;
   ownerName: string;
   /** Who the fired run is for — its reports land on this audience's conversation loop
-   *  (unified-voice-layer D-VL1). `household` = record-only (structurally silent, e.g.
+   *  (unified-voice-layer D-VL1). `nobody` = record-only (structurally silent, e.g.
    *  nightly consolidation). */
   audience: Audience;
   /** The schedule's label, used to attribute the run's reports (`<label> (scheduled): …`,
@@ -63,7 +63,9 @@ export async function runScheduledJob(input: ScheduledJobInput): Promise<void> {
     model: buildTurnModel(setup.modelId, setup.testModelResponses, {
       functionId: 'scheduled-job',
       sessionId:
-        input.audience.kind === 'thread' ? input.audience.threadId : `schedule:${input.scheduleId}`,
+        input.audience.kind !== 'nobody' && input.audience.mailbox.by === 'thread'
+          ? input.audience.mailbox.threadId
+          : `schedule:${input.scheduleId}`,
     }),
     instructions: setup.instructions,
     tools: {
@@ -73,15 +75,18 @@ export async function runScheduledJob(input: ScheduledJobInput): Promise<void> {
       ...grantTools(grants, {
         ownerScope: setup.subject === input.ownerName,
         runs: {
-          threadId: input.audience.kind === 'thread' ? input.audience.threadId : '',
+          threadId:
+            input.audience.kind !== 'nobody' && input.audience.mailbox.by === 'thread'
+              ? input.audience.mailbox.threadId
+              : '',
           subject: setup.subject,
         },
         mcpTools: setup.mcpTools,
       }),
       // How the run SPEAKS is the AUDIENCE axis, never a grant (D-RA14 revised 2026-07-07):
       // - message: EVERY scheduled run can deliberately fan out to roster members — including a
-      //   household run (whose terminal result is recorded only; the message tool is its one way
-      //   to reach people, e.g. a household job briefing each member). Roster-only; a delivering
+      //   nobody-audience run (whose terminal result is recorded only; the message tool is its
+      //   one way to reach people, e.g. a job briefing each member). Roster-only; a delivering
       //   run is refused its OWN subject (that person gets the terminal report — no double-send).
       // No send_image (unified-voice-layer D-VL9): a reporter references produced media by path
       // in its report; the mediating conversation turn sends it with its own send_image.
@@ -99,21 +104,21 @@ export async function runScheduledJob(input: ScheduledJobInput): Promise<void> {
   // Record-always ⟂ report-by-audience (D-DS14; unified-voice-layer D-VL1): the RAW outcome is
   // recorded first (so every run is inspectable), then the parsed speech is dispatched as
   // attributed REPORTS to the audience's conversation loop — never a direct gateway send. A
-  // `household` audience records only (deliver no-ops). A final containing <no-report/>
+  // `nobody` audience records only (deliver no-ops). A final containing <no-report/>
   // delivers nothing (reporter-lane silence); deliberate <report> blocks in the final text
   // (never seen by a step-boundary scan) deliver ahead of the terminal report, like a child's.
   const text = finalAssistantText(result.messages);
   await recordRun(input.runId, text);
   const speech = finalizeSpeech(text, 'reporter');
-  const as = {
-    fromId: input.scheduleId,
-    fromName: input.label ?? 'schedule',
-    lane: 'scheduled' as const,
+  const identity = {
+    id: input.scheduleId,
+    name: input.label ?? 'schedule',
+    kind: 'scheduled' as const,
   };
   for (const report of speech.reports) {
-    await deliver(input.audience, report, as);
+    await deliver(input.audience, report, identity);
   }
-  await deliver(input.audience, speech.final, as);
+  await deliver(input.audience, speech.final, identity);
 }
 
 interface ScheduledSetup {
@@ -153,7 +158,7 @@ async function buildSetup(
   const core = loadCore(memoryPaths(config.runtimeDir));
   const skillsIndex = renderSkillIndex(loadAllSkills(config), config.skills);
   // Frame the run for its subject (D-RA4), derived from the audience — a schedule fired in Kate's
-  // thread reports for Kate, not the owner. `household` (consolidation) → owner framing.
+  // thread reports for Kate, not the owner. `nobody` (consolidation) → owner framing.
   const subject = subjectName(audience, config);
 
   // Live MCP tool discovery (mcp D-MCP6/7) — only for runs endowed the `mcp` grant. No owner
@@ -207,8 +212,8 @@ async function scheduledMessageStep(
     return `I can only message the family roster (${known}); "${recipient}" isn't one, so I sent nothing.`;
   }
   // No self-send on a DELIVERING run: its own subject already receives the terminal result.
-  // A household run delivers nothing terminally, so nobody is excluded.
-  if (audience.kind !== 'household' && member.name === subjectName(audience, config)) {
+  // A nobody-audience run delivers nothing terminally, so no one is excluded.
+  if (audience.kind !== 'nobody' && member.name === subjectName(audience, config)) {
     return `${member.name}'s conversation already receives this run's report — put it in your final report instead of messaging them.`;
   }
   // Existing DM if we have one, else a constructed Sendblue DM id (shared resolve tail). Null ⟺

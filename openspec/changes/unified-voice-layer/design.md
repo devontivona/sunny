@@ -110,6 +110,23 @@ table; changing the dreaming/household record-only path.
   available). The heartbeat skill's hand-rolled interrupt-avoidance step is simplified to rely
   on this (its own check becomes advisory, not the safety net).
 
+- **D-VL10 — The audience collapse (folded in 2026-07-15).** One audience concept for every
+  run, three values, answering "who reads my final text":
+  `nobody` (record-only; the run may still fan out via `message`) ·
+  `agent(mailbox)` (the mailbox's conversation loop reads it — an attributed report; the only
+  terminal audience a worker can have; absorbs the former `parent`, `thread`, and
+  worker-`person` kinds) ·
+  `chat(mailbox)` (the mailbox's people read it — gateway speech; reserved for conversational
+  turns; spawn surfaces cannot construct it — the one-speaker rule as a constructibility gate,
+  like authority attenuation).
+  A `mailbox` names a conversation two ways: `byPerson` (logical, roster-resolved at delivery —
+  portable, the standing-file form) or `byThread` (physical — groups, created-here context,
+  detached inboxes). ATTRIBUTION is not part of the audience: it is the reporting run's own
+  IDENTITY (`{ id?, name, kind }`), passed to the bus with the text and stamped as
+  `<name> (<kind>): …` on every agent delivery. Stored/frontmatter encoding:
+  `person:<name>` | `nobody` | `thread:<id>` (`household` accepted as the legacy spelling of
+  `nobody`, normalized on load). Replaces the four-value `thread|person|parent|household` set.
+
 - **D-VL9 — What deliberately does NOT change.** The `message` tool (addressed fan-out) still
   gateway-sends directly from any profile that holds it — it is deliberate, addressed speech
   with a self-send refusal guard; mediating it is a follow-up only if voice problems appear.

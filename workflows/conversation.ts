@@ -990,12 +990,12 @@ async function scheduleCreateStep(
   const { db, config, fileSchedules } = await getRuntime();
 
   // deliver_to is the AUDIENCE axis (unified-voice-layer D-VL6): whose conversation loop
-  // receives the fired run's reports — a roster member (`person:<name>`), or `nobody` →
-  // `household` (a silent artifact/pipeline job, record-only). Omitted → the current subject.
+  // receives the fired run's reports — a roster member (`person:<name>`), or `nobody`
+  // (a silent artifact/pipeline job, record-only). Omitted → the current subject.
   let audience: string | undefined;
   if (args.deliver_to) {
     if (args.deliver_to.trim().toLowerCase() === 'nobody') {
-      audience = 'household';
+      audience = 'nobody';
     } else {
       const name = rosterMatch(args.deliver_to, config);
       if (!name) {
@@ -1056,7 +1056,7 @@ async function scheduleCreateStep(
 /** Confirmation-string suffix for a schedule's audience (D-VL6). */
 function describeAudience(audience: string | undefined): string {
   if (!audience) return '';
-  if (audience === 'household') return ' (silent — outcomes recorded, nobody woken)';
+  if (audience === 'nobody') return ' (silent — outcomes recorded, nobody woken)';
   return audience.startsWith('person:') ? ` for ${audience.slice('person:'.length)}` : '';
 }
 

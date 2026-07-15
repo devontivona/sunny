@@ -15,10 +15,10 @@ import { makeChannelEvent } from '../factories.js';
 
 /**
  * `runScheduledJob` against a real in-process WDK Local World (durable-subagents task 10.2;
- * run-audiences D-RA2/D-RA15). A `household` audience (nightly consolidation) records its result
- * but sends NOTHING (structurally silent — the 2am-text fix). A `thread` audience delivers through
- * the bus to that thread — the OWNER's, or a FAMILY member's (family-correct delivery), not a
- * hardcoded owner thread.
+ * run-audiences D-RA2/D-RA15; unified-voice-layer audience collapse). A `nobody` audience
+ * (nightly consolidation) records its result and wakes nothing (structurally silent — the
+ * 2am-text fix). An `agent` audience REPORTS through the bus to its mailbox's conversation
+ * loop — the OWNER's, or a FAMILY member's (family-correct), never a gateway send.
  */
 describe('runScheduledJob (workflow integration — real Local World)', () => {
   let ctx: TestRuntimeCtx;
@@ -57,13 +57,13 @@ describe('runScheduledJob (workflow integration — real Local World)', () => {
         runId,
         prompt: 'consolidate memory',
         ownerName: 'Devon',
-        audience: { kind: 'household' },
+        audience: { kind: 'nobody' },
       },
     ]);
     await run.returnValue;
     expect(await run.status).toBe('completed');
 
-    expect(ctx.gateway.sendCount).toBe(0); // household + no messaging grant → no 2am text
+    expect(ctx.gateway.sendCount).toBe(0); // nobody-audience → no 2am text
     const [row] = await ctx.db.db
       .select()
       .from(scheduleRuns)
@@ -83,7 +83,7 @@ describe('runScheduledJob (workflow integration — real Local World)', () => {
         runId,
         prompt: 'remind me',
         ownerName: 'Devon',
-        audience: { kind: 'thread', threadId: 'imessage:owner' },
+        audience: { kind: 'agent', mailbox: { by: 'thread', threadId: 'imessage:owner' } },
         label: 'call-mom',
       },
     ]);
@@ -117,7 +117,7 @@ describe('runScheduledJob (workflow integration — real Local World)', () => {
         runId,
         prompt: 'heartbeat',
         ownerName: 'Devon',
-        audience: { kind: 'thread', threadId: 'imessage:owner' },
+        audience: { kind: 'agent', mailbox: { by: 'thread', threadId: 'imessage:owner' } },
         label: 'heartbeat',
       },
     ]);
@@ -148,7 +148,7 @@ describe('runScheduledJob (workflow integration — real Local World)', () => {
         runId,
         prompt: 'check on Leo',
         ownerName: 'Devon',
-        audience: { kind: 'thread', threadId: kateThread },
+        audience: { kind: 'agent', mailbox: { by: 'thread', threadId: kateThread } },
         label: 'leo-feed',
       },
     ]);
@@ -164,7 +164,7 @@ describe('runScheduledJob (workflow integration — real Local World)', () => {
     expect(ctx.wakeCalls).not.toContain('imessage:owner');
   });
 
-  it('audience: a household run can deliberately fan out to a roster member (message is its only voice)', async () => {
+  it('audience: a nobody-audience run can deliberately fan out to a roster member (message is its only voice)', async () => {
     ctx = await setupTestRuntime({ family: [{ name: 'Kate', identities: ['+17193146820'] }] });
     const { runId } = await seedScheduleRun('silent');
     const kateThread = 'sendblue:owner:kate';
@@ -186,7 +186,7 @@ describe('runScheduledJob (workflow integration — real Local World)', () => {
         runId,
         prompt: 'brief the household',
         ownerName: 'Devon',
-        audience: { kind: 'household' },
+        audience: { kind: 'nobody' },
       },
     ]);
     await run.returnValue;
@@ -215,7 +215,7 @@ describe('runScheduledJob (workflow integration — real Local World)', () => {
         runId,
         prompt: 'produce the daily chart',
         ownerName: 'Devon',
-        audience: { kind: 'thread', threadId: 'imessage:owner' },
+        audience: { kind: 'agent', mailbox: { by: 'thread', threadId: 'imessage:owner' } },
         label: 'daily-chart',
       },
     ]);
@@ -247,7 +247,7 @@ describe('runScheduledJob (workflow integration — real Local World)', () => {
         runId,
         prompt: 'run the daily tagging job',
         ownerName: 'Devon',
-        audience: { kind: 'thread', threadId: 'imessage:owner' },
+        audience: { kind: 'agent', mailbox: { by: 'thread', threadId: 'imessage:owner' } },
         authority: ['file_read', 'memory_read', 'bash', 'file_write'],
       },
     ]);
@@ -290,7 +290,7 @@ describe('runScheduledJob (workflow integration — real Local World)', () => {
         runId,
         prompt: 'Dreaming: follow your dreaming skill.',
         ownerName: 'Devon',
-        audience: { kind: 'household' },
+        audience: { kind: 'nobody' },
         authority: ['memory_read', 'memory_write', 'bash', 'file_read', 'file_write'],
       },
     ]);
@@ -333,7 +333,7 @@ describe('runScheduledJob (workflow integration — real Local World)', () => {
         runId,
         prompt: 'remind Kate about the feed',
         ownerName: 'Devon',
-        audience: { kind: 'thread', threadId: 'imessage:owner' },
+        audience: { kind: 'agent', mailbox: { by: 'thread', threadId: 'imessage:owner' } },
       },
     ]);
     await run.returnValue;
@@ -357,7 +357,7 @@ describe('runScheduledJob (workflow integration — real Local World)', () => {
         runId,
         prompt: 'heartbeat',
         ownerName: 'Devon',
-        audience: { kind: 'thread', threadId: 'imessage:owner' },
+        audience: { kind: 'agent', mailbox: { by: 'thread', threadId: 'imessage:owner' } },
         label: 'heartbeat',
       },
     ]);

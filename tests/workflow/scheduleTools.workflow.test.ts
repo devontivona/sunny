@@ -165,7 +165,7 @@ describe('self-scheduling on a trusted-DM turn (run-audiences Phase 1a)', () => 
     expect(rows[0]?.audience).toBe('person:Kate');
   });
 
-  it('silent pipeline (D-VL6): deliver_to "nobody" stores a household audience', async () => {
+  it('silent pipeline (D-VL6): deliver_to "nobody" stores a nobody audience', async () => {
     ctx = await setupTestRuntime();
     const event = makeChannelEvent({ text: 'process the newsletter feed hourly' });
     await ctx.store.appendInbound(event);
@@ -189,7 +189,7 @@ describe('self-scheduling on a trusted-DM turn (run-audiences Phase 1a)', () => 
     expect(await run.status).toBe('completed');
 
     const standing = ctx.fileSchedules.list().find((s) => s.label === 'newsletter-pipeline');
-    expect(standing?.audience).toBe('household'); // record-only: no conversation is ever woken
+    expect(standing?.audience).toBe('nobody'); // record-only: no conversation is ever woken
   });
 
   it('cross-person: scheduling for a NON-roster name is refused', async () => {
