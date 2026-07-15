@@ -22,6 +22,7 @@ import {
   type OutboundMediaResult,
 } from './media.js';
 import type { ConversationStore } from './store.js';
+import type { ShortLinker } from './shortlinks.js';
 import { DeliveryTracker, isOutboundStatusCallback } from './deliveryTracker.js';
 import { runSerial } from './serial.js';
 import { isGroupThreadId, sendblueDmThreadId } from './threadId.js';
@@ -45,6 +46,8 @@ const logContent = (): boolean => process.env.SUNNY_LOG_CONTENT === '1';
 export interface SendblueGatewayDeps {
   config: SunnyConfig;
   store: ConversationStore;
+  /** Outbound URL shortening (short-links spec). Absent ⇒ no rewrite (tests). */
+  shortener?: ShortLinker;
 }
 
 /**
@@ -78,6 +81,7 @@ export class SendblueGateway implements Gateway {
   /** Outbound delivery tracking (delivery-status-tracking): correlates Sendblue's async
    *  status callbacks with tracked sends, retries failures, and repairs history. */
   private readonly tracker: DeliveryTracker;
+  private readonly shortener: ShortLinker | undefined;
   /** The webhook signing secret — checked here for intercepted status callbacks, exactly
    *  as the adapter checks it for forwarded inbound traffic. */
   private readonly webhookSecret: string;
@@ -87,6 +91,7 @@ export class SendblueGateway implements Gateway {
   constructor(deps: SendblueGatewayDeps) {
     this.config = deps.config;
     this.store = deps.store;
+    this.shortener = deps.shortener;
     this.authorizer = new Authorizer(deps.config);
 
     // Sendblue credentials (secrets are env-only, D-PS5). The adapter also
@@ -291,6 +296,13 @@ export class SendblueGateway implements Gateway {
       text = message.text;
     }
 
+    // Short-link rewrite (short-links spec): the LAST text transformation before the
+    // wire — after the group-image URL append above, so no later step reintroduces
+    // long URLs. Only the wire text carries short links; persistence below keeps the
+    // original `text` so model-facing history never sees them. `mediaUrl` stays long:
+    // Sendblue fetches it server-side, it is never displayed.
+    const wireText = this.shortener ? await this.shortener.rewrite(text) : text;
+
     const thread = this.activeThreads.get(threadId);
     let sentId: string;
     // Sendblue's message_handle when the provider returned one — the correlation key for
@@ -304,23 +316,24 @@ export class SendblueGateway implements Gateway {
         this.adapter as unknown as {
           sendMediaMessage(threadId: string, mediaUrl: string, content?: string): Promise<void>;
         }
-      ).sendMediaMessage(threadId, mediaUrl, text);
+      ).sendMediaMessage(threadId, mediaUrl, wireText);
       sentId = randomUUID();
     } else if (thread) {
       // Reply within the current session — use the live thread handle.
-      const sent = await thread.post(text);
+      const sent = await thread.post(wireText);
       providerHandle = sent?.id || null;
       sentId = providerHandle ?? randomUUID();
     } else {
       // Proactive send (no live thread this session, e.g. a scheduled run or a
       // durable job completing after a restart): Sendblue REST send by thread id.
-      const sent = await this.adapter.postMessage(threadId, text);
+      const sent = await this.adapter.postMessage(threadId, wireText);
       providerHandle = (sent as { id?: string })?.id || null;
       sentId = providerHandle ?? randomUUID();
     }
     // Track the send for delivery-status correlation (delivery-status-tracking).
     // Best-effort by design — tracking must never fail or delay a delivered message.
-    if (providerHandle && text) await this.tracker.track(providerHandle, threadId, text);
+    // Tracks the WIRE text: a redelivery must resend exactly what was on the wire.
+    if (providerHandle && wireText) await this.tracker.track(providerHandle, threadId, wireText);
     // Record the delivery time so the typing driver can suppress the indicator right
     // after a message lands (durable-main-loop typing fix).
     this.sentAt.set(threadId, Date.now());

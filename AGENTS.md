@@ -67,7 +67,7 @@ iMessage), so enabling it does **not** take iMessage down.
 
 - Run with `SUNNY_TEST_CHANNEL=1` (+ `SUNNY_TEST_SECRET` in `.env`); the shared devbox is
   usually already in this mode (see the `sunny-devbox-worktree` memory).
-- Driver: `set -a; . .env; set +a; SUNNY_BASE_URL=https://sunny.waywardlane.com \`
+- Driver: `set -a; . .env; set +a; SUNNY_BASE_URL=https://snny.ai \`
   `node scripts/test-channel.mjs "your message" [--say "deterministic reply"]`.
   `--say` runs the turn against a mock model (free, exact reply) via the `getTurnModel` seam;
   omit it for a real-model turn (prints Sunny's actual reply). Deterministic runs auto-use a

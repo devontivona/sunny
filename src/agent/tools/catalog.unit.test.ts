@@ -18,6 +18,7 @@ describe('toolCatalog', () => {
         'recall_expand',
         'delegate_task',
         'message',
+        'oauth_callback',
         'schedule_create',
         'list_runs',
         'cancel_run',
@@ -45,6 +46,7 @@ describe('toolCatalog', () => {
       'schedule_create',
       'delegate_task',
       'message',
+      'oauth_callback',
     ]) {
       expect(byName.get(n)?.ownerOnly, n).toBe(true);
     }

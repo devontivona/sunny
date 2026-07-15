@@ -9,6 +9,7 @@ import { MESSAGE_SPEC } from '../src/agent/tools/messageSpec.js';
 import { RUNS_TOOL_SPECS, scheduleToolSpecs } from '../src/agent/tools/scheduleSpecs.js';
 import type { McpToolDef } from '../src/mcp/turnTools.js';
 import { DELEGATE_TASK_SPEC, type ChildModelName } from '../src/agent/tools/delegationSpecs.js';
+import { OAUTH_CALLBACK_SPEC, type OauthCallbackInput } from '../src/agent/tools/oauthCallbackSpec.js';
 import { MAX_CONCURRENT_CHILDREN } from '../src/agent/limits.js';
 import {
   GROUP_AUTHORITY,
@@ -417,6 +418,14 @@ function buildTools(ctx: {
           message: tool({
             ...MESSAGE_SPEC,
             execute: ({ recipient, text, image }) => relayToPerson(threadId, recipient, text, image),
+          }),
+          // Public OAuth-redirect hosting (callback-hosting spec): mints live endpoints on
+          // Sunny's public domain and its captured params flow back into this thread, so it
+          // stays trusted-DM-only alongside bash/credentials/mcp_manage. The capture wakes
+          // this thread via the standard inter-run inbox append (no in-turn blocking).
+          oauth_callback: tool({
+            ...OAUTH_CALLBACK_SPEC,
+            execute: (args: OauthCallbackInput) => oauthCallbackStep(threadId, args),
           }),
         }
       : {}),
@@ -992,6 +1001,54 @@ async function relayToPerson(
  * registries. Presets never contain `schedule`/`delegate` (anti-recursion, D-SC4). Timezone
  * comes from config in the step.
  */
+/**
+ * `oauth_callback` execute (callback-hosting spec): mint / check / cancel a hosted
+ * public redirect endpoint. A `'use step'` — a replay never double-mints (a duplicate
+ * pending endpoint would be a live public URL nobody is watching).
+ */
+async function oauthCallbackStep(threadId: string, args: OauthCallbackInput): Promise<string> {
+  'use step';
+
+  const { getRuntime } = await import('../src/runtime.js');
+  const { mintCallback, checkCallback, cancelCallback } = await import(
+    '../src/gateway/callbacks.js'
+  );
+  const { db } = await getRuntime();
+
+  try {
+    if (args.action === 'create') {
+      const minted = await mintCallback(db, {
+        threadId,
+        label: args.label ?? 'oauth flow',
+        ttlMs: args.ttl_minutes ? args.ttl_minutes * 60_000 : undefined,
+      });
+      return (
+        `Callback hosted: ${minted.url} (token ${minted.token}, expires ` +
+        `${minted.expiresAt.toISOString()}). Use this URL as the flow's redirect URI. When it ` +
+        `is hit you'll receive a message from oauth_callback in this thread with the captured ` +
+        `query params; if you suspect you missed it, use action "check" with the token.`
+      );
+    }
+    if (!args.token) return `Action "${args.action}" needs the token returned by create.`;
+    if (args.action === 'check') {
+      const res = await checkCallback(db, args.token);
+      if (res.status === 'unknown') return 'No callback with that token.';
+      const head = `Callback '${res.label}' is ${res.status}`;
+      if (res.status === 'captured') {
+        return `${head} (hit ${res.capturedAt?.toISOString() ?? 'unknown'}); captured params: ${JSON.stringify(res.params)}`;
+      }
+      if (res.status === 'pending') return `${head}; expires ${res.expiresAt?.toISOString()}.`;
+      return `${head}.`;
+    }
+    // cancel
+    return (await cancelCallback(db, args.token))
+      ? 'Callback cancelled — the URL is now inactive.'
+      : 'Nothing to cancel: no pending callback with that token (already captured, expired, or unknown).';
+  } catch (err) {
+    return `oauth_callback ${args.action} failed: ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
 async function scheduleCreateStep(
   threadId: string,
   ownerPresent: boolean,

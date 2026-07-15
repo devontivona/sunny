@@ -28,6 +28,27 @@ const sendblue = ['SENDBLUE_API_KEY', 'SENDBLUE_API_SECRET', 'SENDBLUE_FROM_NUMB
 check('env: SENDBLUE_* (4 vars)', false, sendblue.every((v) => !!process.env[v]), 'iMessage transport disabled without all four (service still boots in loopback mode)');
 check('env: DASHBOARD_PUBLIC_URL', false, !!process.env.DASHBOARD_PUBLIC_URL, "media links, MCP OAuth, and approve links degrade without this host's public URL");
 
+// --- snny ingress (short-links / callback-hosting / snny-ingress specs) --------
+check('env: SHORT_LINK_BASE_URL', false, !!process.env.SHORT_LINK_BASE_URL, 'outbound URL shortening + oauth_callback hosting are OFF without the public short-link origin (scripts/setup-snny-tunnel.sh)');
+if (process.env.SHORT_LINK_BASE_URL) {
+  let unitActive = false;
+  try {
+    execFileSync('systemctl', ['--user', 'is-active', '--quiet', 'sunny-snny-tunnel.service'], { stdio: 'ignore' });
+    unitActive = true;
+  } catch {
+    /* inactive or systemd unavailable */
+  }
+  check('snny: tunnel unit active', false, unitActive, 'systemctl --user status sunny-snny-tunnel.service (re-run scripts/setup-snny-tunnel.sh)');
+  let healthOk = false;
+  try {
+    const res = await fetch(new URL('/health', process.env.SHORT_LINK_BASE_URL), { signal: AbortSignal.timeout(8000) });
+    healthOk = res.ok;
+  } catch {
+    /* unreachable */
+  }
+  check(`snny: ${process.env.SHORT_LINK_BASE_URL}/health reachable`, false, healthOk, 'public route is dark — check the tunnel unit, Cloudflare DNS, and that the service is up');
+}
+
 // --- owner identity ----------------------------------------------------------
 let ownerOk = false;
 try {

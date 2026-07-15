@@ -3,6 +3,7 @@ import type { SunnyConfig } from '../config/index.js';
 import { logger } from '../logger.js';
 import { Authorizer } from './auth.js';
 import type { ConversationStore } from './store.js';
+import type { ShortLinker } from './shortlinks.js';
 import { runSerial } from './serial.js';
 import { isGroupThreadId } from './threadId.js';
 import type {
@@ -51,6 +52,9 @@ export function testChannelAuthorized(provided: string | null | undefined): bool
 export interface LoopbackGatewayDeps {
   config: SunnyConfig;
   store: ConversationStore;
+  /** Outbound URL shortening — same seam as the real transport, so loopback smoke
+   *  tests exercise the rewrite. Absent (or env unset) ⇒ no-op. */
+  shortener?: ShortLinker;
 }
 
 /**
@@ -76,6 +80,7 @@ export class LoopbackGateway implements Gateway {
 
   private readonly store: ConversationStore;
   private readonly authorizer: Authorizer;
+  private readonly shortener: ShortLinker | undefined;
   private inboundHandler: InboundHandler | null = null;
   private readonly outbox: CapturedSend[] = [];
   private readonly sentAt = new Map<string, number>();
@@ -86,6 +91,7 @@ export class LoopbackGateway implements Gateway {
 
   constructor(deps: LoopbackGatewayDeps) {
     this.store = deps.store;
+    this.shortener = deps.shortener;
     this.authorizer = new Authorizer(deps.config);
   }
 
@@ -120,8 +126,11 @@ export class LoopbackGateway implements Gateway {
     if (message.attachment?.required) {
       return { mediaError: 'the loopback test channel cannot deliver images' };
     }
+    // Same wire/persist split as the real transport: the captured outbox is "the wire"
+    // (short links), while the persisted row keeps the original long URLs.
+    const wireText = this.shortener ? await this.shortener.rewrite(message.text) : message.text;
     const seq = ++this.seq;
-    this.outbox.push({ seq, threadId, text: message.text, at: Date.now() });
+    this.outbox.push({ seq, threadId, text: wireText, at: Date.now() });
     this.sentAt.set(threadId, Date.now());
     // The conversational turn persists its own per-turn record (D-MG9) with persist:false;
     // proactive/Tier-2 sends persist a standalone outbound row, same as the real gateway.

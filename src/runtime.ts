@@ -11,6 +11,7 @@ import { messages, scheduleRuns } from './db/schema.js';
 import { ConversationStore } from './gateway/store.js';
 import { cleanupOutbox, ensureMediaDirs } from './gateway/media.js';
 import { SendblueGateway } from './gateway/sendblue.js';
+import { ShortLinker } from './gateway/shortlinks.js';
 import { LoopbackGateway } from './gateway/loopback.js';
 import { MultiChannelGateway } from './gateway/multiChannel.js';
 import type { ChannelEvent, Gateway } from './gateway/types.js';
@@ -131,6 +132,13 @@ async function start(): Promise<Runtime> {
         "deliberately no default: it must be THIS host's URL).",
     );
   }
+  if (!process.env.SHORT_LINK_BASE_URL) {
+    log.warn(
+      'SHORT_LINK_BASE_URL is not set — outbound URL shortening and oauth_callback hosting ' +
+        'are OFF (long URLs are delivered as-is). Set it to the public short-link origin ' +
+        '(e.g. https://snny.ai) once that domain routes to this gateway (scripts/setup-snny-tunnel.sh).',
+    );
+  }
 
   const { db } = createDb(process.env.DATABASE_URL);
   await runMigrations(db);
@@ -176,13 +184,16 @@ async function start(): Promise<Runtime> {
     process.env.SENDBLUE_FROM_NUMBER &&
     process.env.SENDBLUE_WEBHOOK_SECRET,
   );
+  // Outbound URL shortening (short-links spec): one ShortLinker shared by every
+  // transport driver; a no-op until SHORT_LINK_BASE_URL is set.
+  const shortener = new ShortLinker(db);
   let gateway: Gateway;
   if (sendblueConfigured) {
-    const sendblue = new SendblueGateway({ config, store });
+    const sendblue = new SendblueGateway({ config, store, shortener });
     gateway = sendblue;
     if (process.env.SUNNY_TEST_CHANNEL === '1') {
       log.info('test channel enabled (loopback alongside Sendblue; SUNNY_TEST_CHANNEL=1)');
-      gateway = new MultiChannelGateway(sendblue, new LoopbackGateway({ config, store }));
+      gateway = new MultiChannelGateway(sendblue, new LoopbackGateway({ config, store, shortener }));
     }
   } else {
     log.warn(
@@ -190,7 +201,7 @@ async function start(): Promise<Runtime> {
         'SENDBLUE_API_SECRET, SENDBLUE_FROM_NUMBER, SENDBLUE_WEBHOOK_SECRET). iMessage will not ' +
         'work; the loopback test channel is serving instead. Run `npm run doctor` for setup help.',
     );
-    gateway = new LoopbackGateway({ config, store });
+    gateway = new LoopbackGateway({ config, store, shortener });
   }
 
   // Two inbound paths: ECHO (no LLM) and the durable Tier-1 loop — each turn is a per-thread

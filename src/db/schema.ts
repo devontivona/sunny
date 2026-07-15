@@ -267,3 +267,56 @@ export const dreamState = pgTable('dream_state', {
 });
 
 export type DreamStateRow = typeof dreamState.$inferSelect;
+
+/**
+ * Outbound short links (short-links spec). Every http(s) URL in outbound message
+ * text is rewritten to `<SHORT_LINK_BASE_URL>/s/<hash>` at the Sendblue transport
+ * seam; this table is the permanent hash → URL map behind `GET /s/[hash]`. Rows
+ * never expire (links in old iMessage threads must keep working). The unique
+ * index on `url` makes re-sends of the same URL reuse one hash.
+ */
+export const shortLinks = pgTable(
+  'short_links',
+  {
+    /** 6-char base58-style hash (no 0OIl) — the `/s/<hash>` path segment. */
+    hash: text('hash').primaryKey(),
+    url: text('url').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('short_links_url_uniq').on(t.url)],
+);
+
+export type ShortLinkRow = typeof shortLinks.$inferSelect;
+
+/**
+ * Agent-minted public callback endpoints (callback-hosting spec). The
+ * `oauth_callback` tool mints `<SHORT_LINK_BASE_URL>/cb/<token>` for CLI OAuth
+ * redirect flows; the ungated `/cb/[token]` route does a single-capture
+ * transition (pending → captured, conditional UPDATE — first hit wins), stores
+ * the redirect's query params, and wakes the originating thread. Unknown,
+ * expired, and cancelled tokens all render one non-committal page, so state
+ * here is never observable from outside beyond an exact 128-bit token match.
+ */
+export const callbackEndpoints = pgTable(
+  'callback_endpoints',
+  {
+    /** 22-char base64url token from 16 random bytes — the `/cb/<token>` path segment. */
+    token: text('token').primaryKey(),
+    /** The thread whose inbox is woken when the callback is hit. */
+    threadId: text('thread_id').notNull(),
+    /** Human-readable "what flow is this" label from the tool call. */
+    label: text('label').notNull(),
+    /** 'pending' | 'captured' | 'cancelled' (expiry is judged against ttl_expires_at). */
+    status: text('status').notNull().default('pending'),
+    ttlExpiresAt: timestamp('ttl_expires_at', { withTimezone: true }).notNull(),
+    /** Parsed query params from the capturing hit. Short-lived OAuth codes, not live secrets. */
+    capturedParams: jsonb('captured_params'),
+    /** Capture metadata (CF-Connecting-IP, raw query string length, …) — never the params. */
+    capturedMeta: jsonb('captured_meta'),
+    capturedAt: timestamp('captured_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('callback_endpoints_thread_idx').on(t.threadId, t.status)],
+);
+
+export type CallbackEndpointRow = typeof callbackEndpoints.$inferSelect;

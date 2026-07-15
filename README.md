@@ -32,9 +32,12 @@ agent. The agent core speaks only the normalized `Gateway` seam, with the iMessa
   deliberate egress exception (the UI is password-protected; trace data still lives only on this
   host, no Langfuse Cloud). Sunny exports to `localhost:3010` locally. `devbox rm langfuse` +
   SSH tunnel for a stricter, off-internet posture.
-- **Supervisor (home server)** — **`devbox`** runs the unified app as the **`sunny`** systemd
-  *user* service (`Restart=always`, linger enabled → starts at boot, survives reboot) and
-  publishes it over HTTPS via a Cloudflare tunnel at **`https://sunny.waywardlane.com`**.
+- **Supervisor (home server)** — the unified app runs as the **`sunny`** systemd *user*
+  service (`scripts/setup-sunny-service.sh`; `Restart=always`, linger enabled → starts at
+  boot, survives reboot). The public URL is **`https://snny.ai`**, served by the
+  project-owned `snny` Cloudflare tunnel (`scripts/setup-snny-tunnel.sh` →
+  `sunny-snny-tunnel.service`). No devbox dependency; the former
+  `sunny.waywardlane.com` devbox host is retired.
 - **Secrets** — env-only (`.env` locally / the service environment in prod):
   `ANTHROPIC_API_KEY`, `SENDBLUE_API_KEY`, `SENDBLUE_API_SECRET`, `SENDBLUE_FROM_NUMBER`,
   `SENDBLUE_WEBHOOK_SECRET`, `DATABASE_URL`, `WORKFLOW_TARGET_WORLD`, `WORKFLOW_POSTGRES_URL`,
@@ -96,11 +99,11 @@ devbox add langfuse -d "$PWD/deploy/langfuse" -c "PATH=/snap/bin:/usr/bin:/bin d
 
 - **Launch the unified app:** `npm run dev:unified` — the one command. Vite hosts Nitro + WDK
   on `$PORT`: the SPA (HMR) + server-route hot-reload + WDK rebuilds, all in one process.
-- **Operate it via devbox:** the home server runs that command as the **`sunny`** devbox
-  service, exposed at `https://sunny.waywardlane.com` over its Cloudflare tunnel (reboot
-  survival + crash auto-restart):
+- **Operate it (home server):** the `sunny` systemd user service runs that same
+  build-then-serve command, exposed at `https://snny.ai` over the dedicated `snny`
+  Cloudflare tunnel (reboot survival + crash auto-restart):
   ```bash
-  devbox logs sunny -f   #  tail   ·   devbox restart sunny   ·   devbox status sunny
+  journalctl --user -u sunny -f   #  tail  ·  systemctl --user restart sunny  ·  systemctl --user status sunny
   ```
   HMR works over the tunnel via `server.hmr = { protocol: 'wss', clientPort: 443 }` +
   `allowedHosts` (in `vite.config.unified.ts`). To run a second instance against the shared
@@ -109,7 +112,7 @@ devbox add langfuse -d "$PWD/deploy/langfuse" -c "PATH=/snap/bin:/usr/bin:/bin d
 - **Sendblue (manual, per host):** inbound iMessage only works once this host is reachable at
   a public HTTPS URL (devbox + Cloudflare tunnel here). Set the Sendblue project's **Receive**
   (inbound) webhook to `<DASHBOARD_PUBLIC_URL>/webhooks/sendblue` (this host:
-  `https://sunny.waywardlane.com/webhooks/sendblue`) and the signing secret to
+  `https://snny.ai/webhooks/sendblue`) and the signing secret to
   `SENDBLUE_WEBHOOK_SECRET`. Health check: `/health`. Without the Sendblue env vars the
   service boots with the transport disabled (loopback/test mode) and warns loudly.
 
@@ -124,7 +127,7 @@ gateway, byte-identical).
 
 ```bash
 # Deterministic turn (mock model — free, exact reply via the getTurnModel seam):
-SUNNY_TEST_SECRET=<s> SUNNY_BASE_URL=https://sunny.waywardlane.com \
+SUNNY_TEST_SECRET=<s> SUNNY_BASE_URL=https://snny.ai \
   node scripts/test-channel.mjs "ping" --say "pong"
 # Real-model turn — prints Sunny's actual reply (drop --say):
 SUNNY_TEST_SECRET=<s> SUNNY_BASE_URL=… node scripts/test-channel.mjs "what's a DE1?"
