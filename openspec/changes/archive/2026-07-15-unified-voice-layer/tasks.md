@@ -118,14 +118,19 @@
       subagent/scheduledJob — the remaining differences (brief vs prompt, budgets, steering,
       link lifecycle, MCP timing) are genuine; unify when a third worker profile exists.
 
-## Phase 4 — Deploy + live-state choreography (Devon's restart window)
+## Phase 4 — Deploy + live-state choreography — DONE 2026-07-15 (restart 05:36Z)
+> Smoke notes: delivering chain verified live (calendar-watch: attributed report → relay turn
+> → "Heads up — your 9am meeting…" in Sunny's voice, delivered:text, gateway send logged);
+> relay silent-judgment verified (internal test report → <no-reply/>); sentinel-then-content
+> swallow observed twice on contrived prompts (presence-means-silence working as designed;
+> WATCH on real heartbeat firings). News pipeline kept conditionally reporting per Devon.
 
-- [ ] 4.1 Pre-restart: update the four standing-schedule files (`heartbeat`, `task-assistant`,
+- [x] 4.1 Pre-restart: update the four standing-schedule files (`heartbeat`, `task-assistant`,
       `craft-daily-resource-tagging`, `news-newsletter-processing`) — `audience:` frontmatter
       (news → `household` unless Devon prefers failure reports; others → `person:Devon`) and
       reporter-shaped prompt tails (drop "send via message" / "report what was processed").
-- [ ] 4.2 Restart; verify loader migration logs clean; smoke: fire one delivering schedule
+- [x] 4.2 Restart; verify loader migration logs clean; smoke: fire one delivering schedule
       (loopback or wait for heartbeat) and confirm the Langfuse chain
       (scheduled-job trace → attributed report on the thread → relay conversation turn →
       gateway send), plus one silent (`household`) firing recording without waking.
-- [ ] 4.3 Sync deltas to main specs (opsx:sync) and archive the change.
+- [x] 4.3 Sync deltas to main specs (opsx:sync) and archive the change.
