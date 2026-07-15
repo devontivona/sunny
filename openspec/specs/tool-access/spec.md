@@ -144,7 +144,6 @@ Higher-level capabilities SHALL be delivered as `SKILL.md` skills composed over 
 - **WHEN** Sunny is asked to build an explainer, presentation, or report site
 - **THEN** the website-builder skill produces a single-page HTML site using a bundled design style and the `devbox` skill to run/host it
 
-
 ### Requirement: Spawn tools endow attenuated authority through one preset vocabulary
 The run-creation tools (`delegate_task`, `schedule_create`) SHALL remain distinct verbs but SHALL share ONE model-facing authority vocabulary: the `toolset` presets (`host` — the default; `readonly` — reads only), each naming a fixed grant bundle, attenuated by intersection with the creator's authority; a scheduled or delegated run never holds the `schedule` or `delegate` grants. **`schedule_create` SHALL additionally expose the audience axis as a `deliver_to` parameter**: a roster name (default: the current subject) routing the fired run's reports to that person's conversation loop, or `nobody` for artifact-producing jobs whose outcomes are inspectable in run history only. The former `for` parameter survives as a deprecated alias of `deliver_to` (a non-strict schema would otherwise silently STRIP the old key from a model imitating recorded history, misrouting the schedule with a success confirmation). The tool's description SHALL teach the report model (a fired run reports to a conversation loop, which relays with context — it does not text anyone directly) and the decision rule: artifact-producing job → `nobody`; message-producing job → a person, with a conditionally-reporting prompt ("report only if X; otherwise reply exactly `<no-report/>`"), never an unconditional "report what was processed". Grants cover only what a run may DO (the authority axis); how a run SPEAKS derives from its audience.
 
@@ -197,3 +196,15 @@ Sunny SHALL expose `list_runs` and `cancel_run` tools spanning schedules and del
 #### Scenario: Non-owner cannot cancel another subject's run
 - **WHEN** a family member attempts to cancel a run whose subject is someone else
 - **THEN** it is refused, while the owner may cancel any run
+
+### Requirement: Callback-hosting tool is trusted-DM-only
+The `oauth_callback` tool (per the `callback-hosting` capability) SHALL be exposed only in trusted owner-DM contexts, alongside `bash`, `credentials`, and `mcp_manage` — never in group threads or to non-owner senders — because it mints live public endpoints on Sunny's domain and its captured parameters flow back into the thread. The tool SHALL be registered in the conversation `buildTools()` wiring and mirrored in the read-only dashboard tool catalog, keeping the two in sync.
+
+#### Scenario: Not available outside the owner DM
+- **WHEN** a turn runs for a group thread or a non-owner sender
+- **THEN** `oauth_callback` is absent from the tool surface
+
+#### Scenario: Catalog parity
+- **WHEN** the dashboard renders the tool catalog
+- **THEN** `oauth_callback` appears with the same spec (description, schema) the live wiring uses
+
