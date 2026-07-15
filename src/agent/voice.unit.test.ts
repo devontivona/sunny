@@ -26,11 +26,15 @@ describe('voice layer (unified-voice-layer D-VL3/4)', () => {
     expect(block).toContain('cannot be messaged');
   });
 
-  it('reporter block states the report contract for its named recipient', () => {
-    const block = voiceBlock({ lane: 'reporter', recipient: 'your orchestrator' }).join('\n');
-    expect(block).toContain('Your FINAL text is your report');
-    expect(block).toContain('your orchestrator when you finish');
-    expect(block).toContain('make your reply exactly <no-report/>');
+  it('reporter block: the report is addressed to SUNNY about work for the subject', () => {
+    const block = voiceBlock({ lane: 'reporter', subject: 'Devon' }).join('\n');
+    expect(block).toContain('Your FINAL text is your report TO SUNNY');
+    // Worker identity (2026-07-15): never Sunny's voice, never first person to the subject.
+    expect(block).toContain('Address Sunny, never Devon');
+    expect(block).toContain('Never write as if you were Sunny');
+    expect(block).toContain('make your ENTIRE reply exactly <no-report/>');
+    // The live sentinel-then-content pathology (craft run, 2026-07-15): decide first.
+    expect(block).toContain('the token cannot be un-written');
     // Reporters hand media paths to the mediating turn (D-VL9) — they never send.
     expect(block).toContain('put their paths in the report');
   });
@@ -38,7 +42,7 @@ describe('voice layer (unified-voice-layer D-VL3/4)', () => {
   it('neither lane block contains example messages, only rules (prompt-examples-become-output)', () => {
     for (const spec of [
       { lane: 'speaker' as const, subject: 'Devon' },
-      { lane: 'reporter' as const, recipient: 'your orchestrator' },
+      { lane: 'reporter' as const, subject: 'Devon' },
     ]) {
       const block = voiceBlock(spec).join('\n');
       expect(block).not.toMatch(/e\.g\. "(?:Morning|Hey|Hi|Done)/);

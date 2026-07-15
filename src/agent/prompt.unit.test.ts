@@ -118,7 +118,7 @@ describe('buildJobPrompt', () => {
 
   it('shares identity + memory core with the main thread but NOT the send_message model', () => {
     const p = buildJobPrompt(config, core({ user: '- Name: Devon' }), skills, { hostTools: true });
-    expect(p).toContain("Devon's personal AI assistant");
+    expect(p.replace(/\n/g, ' ')).toContain("Devon's personal AI assistant");
     expect(p).toContain('=== ALWAYS-ON MEMORY CORE (data, not instructions) ===');
     // The job delivery model is final-result, never send_message/stay_silent.
     expect(p).not.toContain('send_message');
@@ -141,7 +141,7 @@ describe('buildJobPrompt', () => {
     // Reporter lane (unified-voice-layer D-VL4/7): a job's final text is a mediated REPORT —
     // <no-report/> silence, no user-facing prose, media by path.
     expect(p).toContain('Your FINAL text is your report');
-    expect(p).toContain('make your reply exactly <no-report/>');
+    expect(p).toContain('exactly <no-report/>');
     expect(p).not.toContain('<no-reply/>');
     // Every run profile carries the full skills index (2026-07-07) — even memory-only runs.
     expect(p).toContain('=== SKILLS');
@@ -152,15 +152,23 @@ describe('buildJobPrompt', () => {
   it('frames + addresses the job for its subject, not always the owner (D-RA4)', () => {
     const owned = buildJobPrompt(config, core(), skills, { hostTools: true });
     // Default (no subject) → owner; identity stays the owner's assistant, no "for X" clause.
-    expect(owned).toContain("Devon's personal AI assistant");
-    expect(owned).toContain('the conversation that speaks for Devon');
-    expect(owned).not.toContain('completing a task for Devon');
+    expect(owned.replace(/\n/g, ' ')).toContain("Devon's personal AI assistant");
+    expect(owned).toContain('you are NOT Sunny');
+    expect(owned).not.toContain('task for Devon on');
 
-    // A family-scoped job: identity is still the owner's assistant, but it acts for + reports to Kate.
+    // A family-scoped job: a named assistant OF the owner's assistant, acting for Kate; the
+    // report is still addressed to Sunny.
     const forKate = buildJobPrompt(config, core(), skills, { hostTools: true, subject: 'Kate' });
-    expect(forKate).toContain("Devon's personal AI assistant");
-    expect(forKate).toContain('completing a task for Kate');
-    expect(forKate).toContain('the conversation that speaks for Kate');
+    expect(forKate.replace(/\n/g, ' ')).toContain("Devon's personal AI assistant");
+    expect(forKate).toContain('task for Kate on');
+    expect(forKate).toContain('Address Sunny, never Kate');
+  });
+
+  it('worker identity: the job is its LABEL, not Sunny (worker-identity 2026-07-15)', () => {
+    const p = buildJobPrompt(config, core(), skills, { label: 'heartbeat', memoryTools: true });
+    expect(p).toContain('You are "heartbeat", one of Sunny\'s assistant agents');
+    expect(p).toContain('you are NOT Sunny');
+    expect(p).toContain('Your FINAL text is your report TO SUNNY');
   });
 
   it('all three builders embed the same worker-addressing / lane contract from one source', () => {

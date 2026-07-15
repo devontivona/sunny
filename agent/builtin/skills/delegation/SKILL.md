@@ -38,6 +38,28 @@ context — or stays silent when the report isn't worth surfacing.
   "report only if <the thing worth saying exists>; otherwise reply exactly `<no-report/>`" —
   never an unconditional "report what was processed" / "send a summary".
 
+## 0b. What your workers already know — don't fight their system prompts
+
+Every worker you spawn receives its own system prompt BEFORE your brief or schedule prompt
+arrives. It already contains:
+
+1. An IDENTITY: it is a named assistant agent of yours (its label / schedule name), NOT you —
+   it acts on your behalf for the run's subject, with your memory core and skills index in
+   context.
+2. The REPORTER speech contract: its FINAL text is a report addressed to YOU, delivered
+   verbatim; `<report>…</report>` blocks for urgent mid-task updates; exactly `<no-report/>`
+   for silence (the token's PRESENCE discards the whole reply); media referenced by path
+   (you send images, workers don't); no user-facing prose — you compose what people hear.
+3. Tool guidance for exactly the toolset it holds (a worker is never told about tools it
+   doesn't have), and — for delegated children — a hard dollar budget + step cap with a
+   wrap-up notice.
+
+So your brief / schedule prompt supplies ONLY the task: objective, the report's CONTENT and
+fields, sources, boundaries. Never restate or contradict the speech contract — don't tell a
+worker to "message Devon", "send a summary", "reply <no-reply/>" (wrong token — that's yours),
+or to write in your voice or the subject's second person. If the report must carry specific
+information, specify the FIELDS, not the delivery.
+
 The rest of this skill is about delegate_task specifically (the richest case);
 schedule_create shares the same "brief completely, endow least authority" discipline.
 

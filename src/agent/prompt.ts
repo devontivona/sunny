@@ -227,13 +227,10 @@ export function buildSystemPrompt(
 
 // --- durable jobs (background + scheduled) ---------------------------------
 
-/** How a job's reporter lane names its reader (D-VL7): the conversation loop that speaks for
- *  the run's subject — the run itself never composes the user-facing text. */
-function reporterRecipient(subject: string): string {
-  return `the conversation that speaks for ${subject}`;
-}
-
 export interface JobPromptOptions {
+  /** The run's NAME (its schedule label) — workers are named assistant agents of Sunny, not
+   *  Sunny (worker-identity, 2026-07-15); the same label stamps the run's reports. */
+  label?: string;
   /** Whom this run acts for and reports to (run-audiences D-RA4 — the audience's subject).
    *  Defaults to the owner; a family-scoped job/schedule frames + addresses this person instead,
    *  so a run fired in Kate's thread is no longer framed as (or addressed to) the owner. Sunny's
@@ -263,10 +260,13 @@ export function buildJobPrompt(
   // the beneficiary/recipient is the audience's subject, defaulting to the owner.
   const subject = opts.subject ?? owner;
   const forSubject = subject === owner ? '' : ` for ${subject}`;
+  const label = opts.label ?? 'scheduled-assistant';
   const lines: string[] = [
-    `You are Sunny, ${owner}'s personal AI assistant, completing a task${forSubject} on a`,
-    `schedule — no human is watching live, so you cannot ask follow-up questions. Make`,
-    `reasonable assumptions and finish the task end to end.`,
+    `You are "${label}", one of Sunny's assistant agents. Sunny is ${owner}'s personal AI`,
+    `assistant; you are NOT Sunny — you run one scheduled task${forSubject} on Sunny's behalf,`,
+    `with Sunny's memory, tools, and standards. No human is watching live and you cannot ask`,
+    `follow-up questions: make reasonable assumptions and finish the task end to end, then`,
+    `report to Sunny.`,
     ``,
   ];
 
@@ -290,9 +290,10 @@ export function buildJobPrompt(
   }
 
   // The reporter speech contract (unified-voice-layer D-VL1/7): a scheduled run's final text
-  // is a REPORT mediated by the subject's conversation loop — never a direct iMessage. The
-  // shared voice layer states the whole contract; nothing delivery-related is hand-written here.
-  lines.push(...voiceBlock({ lane: 'reporter', recipient: reporterRecipient(subject) }));
+  // is a REPORT TO SUNNY, mediated by the subject's conversation loop — never a direct
+  // iMessage. The shared voice layer states the whole contract; nothing delivery-related is
+  // hand-written here.
+  lines.push(...voiceBlock({ lane: 'reporter', subject }));
 
   const memory = `${lines.join('\n')}\n\n${memoryCoreBlock(core)}`;
   // Every run profile carries the full skills index (2026-07-07): even a memory-only run
@@ -319,16 +320,17 @@ export function buildSubagentPrompt(
 ): string {
   const owner = config.owner.name;
   const lines: string[] = [
-    `You are a delegated subagent of Sunny (${owner}'s assistant), working as "${label}". You were`,
-    `given ONE focused task by an orchestrator. No human is watching, and you cannot ask`,
-    `follow-up questions — make reasonable assumptions and finish the task end to end.`,
+    `You are "${label}", one of Sunny's assistant agents. Sunny is ${owner}'s personal AI`,
+    `assistant; you are NOT Sunny — Sunny delegated you ONE focused task. No human is watching,`,
+    `and you cannot ask follow-up questions — make reasonable assumptions and finish the task`,
+    `end to end, then report to Sunny.`,
     ``,
     `You have real tools — USE them, do not describe using them. NEVER write a tool call as text;`,
     `only real tool calls do anything. (Your available tools are limited to what the task needs.)`,
     ``,
     // The reporter speech contract comes from the shared voice layer (D-VL3) — same lane as a
-    // scheduled run, read by "your orchestrator" instead of a conversation loop.
-    ...voiceBlock({ lane: 'reporter', recipient: 'your orchestrator' }),
+    // scheduled run: the report is addressed to Sunny.
+    ...voiceBlock({ lane: 'reporter', subject: owner }),
     `- Stay strictly within your task's boundaries; do not take actions beyond what was asked.`,
     ``,
     `Your run has a hard model-usage budget (~$50) and a step cap; you'll get a budget notice`,
