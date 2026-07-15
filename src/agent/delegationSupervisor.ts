@@ -12,7 +12,7 @@ import {
   createLink,
   getLinkByChildThread,
   newChildThreadId,
-  sanitizeLabel,
+  reportToParent,
   setChildRunId,
 } from './delegation.js';
 import { SUBAGENT_MAX_RUNTIME_MS } from './limits.js';
@@ -216,16 +216,14 @@ export class DelegationSupervisor {
         log.error('child run cancel failed', { childThreadId, runId, err: String(err) });
       });
       settled.catch(() => {}); // defuse: the raced promise settles later, unobserved
-      // Attributed like every worker delivery (voice-layer invariant, code-review 2026-07-15):
-      // the relay turn recognizes workers only by the `<name> (subagent):` label.
-      await appendInterRunMessage(
-        this.store,
-        parentThreadId,
-        { id: 'watchdog', name: label },
-        `${sanitizeLabel(label)} (subagent): [exceeded the ${Math.round(capMs / 60_000)}-minute ` +
-          `runtime cap and was cancelled before it could report]`,
+      // Through the one report seam (voice-layer invariant): attribution + wake are
+      // reportToParent's job — the supervisor never hand-formats the worker label.
+      await reportToParent(
+        { store: this.store, wakeThread: this.wake },
+        { threadId: parentThreadId, fromId: 'watchdog', fromName: label },
+        `[exceeded the ${Math.round(capMs / 60_000)}-minute runtime cap and was cancelled ` +
+          `before it could report]`,
       ).catch(() => {});
-      this.wake(parentThreadId);
       return;
     }
 
@@ -241,13 +239,11 @@ export class DelegationSupervisor {
     }
     log.error('child failed', { childThreadId, err: String(outcome.err) });
     await completeLink(this.db, childThreadId, 'failed').catch(() => {});
-    await appendInterRunMessage(
-      this.store,
-      parentThreadId,
-      { id: 'watchdog', name: label },
-      `${sanitizeLabel(label)} (subagent): [failed before it could report: ${truncate(String(outcome.err))}]`,
+    await reportToParent(
+      { store: this.store, wakeThread: this.wake },
+      { threadId: parentThreadId, fromId: 'watchdog', fromName: label },
+      `[failed before it could report: ${truncate(String(outcome.err))}]`,
     ).catch(() => {});
-    this.wake(parentThreadId);
   }
 }
 

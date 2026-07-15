@@ -168,7 +168,7 @@ export type ReportLane = RunIdentity['kind'];
  * conversation loop. Runs inside `emitStep`'s `'use step'`, so it's memoized on replay.
  */
 export async function reportToParent(
-  runtime: Runtime,
+  runtime: Pick<Runtime, 'store' | 'wakeThread'>,
   out: { threadId: string; fromId?: string; fromName?: string },
   text: string,
   lane: ReportLane = 'subagent',

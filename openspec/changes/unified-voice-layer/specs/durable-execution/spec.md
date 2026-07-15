@@ -24,16 +24,16 @@ Sunny SHALL execute work in two tiers: Tier 1 conversational turns for normal me
 - **THEN** the report is appended to the audience's conversation thread (attributed `(scheduled)`) and a woken conversational turn relays it with the thread's context and voice — the scheduled run performs no direct gateway send
 
 ### Requirement: Configurable output target
-Every durable run SHALL be addressed by an **Audience** (the run-audiences capability) — `person`, `household`, `thread`, or `parent` — rather than a fixed `user`/`parent`/`silent` output target. Delivery SHALL go through the single delivery bus, which resolves the Audience to a Thread. An autonomous run's terminal text SHALL be dispatched as an attributed report (append + wake) — never as a direct gateway send — so a bound-thread audience receives it via a mediating conversational turn and a `parent` audience via the spawning run's inbox. A `household`-audience run's terminal output SHALL be recorded without waking anything (structural silence). A run's terminal message SHALL be delivered through the same bus — not a separate per-profile terminal-emit path — so headless output is never stranded.
+Every durable run SHALL be addressed by an **Audience** (the run-audiences capability) — `nobody`, `agent(mailbox)`, or `chat(mailbox)` — rather than a fixed `user`/`parent`/`silent` output target. Delivery SHALL go through the single delivery bus, which resolves the Audience to a Thread. An autonomous run's terminal text SHALL be dispatched as an attributed report (append + wake) — never as a direct gateway send — so a conversation-thread mailbox receives it via a mediating conversational turn and a spawning run's detached inbox without a wake. A `nobody`-audience run's terminal output SHALL be recorded without waking anything (structural silence). A run's terminal message SHALL be delivered through the same bus — not a separate per-profile terminal-emit path — so headless output is never stranded.
 
 #### Scenario: Silent maintenance job sends nothing
-- **WHEN** a `household`-audience run (e.g. nightly memory consolidation) completes
+- **WHEN** a `nobody`-audience run (e.g. nightly memory consolidation) completes
 - **THEN** no message is sent and no conversation is woken, and its result is still recorded for later inspection
 
 #### Scenario: Delegated child reports to its parent
-- **WHEN** a run with a `parent` audience delivers a message
+- **WHEN** a run with an `agent(byThread(parent's thread))` audience delivers a message
 - **THEN** it is delivered to its spawning run through the bus, not to a human
 
 #### Scenario: Run reports to its audience, not always the owner
-- **WHEN** a run with a `person` audience delivers its result
+- **WHEN** a run with an `agent(byPerson)` audience delivers its result
 - **THEN** the report lands on that person's conversation thread and the mediating turn frames its relay for that person, even if that person is not the owner

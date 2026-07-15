@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync
 import { join } from 'node:path';
 import { and, eq, inArray, lte } from 'drizzle-orm';
 import { builtinSchedulesDir } from '../agentDir.js';
+import { canonicalAudienceRef } from '../agent/audience.js';
 import { stateDir } from '../config/index.js';
 import type { Db } from '../db/client.js';
 import { schedules, scheduleRuns, type ScheduleRow } from '../db/schema.js';
@@ -155,19 +156,18 @@ export function standingSchedulesDir(runtimeDir: string): string {
   return join(stateDir(runtimeDir), 'schedules');
 }
 
-/** Validate + canonicalize an audience REFERENCE as written in schedule frontmatter / tool
- *  input. Returns the canonical spelling — `household` (the pre-collapse name for
- *  record-only) normalizes to `nobody`. */
-function canonicalAudienceRef(name: string, audience: string): string {
-  const sep = audience.indexOf(':');
-  const kind = sep === -1 ? audience : audience.slice(0, sep);
-  const rest = sep === -1 ? '' : audience.slice(sep + 1);
-  if (kind === 'nobody' || kind === 'household') return 'nobody';
-  if ((kind === 'person' || kind === 'thread') && rest) return audience;
-  throw new Error(
-    `schedule file ${name}: invalid audience '${audience}' — use person:<name>, nobody, ` +
-      `or omit for the owner`,
-  );
+/** Validate + canonicalize an audience REFERENCE via the ONE shared parser
+ *  (`canonicalAudienceRef` in audience.ts); throws with the schedule's name on an
+ *  unrecognized ref. */
+function requireAudienceRef(name: string, audience: string): string {
+  const canonical = canonicalAudienceRef(audience);
+  if (!canonical) {
+    throw new Error(
+      `schedule file ${name}: invalid audience '${audience}' — use person:<name>, nobody, ` +
+        `or omit for the owner`,
+    );
+  }
+  return canonical;
 }
 
 /** The frontmatter block of a raw schedule file (between the opening `---` pair), so
@@ -208,7 +208,7 @@ export function parseScheduleFile(name: string, raw: string): FileScheduleDef {
     }
     audience = legacy === 'silent' ? 'nobody' : undefined;
   }
-  if (audience) audience = canonicalAudienceRef(name, audience);
+  if (audience) audience = requireAudienceRef(name, audience);
   const authority = frontmatter.authority
     ?.split(',')
     .map((s) => s.trim())
@@ -408,7 +408,7 @@ export class FileScheduleRegistry {
       name,
       cron: input.cron,
       prompt: input.prompt,
-      audience: input.audience ? canonicalAudienceRef(name, input.audience) : undefined,
+      audience: input.audience ? requireAudienceRef(name, input.audience) : undefined,
       authority: input.authority,
     };
     const dir = standingSchedulesDir(this.opts.runtimeDir);

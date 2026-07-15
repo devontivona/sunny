@@ -1,3 +1,4 @@
+import { finalizeSpeech } from '../src/agent/voice.js';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { start } from 'workflow/api';
 import { runConversation } from '../workflows/conversation.js';
@@ -7,7 +8,6 @@ import {
   extractFinalText,
   extractInterimText,
   extractTranslatorUpdates,
-  stripNoReply,
 } from '../src/agent/turn.js';
 import type { UIMessage } from 'ai';
 import { initMemory, memoryPaths } from '../src/memory/index.js';
@@ -276,8 +276,8 @@ async function buildTrajectory(
 
   const interimText = extractInterimText(uiParts);
   const scratch = interimText;
-  const parsedFinal = stripNoReply(extractFinalText(uiParts));
-  const finalText = parsedFinal.text;
+  const parsedFinal = finalizeSpeech(extractFinalText(uiParts), 'speaker');
+  const finalText = parsedFinal.final;
   const translatorUpdates = extractTranslatorUpdates(uiParts).map((u) => u.text);
 
   const sends = gateway.texts();

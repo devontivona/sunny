@@ -143,12 +143,44 @@ export function audienceForSchedule(threadId: string, outputTarget: string): Aud
 }
 
 /**
+ * THE parser for a stored audience REFERENCE string — the encoding schedule rows and
+ * standing-file frontmatter carry: `person:<name-or-identity>` | `nobody` | `thread:<id>`
+ * (`household` accepted as the legacy spelling of `nobody`). Refs address WORKERS, so
+ * person/thread parse to `agent` mailboxes. Returns null on an unrecognized ref. Every
+ * site that reads or validates the encoding goes through this (code-review 2026-07-15:
+ * three independent hand-rolled parsers had already diverged).
+ */
+export function parseAudienceRef(ref: string): Audience | null {
+  const a = ref.trim();
+  const sep = a.indexOf(':');
+  const kind = sep === -1 ? a : a.slice(0, sep);
+  const rest = sep === -1 ? '' : a.slice(sep + 1);
+  if (kind === 'person' && rest) return { kind: 'agent', mailbox: { by: 'person', person: rest } };
+  if (kind === 'nobody' || kind === 'household') return { kind: 'nobody' };
+  if (kind === 'thread' && rest) return { kind: 'agent', mailbox: { by: 'thread', threadId: rest } };
+  return null;
+}
+
+/** The canonical serialization of an audience ref (`household` → `nobody`), or null when the
+ *  ref is unrecognized — validation and normalization in one place. */
+export function canonicalAudienceRef(ref: string): string | null {
+  const parsed = parseAudienceRef(ref);
+  if (!parsed) return null;
+  if (parsed.kind === 'nobody') return 'nobody';
+  if (parsed.kind === 'agent') {
+    return parsed.mailbox.by === 'person'
+      ? `person:${parsed.mailbox.person}`
+      : `thread:${parsed.mailbox.threadId}`;
+  }
+  return null; // chat is never a stored ref (one-speaker rule)
+}
+
+/**
  * The audience for a schedule row (run-audiences #4). An explicit `audience` column/frontmatter
  * wins (e.g. `person:Kate` — scheduled FOR a family member, so its reports land on their
  * conversation loop regardless of the creating thread); otherwise derived from `threadId` +
  * `outputTarget` (the common per-person case, where each person's schedules live in their own
- * thread). Stored encoding: `person:<name-or-identity>` | `nobody` | `thread:<id>`
- * (`household` accepted as the legacy spelling of `nobody`).
+ * thread).
  */
 export function scheduleAudience(row: {
   threadId: string;
@@ -157,12 +189,8 @@ export function scheduleAudience(row: {
 }): Audience {
   const a = row.audience?.trim();
   if (a) {
-    const sep = a.indexOf(':');
-    const kind = sep === -1 ? a : a.slice(0, sep);
-    const rest = sep === -1 ? '' : a.slice(sep + 1);
-    if (kind === 'person' && rest) return { kind: 'agent', mailbox: { by: 'person', person: rest } };
-    if (kind === 'nobody' || kind === 'household') return { kind: 'nobody' };
-    if (kind === 'thread' && rest) return { kind: 'agent', mailbox: { by: 'thread', threadId: rest } };
+    const parsed = parseAudienceRef(a);
+    if (parsed) return parsed;
   }
   return audienceForSchedule(row.threadId, row.outputTarget);
 }

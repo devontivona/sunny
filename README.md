@@ -166,8 +166,8 @@ and the design history (proposals, design decisions, rejected alternatives) unde
 Every agent run (a conversation turn, a delegated subagent, a fired schedule) is governed by two
 orthogonal axes. **Authority says what a run may DO** — a set of grants, each mapping to a fixed
 tool bundle through one shared builder (`grantTools` in `workflows/runShell.ts`; vocabulary in
-`src/agent/audience.ts`). **Audience says how a run may SPEAK** — its reply lane and messaging
-verbs derive from who the run is for, never from a grant. Conversation turns hold a root
+`src/agent/audience.ts`). **Audience says who reads a run's final text** — its speech lane and
+messaging verbs derive from who the run is for, never from a grant. Conversation turns hold a root
 authority by thread type; spawned runs are endowed a `toolset` preset (`host` — the default —
 or `readonly`), and the **effective authority is preset ∩ creator's root** (monotone
 attenuation: a spawned run never exceeds its creator, and never holds the spawn grants).
@@ -199,7 +199,7 @@ self-describing if presets change.
 ### Dreaming, compaction & the `sunny` CLI (context lifecycle)
 
 Every ~4 hours the builtin **dreaming** schedule (`agent/builtin/schedules/dreaming.md`,
-silent/household) fires a plain scheduled run that follows `skill:dreaming`: it digests everything said since the last
+`audience: nobody`) fires a plain scheduled run that follows `skill:dreaming`: it digests everything said since the last
 dream watermark (`sunny dream digest`), folds durable facts into memory (USER/SUNNY/people/
 topic docs, reconciling the topic↔INDEX linkage), and writes a **compaction summary** per busy
 thread (`sunny dream compact`, which owns the validations — freshness margin, the
@@ -212,14 +212,22 @@ capabilities that don't warrant native tools ship as tested subcommands document
 `dream digest|compact|advance` are its first. Tables: `thread_compactions`, `dream_state`
 (migration 0012).
 
-### Audience: how a run speaks
+### Audience: who reads a run's final text
 
-| Audience kind | Typical run | Reply/deliverable lane | Mid-run channel | `message` (roster fan-out) | send_image |
-|---|---|---|---|---|---|
-| **live thread** | conversation turn | final text → the thread | translator progress updates | ✅ (trusted DMs; never groups) | ✅ |
-| **thread / person** | delivering scheduled run | final text → audience's thread/DM | — | ✅ (own subject refused — no double-send) | ✅ |
-| **household** | maintenance schedule | recorded only — nothing sent | — | ✅ (its only voice; any roster member) | ❌ (no single recipient) |
-| **parent** | subagent | final text → parent's inbox | `<report>…</report>` blocks | ❌ — speaks only upward, by design | ❌ |
+One concept, three values (unified-voice-layer): a run's **audience** says who reads the text
+it ends on, and everything else — its speech-contract prompt block, its silence sentinel, its
+delivery routing — derives from it. **Only a `chat`-audience run (a conversational turn, minted
+solely by the router) ever speaks to a human through the gateway**; every autonomous run is a
+*reporter* whose terminal text is an attributed report (`<label> (subagent|scheduled): …`)
+mediated by the audience's conversation loop. A mailbox is named logically (`byPerson` — a
+roster member's DM, resolved at delivery) or physically (`byThread` — a group or specific
+conversation). All delivery rides ONE bus (`deliver` in `workflows/runShell.ts`).
+
+| Audience | Who reads it | Typical run | Silence | Mid-run channel | `message` (roster fan-out) | send_image |
+|---|---|---|---|---|---|---|
+| **chat(mailbox)** | the thread's people (gateway) | conversation turn | `<no-reply/>` | translator progress updates | ✅ (trusted DMs; never groups) | ✅ |
+| **agent(mailbox)** | the mailbox's conversation loop (report + wake) | subagent → parent thread; scheduled run → its person/thread | `<no-report/>` | `<report>…</report>` blocks | scheduled: ✅ (own subject refused); subagent: ❌ | ❌ — media by path in the report; the relay turn sends |
+| **nobody** | no one — recorded in run history only | maintenance/pipeline schedule (e.g. dreaming) | n/a (structural) | — | ✅ (its only voice; any roster member) | ❌ |
 
 All run profiles carry the full skills index and memory core in their prompt, and every prompt
 is capability-gated so a run is never told to use a tool it doesn't hold. Normative statements

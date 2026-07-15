@@ -33,7 +33,6 @@ export {
   extractTranslatorUpdates,
   groupSpeakerPrefix,
   steerMessageText,
-  stripNoReply,
   translatorPart,
   trimTrailingNonUser,
   usageOf,

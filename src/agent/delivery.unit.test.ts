@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ModelMessage, UIMessage } from 'ai';
 import {
+  NO_REPLY_SENTINEL,
   NO_REPORT_SENTINEL,
   assistantUIMessageFromResponse,
   calledStaySilent,
@@ -11,7 +12,6 @@ import {
   extractToolResultText,
   extractTranslatorUpdates,
   stripBinaryRuns,
-  stripNoReply,
   stripSentinel,
   translatorPart,
 } from './delivery.js';
@@ -81,20 +81,20 @@ describe('text-as-reply extraction (text delivery mode)', () => {
     expect(classifyTextDelivery(final, interim, false)).toBe('silence');
   });
 
-  it('stripNoReply: a sentinel-only reply is silence; nothing else is touched', () => {
-    expect(stripNoReply('<no-reply/>')).toEqual({ text: '', sentinel: true });
-    expect(stripNoReply('  <no-reply/>  ')).toEqual({ text: '', sentinel: true });
-    expect(stripNoReply('here is your answer')).toEqual({
+  it('stripSentinel(NO_REPLY): a sentinel-only reply is silence; nothing else is touched', () => {
+    expect(stripSentinel('<no-reply/>', NO_REPLY_SENTINEL)).toEqual({ text: '', sentinel: true });
+    expect(stripSentinel('  <no-reply/>  ', NO_REPLY_SENTINEL)).toEqual({ text: '', sentinel: true });
+    expect(stripSentinel('here is your answer', NO_REPLY_SENTINEL)).toEqual({
       text: 'here is your answer',
       sentinel: false,
     });
   });
 
-  it('stripNoReply: sentinel PRESENCE means silence — surrounding text is not delivered', () => {
+  it('stripSentinel(NO_REPLY): sentinel PRESENCE means silence — surrounding text is not delivered', () => {
     // Unified 2026-07-13: production runs (the heartbeat job) showed that when the model
     // writes the token it means "don't send this" for the whole reply — the text around it
     // is working notes, not a message. The raw text still persists in the row for inspection.
-    const parsed = stripNoReply('All four sources checked; nothing new.\n\n<no-reply/>');
+    const parsed = stripSentinel('All four sources checked; nothing new.\n\n<no-reply/>', NO_REPLY_SENTINEL);
     expect(parsed).toEqual({ text: '', sentinel: true });
     expect(classifyTextDelivery(parsed.text, '', parsed.sentinel)).toBe('silence');
   });

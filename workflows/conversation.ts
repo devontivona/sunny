@@ -14,6 +14,7 @@ import {
   GROUP_AUTHORITY,
   OWNER_DM_AUTHORITY,
   TRUSTED_DM_AUTHORITY,
+  parseAudienceRef,
   type Authority,
 } from '../src/agent/audience.js';
 import type { ChildToolset } from './subagent.js';
@@ -1064,11 +1065,16 @@ async function scheduleCreateStep(
   }
 }
 
-/** Confirmation-string suffix for a schedule's audience (D-VL6). */
+/** Confirmation-string suffix for a schedule's audience (D-VL6), read through the ONE
+ *  shared ref parser — no local string surgery on the encoding. */
 function describeAudience(audience: string | undefined): string {
   if (!audience) return '';
-  if (audience === 'nobody') return ' (silent — outcomes recorded, nobody woken)';
-  return audience.startsWith('person:') ? ` for ${audience.slice('person:'.length)}` : '';
+  const parsed = parseAudienceRef(audience);
+  if (parsed?.kind === 'nobody') return ' (silent — outcomes recorded, nobody woken)';
+  if (parsed?.kind === 'agent' && parsed.mailbox.by === 'person') {
+    return ` for ${parsed.mailbox.person}`;
+  }
+  return '';
 }
 
 /**
