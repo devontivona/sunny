@@ -4,7 +4,7 @@ import { voiceBlock } from './voice.js';
 
 /**
  * System-prompt builders. The interactive turn (`buildSystemPrompt`) and the
- * durable jobs (`buildJobPrompt`, used by `workflows/job.ts` + `scheduledJob.ts`)
+ * durable jobs (`buildJobPrompt`, used by `workflows/scheduledJob.ts`)
  * share the delivery-AGNOSTIC pieces — identity, iMessage voice, memory semantics,
  * the skills index, and the always-on memory core — so a job inherits the same
  * behavior and skill-awareness as the main thread and never drifts from it. The one
@@ -234,8 +234,6 @@ function reporterRecipient(subject: string): string {
 }
 
 export interface JobPromptOptions {
-  /** Fully autonomous scheduled run (vs an owner-initiated background task). */
-  autonomous?: boolean;
   /** Whom this run acts for and reports to (run-audiences D-RA4 — the audience's subject).
    *  Defaults to the owner; a family-scoped job/schedule frames + addresses this person instead,
    *  so a run fired in Kate's thread is no longer framed as (or addressed to) the owner. Sunny's
@@ -266,10 +264,9 @@ export function buildJobPrompt(
   const subject = opts.subject ?? owner;
   const forSubject = subject === owner ? '' : ` for ${subject}`;
   const lines: string[] = [
-    `You are Sunny, ${owner}'s personal AI assistant, completing a task${forSubject} ${
-      opts.autonomous ? 'on a schedule' : 'in the background'
-    } — no human is watching live, so you cannot ask follow-up questions. Make reasonable`,
-    `assumptions and finish the task end to end.`,
+    `You are Sunny, ${owner}'s personal AI assistant, completing a task${forSubject} on a`,
+    `schedule — no human is watching live, so you cannot ask follow-up questions. Make`,
+    `reasonable assumptions and finish the task end to end.`,
     ``,
   ];
 
@@ -296,12 +293,6 @@ export function buildJobPrompt(
   // is a REPORT mediated by the subject's conversation loop — never a direct iMessage. The
   // shared voice layer states the whole contract; nothing delivery-related is hand-written here.
   lines.push(...voiceBlock({ lane: 'reporter', recipient: reporterRecipient(subject) }));
-  if (!opts.autonomous) {
-    lines.push(
-      `If you genuinely could not complete it, say so plainly and briefly explain why; do`,
-      `not fabricate a result.`,
-    );
-  }
 
   const memory = `${lines.join('\n')}\n\n${memoryCoreBlock(core)}`;
   // Every run profile carries the full skills index (2026-07-07): even a memory-only run

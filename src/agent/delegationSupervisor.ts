@@ -12,6 +12,7 @@ import {
   createLink,
   getLinkByChildThread,
   newChildThreadId,
+  sanitizeLabel,
   setChildRunId,
 } from './delegation.js';
 import { SUBAGENT_MAX_RUNTIME_MS } from './limits.js';
@@ -215,12 +216,14 @@ export class DelegationSupervisor {
         log.error('child run cancel failed', { childThreadId, runId, err: String(err) });
       });
       settled.catch(() => {}); // defuse: the raced promise settles later, unobserved
+      // Attributed like every worker delivery (voice-layer invariant, code-review 2026-07-15):
+      // the relay turn recognizes workers only by the `<name> (subagent):` label.
       await appendInterRunMessage(
         this.store,
         parentThreadId,
         { id: 'watchdog', name: label },
-        `[delegated task "${label}" exceeded its ${Math.round(capMs / 60_000)}-minute runtime ` +
-          `cap and was cancelled before it could report]`,
+        `${sanitizeLabel(label)} (subagent): [exceeded the ${Math.round(capMs / 60_000)}-minute ` +
+          `runtime cap and was cancelled before it could report]`,
       ).catch(() => {});
       this.wake(parentThreadId);
       return;
@@ -242,7 +245,7 @@ export class DelegationSupervisor {
       this.store,
       parentThreadId,
       { id: 'watchdog', name: label },
-      `[delegated task "${label}" failed before it could report: ${truncate(String(outcome.err))}]`,
+      `${sanitizeLabel(label)} (subagent): [failed before it could report: ${truncate(String(outcome.err))}]`,
     ).catch(() => {});
     this.wake(parentThreadId);
   }

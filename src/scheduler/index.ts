@@ -170,18 +170,30 @@ function canonicalAudienceRef(name: string, audience: string): string {
   );
 }
 
-/** Whether a schedule file's raw text still carries the retired `outputTarget` frontmatter
- *  (unified-voice-layer D-VL5) — the loader rewrites such files once. */
-export function hasLegacyOutputTarget(raw: string): boolean {
-  return /^outputTarget\s*:/im.test(raw);
+/** The frontmatter block of a raw schedule file (between the opening `---` pair), so
+ *  legacy-vocabulary detection never matches lines in the PROMPT BODY — a body line
+ *  starting "outputTarget:" must not re-trigger the migration rewrite on every boot. */
+function frontmatterBlock(raw: string): string {
+  const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(raw);
+  return m?.[1] ?? '';
+}
+
+/** Whether a schedule file still carries retired frontmatter vocabulary
+ *  (unified-voice-layer D-VL5/D-VL10) — the loader rewrites such files once. */
+function hasLegacyFrontmatter(raw: string): boolean {
+  const fm = frontmatterBlock(raw);
+  return /^outputTarget\s*:/im.test(fm) || /^audience\s*:\s*household\s*$/im.test(fm);
 }
 
 /** Parse one schedule file (frontmatter + prompt body). Throws on an invalid
  *  definition — a broken builtin is a code bug and a broken standing file is a bad
  *  write, both surfaced to the caller, never silently skipped. A legacy
  *  `outputTarget:` key (retired, D-VL5) is mapped to the audience it implied —
- *  `silent` → `nobody`, `user` → absent (owner) — unless an explicit audience
- *  also exists, which is a conflict and refused. */
+ *  `silent` → `nobody`, `user` → absent (owner). When an explicit audience is ALSO
+ *  present (every pre-collapse compose wrote `outputTarget:` unconditionally, so
+ *  legacy files with an audience always have both keys), the audience wins — the
+ *  same precedence the old runtime applied at fire time — and the legacy key is
+ *  simply dropped by the rewrite. */
 export function parseScheduleFile(name: string, raw: string): FileScheduleDef {
   const { frontmatter, body } = parseSkill(raw);
   const cron = frontmatter.cron;
@@ -190,13 +202,7 @@ export function parseScheduleFile(name: string, raw: string): FileScheduleDef {
   if (!body.trim()) throw new Error(`schedule file ${name}: empty prompt body`);
   let audience = frontmatter.audience || undefined;
   const legacy = frontmatter.outputtarget;
-  if (legacy !== undefined) {
-    if (audience) {
-      throw new Error(
-        `schedule file ${name}: has both 'audience' and the retired 'outputTarget' — ` +
-          `remove outputTarget`,
-      );
-    }
+  if (legacy !== undefined && !audience) {
     if (legacy !== 'user' && legacy !== 'silent') {
       throw new Error(`schedule file ${name}: invalid legacy outputTarget '${legacy}'`);
     }
@@ -261,9 +267,11 @@ function resolveFileSchedule(
     spec: def.cron,
     prompt: def.prompt,
     threadId,
-    // ScheduleRow-shape shim only (the DB column survives for one-shot rows): the file
-    // format itself speaks audience alone (D-VL5).
-    outputTarget: def.audience === 'nobody' ? 'silent' : 'user',
+    // ScheduleRow-shape filler only (the DB column survives for one-shot rows): the file
+    // format speaks audience alone (D-VL5), and every reader goes through scheduleAudience,
+    // which consults outputTarget only when audience is null — so this value is never read
+    // when an explicit audience is set, and 'user' is the only value the null case can see.
+    outputTarget: 'user',
     audience: def.audience ?? null,
     authority: def.authority ?? null,
     timezone,
@@ -325,16 +333,30 @@ export class FileScheduleRegistry {
           const path = join(dir, entry);
           const raw = readFileSync(path, 'utf8');
           const def = parseScheduleFile(entry.slice(0, -3), raw);
-          // One-shot legacy migration (D-VL5): a file still carrying `outputTarget:` or the
-          // pre-collapse `audience: household` spelling (or one restored from an older
-          // state-repo clone) is rewritten canonically the moment it loads, so retired
-          // vocabulary never survives a boot.
-          if (hasLegacyOutputTarget(raw) || /^audience\s*:\s*household\s*$/im.test(raw)) {
-            writeFileSync(path, composeScheduleFile(def), { mode: 0o644 });
-            log.info('migrated standing schedule frontmatter: outputTarget → audience', {
-              entry,
-              audience: def.audience ?? '(owner)',
-            });
+          // One-shot legacy migration (D-VL5/D-VL10): a file still carrying `outputTarget:`
+          // or the pre-collapse `audience: household` spelling in its FRONTMATTER (e.g. one
+          // restored from an older state-repo clone) is rewritten canonically the moment it
+          // loads. Best-effort in its own try — a failed rewrite must not unregister an
+          // otherwise-valid schedule — and committed to the state repo so the migration
+          // survives a restore instead of sitting dirty until an unrelated commit sweeps it.
+          if (hasLegacyFrontmatter(raw)) {
+            try {
+              writeFileSync(path, composeScheduleFile(def), { mode: 0o644 });
+              log.info('migrated standing schedule frontmatter to audience vocabulary', {
+                entry,
+                audience: def.audience ?? '(owner)',
+              });
+              void commitState(opts.runtimeDir, `schedule: migrate ${entry} frontmatter`, [
+                'schedules/',
+              ]).catch((err) =>
+                log.warn('could not commit schedule migration', { entry, err: String(err) }),
+              );
+            } catch (err) {
+              log.warn('schedule frontmatter migration write failed (will retry next boot)', {
+                entry,
+                err: String(err),
+              });
+            }
           }
           reg.register(def, 'standing');
         } catch (err) {

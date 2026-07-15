@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ModelMessage, UIMessage } from 'ai';
 import {
+  NO_REPORT_SENTINEL,
   assistantUIMessageFromResponse,
   calledStaySilent,
   classifyTextDelivery,
@@ -11,7 +12,7 @@ import {
   extractTranslatorUpdates,
   stripBinaryRuns,
   stripNoReply,
-  stripNoReport,
+  stripSentinel,
   translatorPart,
 } from './delivery.js';
 import { makeAssistantTurnPayload } from '../../tests/factories.js';
@@ -120,16 +121,17 @@ describe('text-as-reply extraction (text delivery mode)', () => {
     ]);
   });
 
-  it('stripNoReport: the child sentinel mirrors stripNoReply mechanics', () => {
-    expect(stripNoReport('<no-report/>')).toEqual({ text: '', sentinel: true });
+  it('stripSentinel with NO_REPORT_SENTINEL: the reporter token mirrors stripNoReply mechanics', () => {
+    expect(stripSentinel('<no-report/>', NO_REPORT_SENTINEL)).toEqual({ text: '', sentinel: true });
     // Presence means silence for the child too (unified 2026-07-13).
-    expect(stripNoReport('<no-report/> but actually: found it')).toEqual({
+    expect(stripSentinel('<no-report/> but actually: found it', NO_REPORT_SENTINEL)).toEqual({
       text: '',
       sentinel: true,
     });
-    expect(stripNoReport('normal report')).toEqual({ text: 'normal report', sentinel: false });
-    // The two sentinels are distinct: one never triggers the other.
-    expect(stripNoReport('<no-reply/>')).toEqual({ text: '<no-reply/>', sentinel: false });
+    expect(stripSentinel('normal report', NO_REPORT_SENTINEL)).toEqual({
+      text: 'normal report',
+      sentinel: false,
+    });
   });
 
   it('extractReportBlocks: zero, one, and many complete blocks', () => {

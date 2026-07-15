@@ -1,7 +1,7 @@
 import { tool } from '@ai-sdk/provider-utils';
 import { buildTurnModel, type MockResponseDescriptor } from '../src/agent/turnModel.js';
 import { MESSAGE_SPEC } from '../src/agent/tools/messageSpec.js';
-import { type Audience, subjectName } from '../src/agent/audience.js';
+import { type Audience, type RunIdentity, subjectName } from '../src/agent/audience.js';
 import { finalizeSpeech } from '../src/agent/voice.js';
 import type { McpToolDef } from '../src/mcp/turnTools.js';
 import { deliver, finalAssistantText, grantTools, streamAgent } from './runShell.js';
@@ -54,18 +54,34 @@ const DEFAULT_SCHEDULE_GRANTS = ['memory_read', 'memory_write'];
 export async function runScheduledJob(input: ScheduledJobInput): Promise<void> {
   'use workflow';
 
+  // The one-speaker constructibility gate (D-VL10): a worker input can never carry a chat
+  // audience — only the router mints chat runs. Defense against hand-crafted inputs; the
+  // spawn surfaces themselves only produce nobody/agent.
+  if (input.audience.kind === 'chat') {
+    throw new Error('a scheduled run cannot have a chat audience (one-speaker rule, D-VL10)');
+  }
+
   const grants = input.authority ?? DEFAULT_SCHEDULE_GRANTS;
   const setup = await buildSetup(input.model ?? DEFAULT_SCHEDULED_MODEL, input.audience, grants);
+
+  // The run's identity stamps every report it emits (D-VL2/D-VL10).
+  const identity: RunIdentity = {
+    id: input.scheduleId,
+    name: input.label ?? 'schedule',
+    kind: 'scheduled',
+  };
+  // The audience's bound thread, when it has one (Langfuse session + run-scoped tools).
+  const boundThreadId =
+    input.audience.kind !== 'nobody' && input.audience.mailbox.by === 'thread'
+      ? input.audience.mailbox.threadId
+      : undefined;
 
   const { result } = await streamAgent({
     // `observe` gives the fired run exactly-once generation spans in Langfuse. Session = the
     // audience's thread when it has one; otherwise group the schedule's firings together.
     model: buildTurnModel(setup.modelId, setup.testModelResponses, {
       functionId: 'scheduled-job',
-      sessionId:
-        input.audience.kind !== 'nobody' && input.audience.mailbox.by === 'thread'
-          ? input.audience.mailbox.threadId
-          : `schedule:${input.scheduleId}`,
+      sessionId: boundThreadId ?? `schedule:${input.scheduleId}`,
     }),
     instructions: setup.instructions,
     tools: {
@@ -75,10 +91,7 @@ export async function runScheduledJob(input: ScheduledJobInput): Promise<void> {
       ...grantTools(grants, {
         ownerScope: setup.subject === input.ownerName,
         runs: {
-          threadId:
-            input.audience.kind !== 'nobody' && input.audience.mailbox.by === 'thread'
-              ? input.audience.mailbox.threadId
-              : '',
+          threadId: boundThreadId ?? '',
           subject: setup.subject,
         },
         mcpTools: setup.mcpTools,
@@ -99,26 +112,25 @@ export async function runScheduledJob(input: ScheduledJobInput): Promise<void> {
       anthropic: { thinking: { type: 'adaptive', display: 'omitted' }, effort: 'high' },
     },
     messages: [{ role: 'user', content: input.prompt }],
+    // Mid-task <report> blocks deliver as they complete (the reporter voice block PROMISES
+    // immediate delivery — code-review 2026-07-15: the prompt contract without this wiring
+    // silently dropped blocker reports written before a later tool step).
+    reportBlocks: { send: (text) => deliver(input.audience, text, identity) },
   });
 
   // Record-always ⟂ report-by-audience (D-DS14; unified-voice-layer D-VL1): the RAW outcome is
-  // recorded first (so every run is inspectable), then the parsed speech is dispatched as
-  // attributed REPORTS to the audience's conversation loop — never a direct gateway send. A
-  // `nobody` audience records only (deliver no-ops). A final containing <no-report/>
-  // delivers nothing (reporter-lane silence); deliberate <report> blocks in the final text
-  // (never seen by a step-boundary scan) deliver ahead of the terminal report, like a child's.
+  // recorded first (so every run is inspectable), then the parsed speech is dispatched as ONE
+  // attributed report to the audience's conversation loop — never a direct gateway send. A
+  // `nobody` audience records only (deliver no-ops); a final containing the silence sentinel
+  // delivers nothing. Leftover <report> blocks in the FINAL text (never seen by the
+  // step-boundary scan) are folded into the terminal report rather than delivered separately —
+  // each agent delivery wakes the relay loop, so N separate sends could drive N relay turns
+  // (code-review 2026-07-15).
   const text = finalAssistantText(result.messages);
   await recordRun(input.runId, text);
   const speech = finalizeSpeech(text, 'reporter');
-  const identity = {
-    id: input.scheduleId,
-    name: input.label ?? 'schedule',
-    kind: 'scheduled' as const,
-  };
-  for (const report of speech.reports) {
-    await deliver(input.audience, report, identity);
-  }
-  await deliver(input.audience, speech.final, identity);
+  const terminal = [...speech.reports, speech.final].filter(Boolean).join('\n\n');
+  await deliver(input.audience, terminal, identity);
 }
 
 interface ScheduledSetup {
@@ -175,7 +187,6 @@ async function buildSetup(
 
   return {
     instructions: buildJobPrompt(config, core, skillsIndex, {
-      autonomous: true,
       memoryTools: grants.includes('memory_read') || grants.includes('memory_write'),
       hostTools: grants.includes('bash'),
       subject,

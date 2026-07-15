@@ -76,8 +76,10 @@ function speakerBlock(subject: string): string[] {
     `  worker: relay what the report means for ${subject}, in your own voice, folded into the`,
     `  live conversation — don't re-announce what was just discussed, and don't interrupt an`,
     `  active exchange for a low-value update (<no-reply/> is fine; the report stays on record).`,
-    `  To answer or steer a worker, use the message tool with its id — workers continue without`,
-    `  acknowledgments, so most reports need none.`,
+    `  A RUNNING subagent can be steered with the message tool (its id from delegate_task),`,
+    `  though children continue without acknowledgments — most reports need none. A (scheduled)`,
+    `  report's run has already finished and cannot be messaged: anything it asks is yours to`,
+    `  answer for ${subject}, or to let go.`,
   ];
 }
 
@@ -117,6 +119,14 @@ export interface Speech {
  */
 export function finalizeSpeech(text: string, lane: VoiceLane): Speech {
   const { reports, rest } = lane === 'reporter' ? extractReportBlocks(text) : { reports: [], rest: text };
-  const parsed = stripSentinel(rest, laneSentinel(lane));
+  let parsed = stripSentinel(rest, laneSentinel(lane));
+  // Reporter tolerance (code-review 2026-07-15): live schedule prompts, skills, and recorded
+  // precedent all taught <no-reply/> before the lane split, so a reporter emitting the speaker
+  // token means silence — not a report containing the literal token. (A reporter QUOTING the
+  // token inside a real report is the rare case, and the raw text stays recorded either way.)
+  // Speakers stay strict: a reply to a human that mentions <no-report/> is real content.
+  if (lane === 'reporter' && !parsed.sentinel) {
+    parsed = stripSentinel(rest, NO_REPLY_SENTINEL);
+  }
   return { reports, final: parsed.text, sentinel: parsed.sentinel };
 }

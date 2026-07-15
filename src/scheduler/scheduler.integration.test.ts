@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -261,12 +261,49 @@ describe('scheduler ticker (integration)', () => {
     expect(
       parseScheduleFile('x', '---\ncron: "* * * * *"\naudience: household\n---\nbody').audience,
     ).toBe('nobody');
-    expect(() =>
-      parseScheduleFile(
-        'x',
-        '---\ncron: "* * * * *"\naudience: household\noutputTarget: silent\n---\nbody',
-      ),
-    ).toThrow(/both 'audience' and the retired 'outputTarget'/);
+  });
+
+  it('legacy files with BOTH audience and outputTarget parse with the audience winning (code-review)', () => {
+    // The pre-collapse composeScheduleFile wrote `outputTarget:` UNCONDITIONALLY, so every
+    // old file created with an explicit audience carries both keys — throwing here would
+    // silently kill those schedules at boot (warn-and-skip). The audience wins, matching the
+    // old runtime's fire-time precedence.
+    const both = parseScheduleFile(
+      'x',
+      '---\ncron: "* * * * *"\naudience: person:Kate\noutputTarget: user\n---\nbody',
+    );
+    expect(both.audience).toBe('person:Kate');
+    const silentBoth = parseScheduleFile(
+      'x',
+      '---\ncron: "* * * * *"\naudience: household\noutputTarget: silent\n---\nbody',
+    );
+    expect(silentBoth.audience).toBe('nobody');
+    // And the rewrite drops the retired key entirely.
+    expect(composeScheduleFile(both)).not.toContain('outputTarget');
+  });
+
+  it('load-time migration: legacy FRONTMATTER is rewritten once; a body mentioning outputTarget is not (code-review)', () => {
+    const dir = standingSchedulesDir(runtimeDir);
+    mkdirSync(dir, { recursive: true });
+    // Legacy frontmatter → rewritten canonically on load, schedule still registered.
+    writeFileSync(
+      join(dir, 'legacy.md'),
+      '---\ncron: "0 9 * * *"\noutputTarget: silent\n---\nDo the thing.\n',
+    );
+    // Canonical frontmatter whose BODY documents the file format — the detection must be
+    // frontmatter-scoped or this file is rewritten (and state-committed) on EVERY boot.
+    const canonical =
+      '---\ncron: "0 9 * * *"\naudience: nobody\n---\nSchedule files once used outputTarget: user in frontmatter.\n';
+    writeFileSync(join(dir, 'canonical.md'), canonical);
+
+    const reg = FileScheduleRegistry.load({ runtimeDir, threadId: OWNER_THREAD, timezone: TZ });
+    const legacy = reg.list().find((s) => s.label === 'legacy');
+    expect(legacy?.audience).toBe('nobody');
+    const rewritten = readFileSync(join(dir, 'legacy.md'), 'utf8');
+    expect(rewritten).not.toContain('outputTarget');
+    expect(rewritten).toContain('audience: nobody');
+    // The canonical file is byte-untouched despite its body.
+    expect(readFileSync(join(dir, 'canonical.md'), 'utf8')).toBe(canonical);
   });
 
   it('a standing schedule created live fires through dispatch under its stable id, and stops when deleted', async () => {

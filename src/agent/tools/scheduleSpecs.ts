@@ -58,6 +58,11 @@ export function scheduleToolSpecs(timezone: string) {
               'roster name (e.g. "Kate"; their loop relays to them), or "nobody" for a silent ' +
               'artifact/pipeline job (record-only). Omit for the current person.',
           ),
+        // Deprecated alias of deliver_to (pre-collapse name). Kept in the schema because a
+        // non-strict zod object silently STRIPS unknown keys: a model imitating an old
+        // schedule_create call from recorded history would otherwise have its cross-person
+        // addressing dropped with a success confirmation (code-review 2026-07-15).
+        for: z.string().optional().describe('Deprecated: use deliver_to.'),
         toolset: z
           .enum(['host', 'readonly'])
           .optional()

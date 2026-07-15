@@ -1,5 +1,5 @@
 import { buildTurnModel, type MockResponseDescriptor } from '../src/agent/turnModel.js';
-import { authorityForToolset } from '../src/agent/audience.js';
+import { authorityForToolset, type RunIdentity } from '../src/agent/audience.js';
 import {
   SUBAGENT_BUDGET_USD,
   SUBAGENT_STEP_LIMIT,
@@ -79,7 +79,7 @@ export async function runSubagent(input: SubagentInput): Promise<void> {
     kind: 'agent',
     mailbox: { by: 'thread', threadId: input.parentThreadId },
   } as const;
-  const identity = { name: input.label ?? 'subagent', kind: 'subagent' } as const;
+  const identity: RunIdentity = { name: input.label ?? 'subagent', kind: 'subagent' };
   const { result, foldedIds, reportsSent } = await streamAgent({
     // `observe` gives the child exactly-once generation spans in Langfuse, sessioned under the
     // PARENT thread so the whole delegation tree groups with the conversation that spawned it.

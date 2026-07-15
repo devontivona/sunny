@@ -26,7 +26,7 @@ import {
 } from '../src/agent/tools/credentialManageSpecs.js';
 import { MCP_MANAGE_SPEC, type McpManageInput } from '../src/agent/tools/mcpManageSpecs.js';
 import type { McpToolDef } from '../src/mcp/turnTools.js';
-import type { Audience, Authority } from '../src/agent/audience.js';
+import type { Audience, Authority, RunIdentity } from '../src/agent/audience.js';
 
 /**
  * Shared durable-run shell (durable-subagents D-DS11/D-DS14). The conversational turn, background
@@ -347,7 +347,7 @@ function stepNarration(
 export async function deliver(
   audience: Audience,
   text: string,
-  from?: { id?: string; name: string; kind: 'subagent' | 'scheduled' },
+  from?: RunIdentity,
 ): Promise<void> {
   'use step';
 
@@ -389,24 +389,18 @@ export async function deliver(
 }
 
 /** Resolve a roster member to their existing bound DM thread, or construct one from
- *  `SENDBLUE_FROM_NUMBER`. Returns null when the person is off-roster or no thread can be formed. */
+ *  `SENDBLUE_FROM_NUMBER`. Returns null when the person is off-roster or no thread can be
+ *  formed. Matching + the resolve tail are the SHARED helpers (resolveRosterMember /
+ *  resolveMemberThread) — this was the last hand-copied duplicate of that tail
+ *  (code-review 2026-07-15). */
 async function resolvePersonThread(
   runtime: Awaited<ReturnType<typeof import('../src/runtime.js').getRuntime>>,
   person: string,
 ): Promise<string | null> {
-  const { normalize } = await import('../src/gateway/auth.js');
-  const { sendblueDmThreadId } = await import('../src/gateway/threadId.js');
-  const { resolveRosterMember } = await import('../src/agent/audience.js');
+  const { resolveRosterMember, resolveMemberThread } = await import('../src/agent/audience.js');
   const member = resolveRosterMember(person, runtime.config);
   if (!member) return null;
-  // Matching is centralized (resolveRosterMember); thread ENCODING uses the gateway's `normalize`
-  // (the same canonicalization the adapter uses for thread ids), so a resolved member addresses
-  // the same thread the adapter would.
-  const identity = normalize(member.identity);
-  const existing = await runtime.store.findDmThreadForSender(identity);
-  if (existing) return existing;
-  const from = process.env.SENDBLUE_FROM_NUMBER;
-  return from ? sendblueDmThreadId(from, identity) : null;
+  return resolveMemberThread(runtime.store, member.identity);
 }
 
 /** A `person` audience that couldn't be resolved at delivery time (D-RA2): don't drop the message

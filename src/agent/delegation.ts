@@ -3,6 +3,7 @@ import { and, eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { subagentLinks, type SubagentLinkRow } from '../db/schema.js';
 import type { Runtime } from '../runtime.js';
+import type { RunIdentity } from './audience.js';
 import type { ChannelEvent } from '../gateway/types.js';
 import { logger } from '../logger.js';
 
@@ -155,8 +156,9 @@ export async function appendInterRunMessage(
 }
 
 /** The report's origin lane, named in its attribution so the relay turn (and recorded
- *  history) can tell a delegated child from a fired schedule (unified-voice-layer D-VL2). */
-export type ReportLane = 'subagent' | 'scheduled';
+ *  history) can tell a delegated child from a fired schedule (unified-voice-layer D-VL2).
+ *  One owner for the worker-kind union: the RunIdentity type (audience.ts). */
+export type ReportLane = RunIdentity['kind'];
 
 /**
  * Worker → conversation report (D-DS4; unified-voice-layer D-VL1): deliver `text` into the

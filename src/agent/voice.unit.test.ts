@@ -20,7 +20,10 @@ describe('voice layer (unified-voice-layer D-VL3/4)', () => {
     const block = voiceBlock({ lane: 'speaker', subject: 'Devon' }).join('\n');
     expect(block).toContain('"<name> (subagent):" or "<name> (scheduled):"');
     expect(block).toContain('Your reply still goes to Devon, never to a');
-    expect(block).toContain('use the message tool with its id');
+    // Steering applies ONLY to running subagents; a scheduled run has finished and cannot be
+    // messaged (code-review 2026-07-15 — the prompt must never teach an impossible action).
+    expect(block).toContain('steered with the message tool (its id from delegate_task)');
+    expect(block).toContain('cannot be messaged');
   });
 
   it('reporter block states the report contract for its named recipient', () => {
@@ -69,9 +72,16 @@ describe('voice layer (unified-voice-layer D-VL3/4)', () => {
     });
   });
 
-  it('cross-lane tokens do not trigger each other', () => {
-    // A reporter mentioning <no-reply/> (e.g. quoting the conversation contract) stays deliverable.
-    expect(finalizeSpeech('the turn replied <no-reply/> as designed', 'reporter').sentinel).toBe(false);
+  it('lane tolerance: a reporter honors the speaker token too; speakers stay strict', () => {
+    // Reporter tolerance (code-review 2026-07-15): live schedule prompts, skills, and recorded
+    // precedent taught <no-reply/> before the lane split — a reporter emitting it means
+    // silence, not a report containing the literal token.
+    expect(finalizeSpeech('sources checked, nothing new\n\n<no-reply/>', 'reporter')).toEqual({
+      reports: [],
+      final: '',
+      sentinel: true,
+    });
+    // A speaker mentioning the child token is real content for the human — never swallowed.
     expect(finalizeSpeech('the child returned <no-report/>', 'speaker').sentinel).toBe(false);
   });
 });

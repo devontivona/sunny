@@ -259,11 +259,6 @@ export function stripNoReply(finalText: string): { text: string; sentinel: boole
   return stripSentinel(finalText, NO_REPLY_SENTINEL);
 }
 
-/** The delegated child's silence parse (see NO_REPORT_SENTINEL). */
-export function stripNoReport(finalText: string): { text: string; sentinel: boolean } {
-  return stripSentinel(finalText, NO_REPORT_SENTINEL);
-}
-
 /**
  * Extract complete `<report>…</report>` blocks from a child's text (subagent
  * text-unification): mid-task progress a child deliberately writes for its orchestrator.

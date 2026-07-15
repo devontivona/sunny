@@ -979,6 +979,8 @@ async function scheduleCreateStep(
     prompt: string;
     label?: string;
     deliver_to?: string;
+    /** Deprecated alias of deliver_to — models imitate old calls from recorded history. */
+    for?: string;
     toolset?: 'host' | 'readonly';
   },
 ): Promise<string> {
@@ -991,16 +993,18 @@ async function scheduleCreateStep(
 
   // deliver_to is the AUDIENCE axis (unified-voice-layer D-VL6): whose conversation loop
   // receives the fired run's reports — a roster member (`person:<name>`), or `nobody`
-  // (a silent artifact/pipeline job, record-only). Omitted → the current subject.
+  // (a silent artifact/pipeline job, record-only). Omitted → the current subject. The
+  // deprecated `for` alias is honored so an old-shape call never silently drops addressing.
+  const deliverTo = args.deliver_to ?? args.for;
   let audience: string | undefined;
-  if (args.deliver_to) {
-    if (args.deliver_to.trim().toLowerCase() === 'nobody') {
+  if (deliverTo) {
+    if (deliverTo.trim().toLowerCase() === 'nobody') {
       audience = 'nobody';
     } else {
-      const name = rosterMatch(args.deliver_to, config);
+      const name = rosterMatch(deliverTo, config);
       if (!name) {
         const known = [config.owner.name, ...config.family.map((f) => f.name)].join(', ');
-        return `I can only schedule for family roster members (${known}) or "nobody"; "${args.deliver_to}" isn't one.`;
+        return `I can only schedule for family roster members (${known}) or "nobody"; "${deliverTo}" isn't one.`;
       }
       audience = `person:${name}`;
     }

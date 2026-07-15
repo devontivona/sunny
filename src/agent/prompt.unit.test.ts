@@ -135,8 +135,8 @@ describe('buildJobPrompt', () => {
     expect(p).not.toContain('Record durable facts with memory_write');
   });
 
-  it('an autonomous (memory-only) job gets memory guidance + the skills index, but no host tools', () => {
-    const p = buildJobPrompt(config, core(), skills, { autonomous: true, memoryTools: true });
+  it('a memory-only scheduled job gets memory guidance + the skills index, but no host tools', () => {
+    const p = buildJobPrompt(config, core(), skills, { memoryTools: true });
     expect(p).toContain('Record durable facts with memory_write');
     // Reporter lane (unified-voice-layer D-VL4/7): a job's final text is a mediated REPORT —
     // <no-report/> silence, no user-facing prose, media by path.
@@ -168,7 +168,7 @@ describe('buildJobPrompt', () => {
     // speaker block, jobs and subagents carry the reporter block — byte-identical up to the
     // recipient substitution.
     const conv = buildSystemPrompt(config, core());
-    const job = buildJobPrompt(config, core(), skills, { autonomous: true, hostTools: true });
+    const job = buildJobPrompt(config, core(), skills, { hostTools: true });
     const sub = buildSubagentPrompt(config, core(), 'test-child', skills);
     expect(conv).toContain('"<name> (subagent):" or "<name> (scheduled):"');
     for (const p of [job, sub]) {
