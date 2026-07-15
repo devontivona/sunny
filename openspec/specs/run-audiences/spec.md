@@ -1,82 +1,68 @@
 # run-audiences Specification
 
 ## Purpose
-Audience-addressed durable runs: every run has a logical recipient (person / household / thread / parent), delivery goes through one bus that grounds out in channel-bound Threads, silence is structural (no messaging grant), ownership derives from the audience, and authority is explicitly attenuated on every spawn.
+Audience-addressed durable runs (unified-voice-layer): every run's audience says WHO READS its final text — nobody (record-only), agent(mailbox) (a conversation loop, as an attributed report), or chat(mailbox) (the thread's people; conversational turns only — the one-speaker rule). Delivery goes through one bus that grounds out in channel-bound Threads, the speech contract (prompt block + terminal parse) is derived per lane by the shared voice layer, ownership derives from the audience, and authority is explicitly attenuated on every spawn.
 ## Requirements
-### Requirement: Audience is the logical recipient of a run
-Every durable run SHALL have an **Audience** — the logical recipient it is for — that is one of: a **person** (a roster member, keyed by a channel-stable identity), the **household** (the run may message any roster member it chooses), a **thread** (an existing conversation), or a **parent** (the run that spawned it). The Audience SHALL be resolved to a delivery Thread at emit time. The Audience SHALL be **pure addressing**: it SHALL NOT encode whether the run speaks (that is governed by the run's authority — see "Delivery is a single bus"). Audience replaces the fixed `user`/`parent` output target.
+### Requirement: Audience is who reads a run's final text
+Every durable run SHALL have an **Audience** — who reads its final text — that is one of exactly three values: **nobody** (record-only; the run may still deliberately message roster members via the addressed `message` tool), **agent(mailbox)** (the mailbox's conversation loop reads it, as an attributed report), or **chat(mailbox)** (the mailbox's people read it — the run participates in the conversation). A **mailbox** SHALL name a conversation either logically (**byPerson** — a roster member's DM, resolved at delivery time; portable across machines and channel changes) or physically (**byThread** — a specific conversation id; the only way to name a group thread, a creating-thread context, or a worker's detached inbox). `chat` SHALL be constructible only by the router in response to arrivals on a real thread — spawn surfaces SHALL NOT mint it (the one-speaker rule as a constructibility gate). How a run SPEAKS derives from its Audience, never from an authority grant. This three-value Audience replaces the former `thread`/`person`/`parent`/`household` kinds and the `user`/`parent`/`silent` output target everywhere, including standing-schedule definitions (stored encoding: `person:<name>` | `nobody` | `thread:<id>`; `household` accepted as the legacy spelling of `nobody` and normalized on load).
 
-#### Scenario: Person audience delivers to that person
-- **WHEN** a run with a `person` audience produces output
-- **THEN** it is delivered to that person's own conversation, resolved from the roster, regardless of who created the run
+#### Scenario: byPerson mailbox routes to that person's conversation loop
+- **WHEN** an autonomous run with an `agent(byPerson)` audience produces a terminal report
+- **THEN** it is routed to that person's own conversation thread, resolved from the roster at delivery time, regardless of who created the run
 
-#### Scenario: Household audience has no delivery mode parameter
-- **WHEN** a run is given a `household` audience
-- **THEN** the audience alone carries no notion of silence or delivery mode; whether and to whom it speaks depends on the messaging grants in its authority
+#### Scenario: Nobody audience is record-only
+- **WHEN** a run with a `nobody` audience completes
+- **THEN** its terminal output is recorded without waking any conversation or sending any message, while the run may still have deliberately messaged roster members via its addressed `message` tool
 
-#### Scenario: Parent audience folds back into the spawning run
-- **WHEN** a run with a `parent` audience reports
-- **THEN** the report is delivered to the spawning run, not to a human
+#### Scenario: A subagent's parent is an agent audience like any other
+- **WHEN** a delegated child reports
+- **THEN** the report is delivered to `agent(byThread(parent's thread))` — the same mechanism as a scheduled run's report, not a separate `parent` kind
+
+#### Scenario: Spawn surfaces cannot construct chat
+- **WHEN** any spawn surface (delegation, scheduling) attempts to address a run's terminal text directly to a conversation's people
+- **THEN** it cannot — only `nobody` and `agent` audiences are expressible at spawn; `chat` runs are minted only by the router
 
 ### Requirement: Delivery is a single bus
-All outward messaging SHALL go through one delivery seam that resolves an Audience to a Thread and then **dispatches on the Thread's binding**: a **bound** Thread SHALL be delivered via the messaging gateway (reaching a human); a **detached** Thread SHALL be delivered by appending to its inbox and waking its run (reaching an agent-run, folded via the same inbound-steer mechanism as owner double-text). A run's terminal message SHALL be delivered through this same bus to its Audience — there SHALL NOT be a separate per-profile terminal-emit path. Every delivered message SHALL carry the sender's identity (id + label) so a report or relay is attributed to its origin. Inbound consumption (owner double-text, parent→child steering, child→parent report) SHALL remain the single existing inbox-fold; parent→child steering is inbound folding, orthogonal to Audience-based emit.
+All outward messaging SHALL go through one delivery seam that resolves an Audience's mailbox to a Thread and dispatches on the audience kind. **Only a `chat`-audience run (a conversational turn) SHALL deliver text to a human through the gateway** (its reply text, its `message` relays, its `send_image`). An `agent`-audience delivery SHALL be dispatched as an attributed report: appended to the resolved thread's inbox and — for a real conversation thread — the thread's run-supply woken so a normal conversational turn mediates the report into user-facing speech (a detached worker inbox is appended without waking). There SHALL NOT be a separate per-profile terminal-emit path. Deliberate addressed fan-out (the `message` tool) also rides the bus: the tool resolves its roster recipient, then delivers as chat speech to the resolved DM — so the gateway has exactly ONE speech caller, the bus's chat branch.
 
-#### Scenario: Bound vs detached dispatch
-- **WHEN** a run delivers to a `bound` Thread
-- **THEN** it goes out through the messaging gateway to the human
-- **AND WHEN** a run delivers to a `detached` Thread (e.g. a subagent reporting to its parent)
-- **THEN** it is appended to that inbox and the recipient run is woken to fold it — no gateway egress
+#### Scenario: Scheduled result is mediated, not texted
+- **WHEN** a scheduled run with an `agent(byPerson)` audience completes with a report
+- **THEN** the report is appended to that person's thread as an attributed inbound message and a conversational turn is woken to relay it in voice
+- **AND** no gateway send occurs from the scheduled run itself
+
+#### Scenario: Report carries its sender identity and kind
+- **WHEN** a subagent or scheduled run reports into a thread
+- **THEN** the report is attributed with the run's identity (`(subagent)` / `(scheduled)`), so concurrent reports are distinguishable from each other and from the human
 
 #### Scenario: Silent-success subagent still reports through the bus
 - **WHEN** a delegated child completes successfully with a final message
 - **THEN** that message is delivered to its parent via the bus (not stranded), closing the delegation watchdog
 
-#### Scenario: Report carries its sender identity
-- **WHEN** one of several concurrent subagents reports to a shared parent inbox
-- **THEN** the report is attributed to that child (label + id), so the parent can tell reports apart
-
-### Requirement: Silence is the absence of a messaging grant
-Whether a run may emit SHALL be governed by its authority: a run not endowed a messaging grant SHALL NOT emit, and SHALL complete silently while still recording its result. There SHALL be no separate `silent` delivery mode on the Audience. A run that holds a messaging grant but produced deliverable text without delivering it MAY have that output recovered by the delivery backstop; the backstop SHALL frame output for the run's subject (derived from its Audience), never hardcoded to the owner.
-
-#### Scenario: A memory-only run is structurally silent
-- **WHEN** a run endowed only memory grants (e.g. nightly consolidation) completes
-- **THEN** it sends nothing — because it holds no messaging tool — and its result is still recorded for inspection
-
-#### Scenario: Conditional delivery is emergent, not a flag
-- **WHEN** a run holding a messaging grant determines no message is warranted (e.g. the reminder condition is not met)
-- **THEN** nothing is delivered — with no empty-message or `silent`-mode convention
-
-#### Scenario: Backstop frames for the run's subject
-- **WHEN** the delivery backstop recovers output for a run whose audience is a family member
-- **THEN** it frames the message for that family member, not for the owner
-
 ### Requirement: Delivery grounds out in a channel-bound Thread
-A **Thread** SHALL be a durable message log with an OPTIONAL channel binding: **bound** (backed by a messaging adapter — the delivery path to a human) or **detached** (no channel — used as a run's inbox for steering and logging, never a human destination). Resolving any Audience for actual delivery SHALL terminate at a bound Thread. A detached-audience run that needs to reach a person SHALL resolve that person to their bound Thread and deliver there.
-
-#### Scenario: Household run reaches a person via their bound thread
-- **WHEN** a household run chooses to message a roster member
-- **THEN** the message is delivered to that member's bound (channel-backed) conversation, and the household run's own detached inbox only logs the action
+A **Thread** SHALL be a durable message log with an OPTIONAL channel binding: **bound** (backed by a messaging adapter — the delivery path to a human) or **detached** (no channel — used as a run's inbox for steering and logging, never a human destination). Resolving any Audience's mailbox for delivery SHALL terminate at a Thread: a `byPerson` mailbox resolves to the person's bound DM (existing, or constructed from the configured send number); a `byThread` mailbox is that thread. A `chat` delivery to a bound thread goes out the gateway; an `agent` delivery is appended as an attributed report (a bound thread's run-supply woken; a detached inbox appended without waking).
 
 #### Scenario: Detached inbox is never a human destination
-- **WHEN** a run has a detached inbox (a subagent inbox or a household detached inbox)
+- **WHEN** a run has a detached inbox (a subagent inbox)
 - **THEN** no message is delivered to a human through that inbox; it is used only for steering and recording
 
-#### Scenario: Person audience resolves at fire time, or defers to the owner
-- **WHEN** a `person` audience is resolved at fire time and the person has a bound conversation (or one can be constructed)
-- **THEN** delivery goes to that bound thread
-- **AND WHEN** no bound thread can be resolved (the person has never been in contact, or was removed from the roster)
-- **THEN** the run is recorded as undeliverable and the owner is notified — the message is NOT silently dropped
+#### Scenario: byPerson resolves at fire time, or defers to the owner
+- **WHEN** an `agent(byPerson)` mailbox is resolved at delivery time and the person has a bound conversation (or one can be constructed)
+- **THEN** delivery goes to that thread's agent
+- **AND WHEN** no bound thread can be resolved (the person was removed from the roster and cannot be constructed)
+- **THEN** the run's output is not silently dropped — the owner is notified
 
 ### Requirement: Ownership derives from the audience
-A run's subject (whom it acts for and who owns it) SHALL derive from its **Audience** — `person` → that person, `household` → the owner, `thread` → the thread's trusted sender, `parent` → the parent's owner — with no separate stored principal. A run SHALL be inspectable and cancellable by its derived subject and by the owner; a non-owner SHALL NOT see or cancel runs whose subject is someone else. Prompt framing and the memory a run reads/writes SHALL follow the same derived subject.
+A run's subject (whom it acts for and who owns it) SHALL derive from its **Audience** — `agent(byPerson)`/`chat(byPerson)` → that person, `agent(byThread)`/`chat(byThread)` → the thread's trusted subject (including a subject encoded in the thread id itself, for a conversation that has not yet had an inbound message), `nobody` → the owner — with no separate stored principal. A run SHALL be inspectable and cancellable by its derived subject and by the owner; a non-owner SHALL NOT see or cancel runs whose subject is someone else. Prompt framing and the memory a run reads/writes SHALL follow the same derived subject.
 
 #### Scenario: A family member owns the run created for them
 - **WHEN** the owner creates a reminder whose audience is a family member
 - **THEN** the run is framed and owned as that family member's (they can list and cancel it), and the owner can also see and cancel it
 
-#### Scenario: A run is not framed as the owner by default
-- **WHEN** a background or scheduled run acts for a family member
-- **THEN** it does not introduce itself as the owner's assistant nor address its output to the owner
+#### Scenario: A never-contacted family DM frames for its encoded subject
+- **WHEN** a relay turn is woken on a family DM that has no inbound history (a person-audience schedule's first report)
+- **THEN** the turn derives its participant from the thread-encoded roster identity and frames for that person, not the owner
+
+## REMOVED Requirements
 
 ### Requirement: Runs are one shell over a RunSpec
 Conversational turns, background jobs, scheduled jobs, and delegated subagents SHALL execute as the same durable shell over a **RunSpec** of `{ audience, authority, brief, model }`. Prompt framing, loaded context, delivery, and the available tool set SHALL be derived from the RunSpec, not hardcoded per profile.
@@ -99,3 +85,25 @@ Every spawned run SHALL be endowed, explicitly at spawn, with an **authority** �
 #### Scenario: Scheduled runs are attenuated rather than special-cased
 - **WHEN** a scheduled run is not endowed the schedule-management grant
 - **THEN** it cannot create, modify, or delete schedules — enforced by its authority, not a separate anti-recursion check
+
+### Requirement: Attribution is the run's identity, not its audience
+Every run SHALL carry an **identity** (`{ id?, name, kind }`; kind ∈ subagent | scheduled for workers). The delivery bus SHALL stamp every `agent`-audience delivery with the reporting run's identity (`<name> (<kind>): …`) so the mediating turn and the recorded history can attribute reports and steer workers by id. The audience SHALL be pure address — attribution SHALL NOT be encoded in audience values.
+
+#### Scenario: Identity stamps a report
+- **WHEN** a worker delivers to an `agent` audience
+- **THEN** the appended message is attributed `<identity.name> (<identity.kind>): …`, and an unattributed agent delivery is refused
+
+### Requirement: One derived speech contract (the voice layer)
+Every run profile's speech contract SHALL be derived from its RunSpec by one shared builder, in two halves. (a) A generated prompt block SHALL state: who reads the run's final text; that it is delivered verbatim as one message; that a final text containing the lane's silence sentinel delivers nothing (presence means silence — the raw text still persists in the run record); that text between tool calls is private; that inbound messages labeled `(subagent)` or `(scheduled)` are reports from the run's own workers whose sender is NOT the reply's recipient (workers are steered via the addressed `message` tool); and that delivery mechanics are never narrated into the reply. (b) One shared terminal parser SHALL extract report blocks and the sentinel and classify the delivery for every profile. Lanes: a conversational turn is a **speaker** (sentinel `<no-reply/>`); every autonomous run is a **reporter** (sentinel `<no-report/>`, and — reporter tolerance — a reporter final containing `<no-reply/>` is ALSO silence: live prompts, skills, and recorded precedent taught the speaker token before the lane split; speakers stay strict). Hand-written per-profile speech contracts and per-profile terminal parsers SHALL NOT exist.
+
+#### Scenario: Same addressing rule in every profile
+- **WHEN** any run profile's system prompt is built
+- **THEN** it contains the generated voice block for its lane, including the worker-report addressing rule, byte-identical across profiles up to lane and subject substitutions
+
+#### Scenario: Sentinel presence silences the whole reply in every profile
+- **WHEN** any run's final text contains its lane's silence sentinel, with or without surrounding text
+- **THEN** nothing is delivered, and the raw final text is still recorded in the run's record
+
+#### Scenario: A relay turn folds reports with conversational judgment
+- **WHEN** a conversational turn is woken by a worker's report
+- **THEN** its reply (if any) addresses its human audience in voice with the thread's context, summarizing what the report means for them — it never replies to the worker through the thread

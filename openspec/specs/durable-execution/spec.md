@@ -4,7 +4,7 @@
 TBD - created by archiving change bootstrap-sunny. Update Purpose after archive.
 ## Requirements
 ### Requirement: Two-tier execution model
-Sunny SHALL execute work in two tiers: Tier 1 conversational turns for normal message handling, and Tier 2 durable runs for long or asynchronous tasks. Tier-1 turns SHALL run as durable workflow runs (each turn a per-thread run, serialized so a thread processes one turn at a time), so that a conversational turn is observable and resumable on the same durable runtime as Tier-2 runs. Work promoted FROM A CONVERSATION SHALL run as a delegated subagent (see *Non-blocking delegation with isolated context and result-only return*): its result returns to the conversation thread as an attributed report, and a normal conversational turn mediates it into the user-facing reply — conversation-promoted work SHALL NOT deliver directly to the user. Direct terminal delivery to a user thread is reserved for scheduled runs, which have no live conversation to mediate them.
+Sunny SHALL execute work in two tiers: Tier 1 conversational turns for normal message handling, and Tier 2 durable runs for long or asynchronous tasks. Tier-1 turns SHALL run as durable workflow runs (each turn a per-thread run, serialized so a thread processes one turn at a time), so that a conversational turn is observable and resumable on the same durable runtime as Tier-2 runs. **All autonomous work SHALL be mediated**: a delegated subagent's result AND a delivering scheduled run's result return to the audience's conversation thread as an attributed report, and a normal conversational turn mediates it into the user-facing reply. Autonomous runs SHALL NOT deliver directly to the user; only a conversational turn speaks to a human.
 
 #### Scenario: Normal turn runs as a durable per-thread run
 - **WHEN** an inbound message arrives on a thread
@@ -17,12 +17,12 @@ Sunny SHALL execute work in two tiers: Tier 1 conversational turns for normal me
 - **AND** the child's report returns to the conversation thread, where a normal turn summarizes it for the user in the product's voice
 
 #### Scenario: A raw background report never reaches the user unmediated
-- **WHEN** conversation-promoted background work completes with a long or unformatted result
+- **WHEN** any autonomous work — conversation-promoted or scheduled — completes with a long or unformatted result
 - **THEN** the user receives a mediating turn's summary of it, not the raw result text
 
-#### Scenario: Scheduled runs still deliver terminally
-- **WHEN** a scheduled run fires and completes with a result
-- **THEN** its result is delivered to its configured target directly (there is no live conversation to mediate it)
+#### Scenario: Scheduled runs are mediated like subagents
+- **WHEN** a scheduled run fires and completes with a report for a delivering audience
+- **THEN** the report is appended to the audience's conversation thread (attributed `(scheduled)`) and a woken conversational turn relays it with the thread's context and voice — the scheduled run performs no direct gateway send
 
 ### Requirement: Idempotent conversational turns survive restart
 Each inbound message SHALL be persisted on arrival and processed idempotently, keyed by a stable message identifier. A conversational turn SHALL execute as durable steps so that, after a crash or restart mid-turn, it resumes from its last completed durable step rather than restarting, and side-effecting steps already completed (e.g. a delivered message) SHALL NOT run twice. Sunny SHALL NOT act twice on the same inbound message.
@@ -106,19 +106,19 @@ The message archive, full-text index, vector embeddings (when added), and durabl
 - **THEN** they remain markdown files on disk, not rows in the database
 
 ### Requirement: Configurable output target
-Every durable run SHALL be addressed by an **Audience** (the run-audiences capability) — `person`, `household`, `thread`, or `parent` — rather than a fixed `user`/`parent`/`silent` output target. Delivery SHALL go through the single delivery bus, which resolves the Audience to a Thread and dispatches on its binding (bound → gateway, detached → append + wake). A run not endowed a messaging grant SHALL send no proactive message and SHALL still record its result (silence is structural, not an output mode). A run's terminal message SHALL be delivered through the same bus — not a separate per-profile terminal-emit path — so headless output is never stranded. A `parent`-audience run's messages SHALL be delivered to its spawning run.
+Every durable run SHALL be addressed by an **Audience** (the run-audiences capability) — `nobody`, `agent(mailbox)`, or `chat(mailbox)` — rather than a fixed `user`/`parent`/`silent` output target. Delivery SHALL go through the single delivery bus, which resolves the Audience to a Thread. An autonomous run's terminal text SHALL be dispatched as an attributed report (append + wake) — never as a direct gateway send — so a conversation-thread mailbox receives it via a mediating conversational turn and a spawning run's detached inbox without a wake. A `nobody`-audience run's terminal output SHALL be recorded without waking anything (structural silence). A run's terminal message SHALL be delivered through the same bus — not a separate per-profile terminal-emit path — so headless output is never stranded.
 
 #### Scenario: Silent maintenance job sends nothing
-- **WHEN** a run with no messaging grant (e.g. nightly memory consolidation) completes
-- **THEN** no proactive message is sent, and its result is still recorded for later inspection
+- **WHEN** a `nobody`-audience run (e.g. nightly memory consolidation) completes
+- **THEN** no message is sent and no conversation is woken, and its result is still recorded for later inspection
 
 #### Scenario: Delegated child reports to its parent
-- **WHEN** a run with a `parent` audience delivers a message
+- **WHEN** a run with an `agent(byThread(parent's thread))` audience delivers a message
 - **THEN** it is delivered to its spawning run through the bus, not to a human
 
 #### Scenario: Run reports to its audience, not always the owner
-- **WHEN** a run with a `person` audience delivers its result
-- **THEN** it goes to that person's conversation via the bus, even if that person is not the owner
+- **WHEN** a run with an `agent(byPerson)` audience delivers its result
+- **THEN** the report lands on that person's conversation thread and the mediating turn frames its relay for that person, even if that person is not the owner
 
 ### Requirement: Configurable model per run
 A delegated or background durable run SHALL be able to specify the model it runs on, independently of the main thread's model.
@@ -222,4 +222,3 @@ Child runs SHALL appear in the workflow runs inspector as runs/steps associated 
 #### Scenario: External trajectory telemetry follows the durable-path posture
 - **WHEN** a child run executes while durable external telemetry is disabled (the current v7 posture)
 - **THEN** no external OTel/Langfuse spans are emitted for the child (consistent with the parent); observability is via the runs inspector
-

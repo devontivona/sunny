@@ -44,6 +44,30 @@ All outward messaging SHALL go through one delivery seam that resolves an Audien
 - **WHEN** a delegated child completes successfully with a final message
 - **THEN** that message is delivered to its parent via the bus (not stranded), closing the delegation watchdog
 
+### Requirement: Delivery grounds out in a channel-bound Thread
+A **Thread** SHALL be a durable message log with an OPTIONAL channel binding: **bound** (backed by a messaging adapter — the delivery path to a human) or **detached** (no channel — used as a run's inbox for steering and logging, never a human destination). Resolving any Audience's mailbox for delivery SHALL terminate at a Thread: a `byPerson` mailbox resolves to the person's bound DM (existing, or constructed from the configured send number); a `byThread` mailbox is that thread. A `chat` delivery to a bound thread goes out the gateway; an `agent` delivery is appended as an attributed report (a bound thread's run-supply woken; a detached inbox appended without waking).
+
+#### Scenario: Detached inbox is never a human destination
+- **WHEN** a run has a detached inbox (a subagent inbox)
+- **THEN** no message is delivered to a human through that inbox; it is used only for steering and recording
+
+#### Scenario: byPerson resolves at fire time, or defers to the owner
+- **WHEN** an `agent(byPerson)` mailbox is resolved at delivery time and the person has a bound conversation (or one can be constructed)
+- **THEN** delivery goes to that thread's agent
+- **AND WHEN** no bound thread can be resolved (the person was removed from the roster and cannot be constructed)
+- **THEN** the run's output is not silently dropped — the owner is notified
+
+### Requirement: Ownership derives from the audience
+A run's subject (whom it acts for and who owns it) SHALL derive from its **Audience** — `agent(byPerson)`/`chat(byPerson)` → that person, `agent(byThread)`/`chat(byThread)` → the thread's trusted subject (including a subject encoded in the thread id itself, for a conversation that has not yet had an inbound message), `nobody` → the owner — with no separate stored principal. A run SHALL be inspectable and cancellable by its derived subject and by the owner; a non-owner SHALL NOT see or cancel runs whose subject is someone else. Prompt framing and the memory a run reads/writes SHALL follow the same derived subject.
+
+#### Scenario: A family member owns the run created for them
+- **WHEN** the owner creates a reminder whose audience is a family member
+- **THEN** the run is framed and owned as that family member's (they can list and cancel it), and the owner can also see and cancel it
+
+#### Scenario: A never-contacted family DM frames for its encoded subject
+- **WHEN** a relay turn is woken on a family DM that has no inbound history (a person-audience schedule's first report)
+- **THEN** the turn derives its participant from the thread-encoded roster identity and frames for that person, not the owner
+
 ## REMOVED Requirements
 
 ### Requirement: Silence is the absence of a messaging grant
