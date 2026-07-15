@@ -62,7 +62,6 @@ A run's subject (whom it acts for and who owns it) SHALL derive from its **Audie
 - **WHEN** a relay turn is woken on a family DM that has no inbound history (a person-audience schedule's first report)
 - **THEN** the turn derives its participant from the thread-encoded roster identity and frames for that person, not the owner
 
-## REMOVED Requirements
 
 ### Requirement: Runs are one shell over a RunSpec
 Conversational turns, background jobs, scheduled jobs, and delegated subagents SHALL execute as the same durable shell over a **RunSpec** of `{ audience, authority, brief, model }`. Prompt framing, loaded context, delivery, and the available tool set SHALL be derived from the RunSpec, not hardcoded per profile.

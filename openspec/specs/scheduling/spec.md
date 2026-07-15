@@ -82,7 +82,6 @@ A scheduled run's terminal output SHALL be a **report**, dispatched through the 
 - **WHEN** a scheduled run finishes
 - **THEN** its raw outcome is recorded and can be inspected later, independent of what (if anything) the mediating turn relayed
 
-## ADDED Requirements
 
 ### Requirement: Bounded autonomous dispatch
 The scheduler SHALL bound how many due schedules it dispatches per tick, so a backlog (e.g. accumulated during downtime) cannot fire all at once. Per-run cost/token budget caps with stop-and-notify are out of scope for scheduling and are provided by the observability budget meter (a separate change).
