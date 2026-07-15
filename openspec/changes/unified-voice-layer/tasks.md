@@ -87,6 +87,22 @@
       tests, scheduler integration tests updated to the collapsed type; `household` survives
       only as the accepted legacy spelling. Spec deltas + design (D-VL10) + proposal updated.
 
+## Phase 3c — Chat lane goes live + review hardening (2026-07-15)
+
+- [x] 3c.1 Conversation reply lane through the bus: terminal reply, backstop, translator
+      sends, and send_image all ride `deliver(chatAudience(threadId), …)`; `sendStep`
+      deleted; `deliver` gains `{text, attachment?}` content + `{persist}` opts and returns
+      the SendResult (send_image outcome/preview split into `imageOutcomeStep`). The bus is
+      now the ONE gateway-speech seam; the `message` tool stays the addressed exception.
+- [x] 3c.2 /code-review high --fix applied (18 confirmed findings): legacy both-keys files
+      migrate with audience-wins instead of dying at boot; reporter lane honors <no-reply/>
+      (live prompt precedent); `for:` accepted as deprecated deliver_to alias; scheduled
+      reportBlocks wired + terminal speech batched to one deliver; impossible
+      steer-a-scheduled-worker prompt rule fixed; watchdog notices attributed; migration
+      frontmatter-scoped/best-effort/committed; chat-audience worker inputs rejected; reuse
+      cleanups (shared person-resolution tail, RunIdentity adopted, stripNoReport deleted,
+      dead non-autonomous prompt branch removed).
+
 ## Phase 4 — Deploy + live-state choreography (Devon's restart window)
 
 - [ ] 4.1 Pre-restart: update the four standing-schedule files (`heartbeat`, `task-assistant`,

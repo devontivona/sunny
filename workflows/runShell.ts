@@ -27,6 +27,7 @@ import {
 import { MCP_MANAGE_SPEC, type McpManageInput } from '../src/agent/tools/mcpManageSpecs.js';
 import type { McpToolDef } from '../src/mcp/turnTools.js';
 import type { Audience, Authority, RunIdentity } from '../src/agent/audience.js';
+import type { SendResult } from '../src/gateway/types.js';
 
 /**
  * Shared durable-run shell (durable-subagents D-DS11/D-DS14). The conversational turn, background
@@ -327,6 +328,15 @@ function stepNarration(
   return lines.join('\n').trim();
 }
 
+/** What a run speaks: plain text, or text with one outbound attachment (the chat lane's
+ *  media path — required media aborts the whole send when undeliverable, per
+ *  image-send-integrity). Reports (agent lane) are text-only: media rides by PATH in the
+ *  report and the mediating turn sends it (D-VL9). */
+export interface SpeechContent {
+  text: string;
+  attachment?: { pathOrUrl: string; required?: boolean };
+}
+
 /**
  * The single delivery bus (run-audiences D-RA15; unified-voice-layer, audience collapse).
  * Dispatch on WHO READS the text — the three audience kinds — after resolving the mailbox
@@ -339,19 +349,23 @@ function stepNarration(
  *             thread's run-supply is woken so a conversational turn mediates it. A detached
  *             (`subagent:`) inbox is appended without waking (an in-flight recipient folds it
  *             via `loadSteers`; a finished one is run-to-completion). `from` (the reporting
- *             run's identity) is REQUIRED — every agent delivery is attributed.
- *  - chat   → the mailbox's PEOPLE read it: gateway-delivered. Only conversational turns and
- *             the deliberate `message` tool construct chat audiences (the one-speaker rule is
- *             a constructibility gate at the spawn surfaces, not a bus check).
+ *             run's identity) is REQUIRED — every agent delivery is attributed. Text-only.
+ *  - chat   → the mailbox's PEOPLE read it: gateway-delivered, returning the SendResult so the
+ *             caller can inspect media outcomes. THE one gateway-speech seam: the conversation's
+ *             reply lane (terminal reply, backstop, translator updates, send_image) rides this
+ *             branch — only the router-minted chat profile constructs the audience (the
+ *             one-speaker rule as a constructibility gate at the spawn surfaces).
  */
 export async function deliver(
   audience: Audience,
-  text: string,
+  content: string | SpeechContent,
   from?: RunIdentity,
-): Promise<void> {
+  opts?: { persist?: boolean },
+): Promise<SendResult | undefined> {
   'use step';
 
-  if (!text || audience.kind === 'nobody') return;
+  const speech: SpeechContent = typeof content === 'string' ? { text: content } : content;
+  if ((!speech.text && !speech.attachment) || audience.kind === 'nobody') return undefined;
 
   const { getRuntime } = await import('../src/runtime.js');
   const { reportToParent } = await import('../src/agent/delegation.js');
@@ -362,8 +376,8 @@ export async function deliver(
   if (audience.mailbox.by === 'person') {
     const resolved = await resolvePersonThread(runtime, audience.mailbox.person);
     if (!resolved) {
-      await notifyOwnerUndeliverable(runtime, audience.mailbox.person, text);
-      return;
+      await notifyOwnerUndeliverable(runtime, audience.mailbox.person, speech.text);
+      return undefined;
     }
     threadId = resolved;
   } else {
@@ -378,14 +392,18 @@ export async function deliver(
     await reportToParent(
       runtime,
       { threadId, fromId: from.id, fromName: from.name },
-      text,
+      speech.text,
       from.kind,
     );
-    return;
+    return undefined;
   }
 
   // chat: the run participates in the conversation itself.
-  await runtime.gateway.send(threadId, { text });
+  return runtime.gateway.send(
+    threadId,
+    { text: speech.text, ...(speech.attachment ? { attachment: speech.attachment } : {}) },
+    { persist: opts?.persist ?? false },
+  );
 }
 
 /** Resolve a roster member to their existing bound DM thread, or construct one from

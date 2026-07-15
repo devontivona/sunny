@@ -126,6 +126,13 @@ table; changing the dreaming/household record-only path.
   `<name> (<kind>): …` on every agent delivery. Stored/frontmatter encoding:
   `person:<name>` | `nobody` | `thread:<id>` (`household` accepted as the legacy spelling of
   `nobody`, normalized on load). Replaces the four-value `thread|person|parent|household` set.
+  The chat lane is LIVE, not ceremonial (folded in 2026-07-15): the conversation profile's
+  entire reply lane — terminal reply, backstop, translator updates, send_image — speaks
+  through `deliver(chatAudience(threadId), …)`, so the bus is the one gateway-speech seam
+  (the former `sendStep` is deleted; `deliver` carries content `{text, attachment?}` +
+  `{persist}` and returns the SendResult for media-outcome inspection). The `message` tool
+  remains the documented addressed-fan-out exception (D-VL9), and `runScheduledJob` rejects
+  a chat audience at the input seam.
 
 - **D-VL9 — What deliberately does NOT change.** The `message` tool (addressed fan-out) still
   gateway-sends directly from any profile that holds it — it is deliberate, addressed speech

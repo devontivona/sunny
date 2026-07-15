@@ -30,7 +30,7 @@ import {
   type Delivery,
 } from '../src/agent/delivery.js';
 import { finalizeSpeech } from '../src/agent/voice.js';
-import { grantTools, listRunsStep, streamAgent } from './runShell.js';
+import { deliver, grantTools, listRunsStep, streamAgent } from './runShell.js';
 
 /**
  * Tier-1 durable conversational turn (durable-main-loop). ONE run = ONE turn (design D1,
@@ -144,7 +144,7 @@ export async function runConversation(input: ConversationInput): Promise<void> {
       // live-pane publish (translator sends never ride the model stream, so without
       // this the dashboard's live view can't show them).
       send: async (text) => {
-        await sendStep(threadId, text);
+        await deliver(chatAudience(threadId), text);
         await publishTranslatorLiveStep(threadId, text);
       },
     },
@@ -255,7 +255,7 @@ async function finalizeTurn(args: {
   if (delivered === 'text') {
     // One message per reply (2026-07-05: bubble-splitting on blank lines was too noisy —
     // a multi-paragraph reply arrives as a single text).
-    await sendStep(threadId, finalText);
+    await deliver(chatAudience(threadId), finalText);
     sent = true;
   } else if (delivered === 'fallback_text') {
     // Abnormal turn end: the turn narrated work but never wrote the reply (step limit,
@@ -266,7 +266,7 @@ async function finalizeTurn(args: {
     recovered = true;
     const recoveryText = await recoverDelivery(threadId, subject, priorMessages, interim);
     if (recoveryText) {
-      await sendStep(threadId, recoveryText);
+      await deliver(chatAudience(threadId), recoveryText);
       // Recorded as a PLAIN TEXT part — never a synthetic tool part (tool_use id hygiene).
       // Replayed as history it reads as the turn's final reply text, so the persisted
       // precedent reinforces the correct shape (the PR #30 self-reinforcement argument).
@@ -365,8 +365,16 @@ function buildTools(ctx: {
       ...SEND_IMAGE_SPEC,
       // Params typed explicitly: with `toModelOutput` in the spec, tool()'s overload
       // inference can no longer derive them from the zod schema.
-      execute: ({ pathOrUrl, caption }: { pathOrUrl: string; caption?: string }) =>
-        sendStep(threadId, caption ?? '', pathOrUrl),
+      execute: async ({ pathOrUrl, caption }: { pathOrUrl: string; caption?: string }) => {
+        // Speech through the bus (audience collapse): required media — an undeliverable
+        // image aborts the whole send (image-send-integrity); the outcome step builds the
+        // model-facing result (incl. the self-vision preview) from the journaled SendResult.
+        const result = await deliver(chatAudience(threadId), {
+          text: caption ?? '',
+          attachment: { pathOrUrl, required: true },
+        });
+        return imageOutcomeStep(result);
+      },
     }),
     // view_image (self-vision, image-send-integrity) is NOT registered here: it rides the
     // `file_read` grant in `grantTools` — every run that can read files can see images.
@@ -615,27 +623,26 @@ async function waitStep(seconds?: number): Promise<string> {
 /** Deliver a message by threadId (REST send via the gateway; D2). Memoized as a step so a
  *  replayed turn does NOT re-send. Returns the media outcome for the persisted turn.
  *
- *  Image sends (image-send-integrity, 2026-07-10) are REQUIRED media: the gateway waits
- *  for the file to be ready and otherwise aborts the whole send (no caption-only text —
- *  the Jul 10 spam incident), and this step reports the failure as a structured
- *  `not_sent` the tool surfaces as an error instead of the old lying bare 'delivered'.
- *  A delivered image comes back with a downscaled `preview` so the model SEES what the
- *  user received (`sendImageToModelOutput`); the preview is stripped at persist. */
-async function sendStep(
-  threadId: string,
-  text: string,
-  image?: string,
+/** The conversational turn's own voice on the bus (audience collapse): the ONE chat audience
+ *  this profile speaks to — its thread's people. Every reply-lane egress (terminal reply,
+ *  backstop, translator updates, send_image) is a `deliver(chatAudience(threadId), …)` call,
+ *  so the bus's chat lane is the live — and only — gateway-speech seam. Pure constructor;
+ *  only this router-minted profile builds a chat audience (one-speaker rule, D-VL10). */
+function chatAudience(threadId: string) {
+  return { kind: 'chat', mailbox: { by: 'thread', threadId } } as const;
+}
+
+/** send_image's model-facing outcome from the journaled SendResult (image-send-integrity,
+ *  2026-07-10): REQUIRED media means the gateway aborted the whole send if the image wasn't
+ *  deliverable (no caption-only text — the Jul 10 spam incident), reported here as a
+ *  structured `not_sent`. A delivered image comes back with a downscaled `preview` so the
+ *  model SEES what the user received (`sendImageToModelOutput`); the preview is stripped at
+ *  persist. Its own step (previewFromFile reads the filesystem). */
+async function imageOutcomeStep(
+  result: Awaited<ReturnType<typeof deliver>>,
 ): Promise<SendImageOutput | string> {
   'use step';
 
-  const { getRuntime } = await import('../src/runtime.js');
-  const { gateway } = await getRuntime();
-  const result = await gateway.send(
-    threadId,
-    { text, ...(image ? { attachment: { pathOrUrl: image, required: true } } : {}) },
-    { persist: false },
-  );
-  if (!image) return 'delivered';
   if (result?.mediaError || !result?.media) {
     return {
       status: 'not_sent',
