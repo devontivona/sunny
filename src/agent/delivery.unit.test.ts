@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { ModelMessage, UIMessage } from 'ai';
 import {
+  NO_REPLY_SENTINEL,
+  NO_REPORT_SENTINEL,
   assistantUIMessageFromResponse,
   calledStaySilent,
   classifyTextDelivery,
@@ -10,8 +12,7 @@ import {
   extractToolResultText,
   extractTranslatorUpdates,
   stripBinaryRuns,
-  stripNoReply,
-  stripNoReport,
+  stripSentinel,
   translatorPart,
 } from './delivery.js';
 import { makeAssistantTurnPayload } from '../../tests/factories.js';
@@ -80,20 +81,20 @@ describe('text-as-reply extraction (text delivery mode)', () => {
     expect(classifyTextDelivery(final, interim, false)).toBe('silence');
   });
 
-  it('stripNoReply: a sentinel-only reply is silence; nothing else is touched', () => {
-    expect(stripNoReply('<no-reply/>')).toEqual({ text: '', sentinel: true });
-    expect(stripNoReply('  <no-reply/>  ')).toEqual({ text: '', sentinel: true });
-    expect(stripNoReply('here is your answer')).toEqual({
+  it('stripSentinel(NO_REPLY): a sentinel-only reply is silence; nothing else is touched', () => {
+    expect(stripSentinel('<no-reply/>', NO_REPLY_SENTINEL)).toEqual({ text: '', sentinel: true });
+    expect(stripSentinel('  <no-reply/>  ', NO_REPLY_SENTINEL)).toEqual({ text: '', sentinel: true });
+    expect(stripSentinel('here is your answer', NO_REPLY_SENTINEL)).toEqual({
       text: 'here is your answer',
       sentinel: false,
     });
   });
 
-  it('stripNoReply: sentinel PRESENCE means silence — surrounding text is not delivered', () => {
+  it('stripSentinel(NO_REPLY): sentinel PRESENCE means silence — surrounding text is not delivered', () => {
     // Unified 2026-07-13: production runs (the heartbeat job) showed that when the model
     // writes the token it means "don't send this" for the whole reply — the text around it
     // is working notes, not a message. The raw text still persists in the row for inspection.
-    const parsed = stripNoReply('All four sources checked; nothing new.\n\n<no-reply/>');
+    const parsed = stripSentinel('All four sources checked; nothing new.\n\n<no-reply/>', NO_REPLY_SENTINEL);
     expect(parsed).toEqual({ text: '', sentinel: true });
     expect(classifyTextDelivery(parsed.text, '', parsed.sentinel)).toBe('silence');
   });
@@ -120,16 +121,17 @@ describe('text-as-reply extraction (text delivery mode)', () => {
     ]);
   });
 
-  it('stripNoReport: the child sentinel mirrors stripNoReply mechanics', () => {
-    expect(stripNoReport('<no-report/>')).toEqual({ text: '', sentinel: true });
+  it('stripSentinel with NO_REPORT_SENTINEL: the reporter token mirrors stripNoReply mechanics', () => {
+    expect(stripSentinel('<no-report/>', NO_REPORT_SENTINEL)).toEqual({ text: '', sentinel: true });
     // Presence means silence for the child too (unified 2026-07-13).
-    expect(stripNoReport('<no-report/> but actually: found it')).toEqual({
+    expect(stripSentinel('<no-report/> but actually: found it', NO_REPORT_SENTINEL)).toEqual({
       text: '',
       sentinel: true,
     });
-    expect(stripNoReport('normal report')).toEqual({ text: 'normal report', sentinel: false });
-    // The two sentinels are distinct: one never triggers the other.
-    expect(stripNoReport('<no-reply/>')).toEqual({ text: '<no-reply/>', sentinel: false });
+    expect(stripSentinel('normal report', NO_REPORT_SENTINEL)).toEqual({
+      text: 'normal report',
+      sentinel: false,
+    });
   });
 
   it('extractReportBlocks: zero, one, and many complete blocks', () => {

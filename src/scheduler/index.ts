@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync
 import { join } from 'node:path';
 import { and, eq, inArray, lte } from 'drizzle-orm';
 import { builtinSchedulesDir } from '../agentDir.js';
+import { canonicalAudienceRef } from '../agent/audience.js';
 import { stateDir } from '../config/index.js';
 import type { Db } from '../db/client.js';
 import { schedules, scheduleRuns, type ScheduleRow } from '../db/schema.js';
@@ -29,10 +30,8 @@ export interface CreateScheduleInput {
   threadId: string;
   timezone: string;
   label?: string;
-  /** Output target for the fired run (durable-subagents D-DS1); defaults to 'user'. */
-  outputTarget?: 'user' | 'silent';
-  /** Explicit audience (run-audiences #4), e.g. `person:Kate` — the run is for that party
-   *  regardless of the creating thread. Null/omitted → derived from threadId + outputTarget. */
+  /** Explicit audience (run-audiences #4; D-VL5/10), e.g. `person:Kate` or `nobody` — the run
+   *  is for that party regardless of the creating thread. Null/omitted → the creating thread. */
   audience?: string;
   /** The grants the fired run is endowed ({ audience, authority }; D-RA5) — validated as a
    *  subset of the creator's authority at the tool layer. Omitted → the memory default. */
@@ -79,7 +78,6 @@ export async function createSchedule(db: Db, input: CreateScheduleInput): Promis
       threadId: input.threadId,
       timezone: input.timezone,
       label: input.label ?? null,
-      outputTarget: input.outputTarget ?? 'user',
       audience: input.audience ?? null,
       authority: input.authority ?? null,
       nextRunAt,
@@ -118,14 +116,18 @@ export async function deleteSchedule(db: Db, id: string): Promise<boolean> {
 
 export type FileScheduleClass = 'builtin' | 'standing';
 
-/** A file-defined schedule definition parsed from its markdown (pre-resolution). */
+/** A file-defined schedule definition parsed from its markdown (pre-resolution).
+ *  Addressing is the `audience` REFERENCE alone (unified-voice-layer D-VL5):
+ *  `person:<name>` (reports to that person's conversation loop), `nobody`
+ *  (record-only — the silent pipeline/maintenance case; `household` accepted as the
+ *  legacy spelling), or absent → the owner. The legacy `outputTarget: user|silent`
+ *  frontmatter is migrated at load. */
 export interface FileScheduleDef {
   /** Filename stem — the schedule's stable name (also its run-history key via
    *  {@link fileScheduleId}). */
   name: string;
   cron: string;
   prompt: string;
-  outputTarget: 'user' | 'silent';
   audience?: string;
   authority?: string[];
 }
@@ -153,19 +155,59 @@ export function standingSchedulesDir(runtimeDir: string): string {
   return join(stateDir(runtimeDir), 'schedules');
 }
 
+/** Validate + canonicalize an audience REFERENCE via the ONE shared parser
+ *  (`canonicalAudienceRef` in audience.ts); throws with the schedule's name on an
+ *  unrecognized ref. */
+function requireAudienceRef(name: string, audience: string): string {
+  const canonical = canonicalAudienceRef(audience);
+  if (!canonical) {
+    throw new Error(
+      `schedule file ${name}: invalid audience '${audience}' — use person:<name>, nobody, ` +
+        `or omit for the owner`,
+    );
+  }
+  return canonical;
+}
+
+/** The frontmatter block of a raw schedule file (between the opening `---` pair), so
+ *  legacy-vocabulary detection never matches lines in the PROMPT BODY — a body line
+ *  starting "outputTarget:" must not re-trigger the migration rewrite on every boot. */
+function frontmatterBlock(raw: string): string {
+  const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(raw);
+  return m?.[1] ?? '';
+}
+
+/** Whether a schedule file still carries retired frontmatter vocabulary
+ *  (unified-voice-layer D-VL5/D-VL10) — the loader rewrites such files once. */
+function hasLegacyFrontmatter(raw: string): boolean {
+  const fm = frontmatterBlock(raw);
+  return /^outputTarget\s*:/im.test(fm) || /^audience\s*:\s*household\s*$/im.test(fm);
+}
+
 /** Parse one schedule file (frontmatter + prompt body). Throws on an invalid
  *  definition — a broken builtin is a code bug and a broken standing file is a bad
- *  write, both surfaced to the caller, never silently skipped. */
+ *  write, both surfaced to the caller, never silently skipped. A legacy
+ *  `outputTarget:` key (retired, D-VL5) is mapped to the audience it implied —
+ *  `silent` → `nobody`, `user` → absent (owner). When an explicit audience is ALSO
+ *  present (every pre-collapse compose wrote `outputTarget:` unconditionally, so
+ *  legacy files with an audience always have both keys), the audience wins — the
+ *  same precedence the old runtime applied at fire time — and the legacy key is
+ *  simply dropped by the rewrite. */
 export function parseScheduleFile(name: string, raw: string): FileScheduleDef {
   const { frontmatter, body } = parseSkill(raw);
   const cron = frontmatter.cron;
   if (!cron) throw new Error(`schedule file ${name}: missing frontmatter cron`);
   CronExpressionParser.parse(cron); // validate the expression at load time
   if (!body.trim()) throw new Error(`schedule file ${name}: empty prompt body`);
-  const outputTarget = frontmatter.outputtarget ?? 'user';
-  if (outputTarget !== 'user' && outputTarget !== 'silent') {
-    throw new Error(`schedule file ${name}: invalid outputTarget '${outputTarget}'`);
+  let audience = frontmatter.audience || undefined;
+  const legacy = frontmatter.outputtarget;
+  if (legacy !== undefined && !audience) {
+    if (legacy !== 'user' && legacy !== 'silent') {
+      throw new Error(`schedule file ${name}: invalid legacy outputTarget '${legacy}'`);
+    }
+    audience = legacy === 'silent' ? 'nobody' : undefined;
   }
+  if (audience) audience = requireAudienceRef(name, audience);
   const authority = frontmatter.authority
     ?.split(',')
     .map((s) => s.trim())
@@ -174,15 +216,14 @@ export function parseScheduleFile(name: string, raw: string): FileScheduleDef {
     name,
     cron,
     prompt: body.trim(),
-    outputTarget,
-    audience: frontmatter.audience || undefined,
+    audience,
     authority: authority && authority.length > 0 ? authority : undefined,
   };
 }
 
 /** Compose a standing-schedule file from a definition (parse round-trips). */
 export function composeScheduleFile(def: FileScheduleDef): string {
-  const lines = ['---', `cron: "${def.cron}"`, `outputTarget: ${def.outputTarget}`];
+  const lines = ['---', `cron: "${def.cron}"`];
   if (def.audience) lines.push(`audience: ${def.audience}`);
   if (def.authority && def.authority.length > 0)
     lines.push(`authority: ${def.authority.join(', ')}`);
@@ -225,7 +266,6 @@ function resolveFileSchedule(
     spec: def.cron,
     prompt: def.prompt,
     threadId,
-    outputTarget: def.outputTarget,
     audience: def.audience ?? null,
     authority: def.authority ?? null,
     timezone,
@@ -242,7 +282,7 @@ export interface CreateStandingInput {
   name: string;
   cron: string;
   prompt: string;
-  outputTarget?: 'user' | 'silent';
+  /** `person:<name>` | `nobody` | absent (owner) — see {@link FileScheduleDef}. */
   audience?: string;
   authority?: string[];
 }
@@ -284,10 +324,35 @@ export class FileScheduleRegistry {
       for (const entry of readdirSync(dir).sort()) {
         if (!entry.endsWith('.md')) continue;
         try {
-          reg.register(
-            parseScheduleFile(entry.slice(0, -3), readFileSync(join(dir, entry), 'utf8')),
-            'standing',
-          );
+          const path = join(dir, entry);
+          const raw = readFileSync(path, 'utf8');
+          const def = parseScheduleFile(entry.slice(0, -3), raw);
+          // One-shot legacy migration (D-VL5/D-VL10): a file still carrying `outputTarget:`
+          // or the pre-collapse `audience: household` spelling in its FRONTMATTER (e.g. one
+          // restored from an older state-repo clone) is rewritten canonically the moment it
+          // loads. Best-effort in its own try — a failed rewrite must not unregister an
+          // otherwise-valid schedule — and committed to the state repo so the migration
+          // survives a restore instead of sitting dirty until an unrelated commit sweeps it.
+          if (hasLegacyFrontmatter(raw)) {
+            try {
+              writeFileSync(path, composeScheduleFile(def), { mode: 0o644 });
+              log.info('migrated standing schedule frontmatter to audience vocabulary', {
+                entry,
+                audience: def.audience ?? '(owner)',
+              });
+              void commitState(opts.runtimeDir, `schedule: migrate ${entry} frontmatter`, [
+                'schedules/',
+              ]).catch((err) =>
+                log.warn('could not commit schedule migration', { entry, err: String(err) }),
+              );
+            } catch (err) {
+              log.warn('schedule frontmatter migration write failed (will retry next boot)', {
+                entry,
+                err: String(err),
+              });
+            }
+          }
+          reg.register(def, 'standing');
         } catch (err) {
           log.warn('skipping malformed standing schedule file', { entry, err: String(err) });
         }
@@ -337,8 +402,7 @@ export class FileScheduleRegistry {
       name,
       cron: input.cron,
       prompt: input.prompt,
-      outputTarget: input.outputTarget ?? 'user',
-      audience: input.audience,
+      audience: input.audience ? requireAudienceRef(name, input.audience) : undefined,
       authority: input.authority,
     };
     const dir = standingSchedulesDir(this.opts.runtimeDir);
@@ -412,7 +476,6 @@ export async function migrateCronRowsToStanding(
         name,
         cron: row.spec,
         prompt: row.prompt,
-        outputTarget: row.outputTarget === 'silent' ? 'silent' : 'user',
         audience: row.audience ?? undefined,
         authority: row.authority ?? undefined,
       });

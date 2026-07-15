@@ -1,13 +1,16 @@
 ---
 name: delegation
-description: Spawn work as a durable run — a subagent (now; its report returns to this conversation for you to summarize) or a schedule (later / recurring, for a person). Covers how to CHOOSE between them, when NOT to delegate, how to brief a child, least-authority endowment, inspecting/cancelling runs (list_runs / cancel_run), and the delegate_task / schedule_create / message tools.
+description: Spawn work as a durable run — a subagent (now) or a schedule (later / recurring). Every spawned run REPORTS to a conversation loop (yours, or its audience's); only conversations speak to people. Covers how to CHOOSE between them, when NOT to delegate, how to brief a child, the audience (deliver_to) and authority (toolset) axes, inspecting/cancelling runs (list_runs / cancel_run), and the delegate_task / schedule_create / message tools.
 ---
 
 # Delegation & scheduling — spawning durable runs
 
-Everything you spawn is another durable run, differing only in WHEN it fires and WHO it is for.
-Each runs in its own context with a least-privilege toolset (a subset of yours — you can never
-grant a child more than you hold), does its work, and delivers through the one messaging bus.
+Everything you spawn is another durable run, described by two axes: its AUDIENCE (who it is
+for — whose conversation loop receives its reports) and its AUTHORITY (what it may do — a
+least-privilege toolset, a subset of yours; you can never grant a child more than you hold).
+A spawned run never speaks to a person directly: it reports, and the audience's conversation
+(you, or the equivalent loop in their thread) relays in Sunny's voice with the conversation's
+context — or stays silent when the report isn't worth surfacing.
 
 ## 0. Choosing how to spawn work
 
@@ -15,16 +18,28 @@ grant a child more than you hold), does its work, and delivers through the one m
   would blow out your context or fan out in parallel (research, digests), or that must be
   handled with extra care (untrusted content). The report arrives later like a new message; you
   synthesize. Tell the owner you're on it in your reply first.
-- **schedule_create** — run LATER or on a recurring basis, for a person. For reminders and
-  recurring maintenance ("every morning at 8…"). It fires on its own and delivers to whoever the
-  schedule is for. Same toolset presets as delegate_task (host is the default; readonly for
-  runs needing extra care), and a scheduled run can always message the roster. A scheduled
-  run canNOT create more schedules or delegate (no runaway).
+- **schedule_create** — run LATER or on a recurring basis. It fires on its own and REPORTS to
+  its audience's conversation loop (deliver_to — see §0a). Same toolset presets as
+  delegate_task (host is the default; readonly for runs needing extra care), and a scheduled
+  run can always message the roster. A scheduled run canNOT create more schedules or delegate
+  (no runaway).
 - **list_runs / cancel_run** — see and cancel your active schedules and this conversation's
   working subagents. The owner can see/cancel everyone's; a family member only their own.
 
+## 0a. A schedule's audience (deliver_to) — pick by what the job PRODUCES
+
+- **An artifact** (files, a feed, tagged docs, DB state, a synced repo) → `deliver_to:
+  "nobody"`. The artifact IS the output; run outcomes stay inspectable in run history, and no
+  conversation is ever woken. This is the right shape for pipelines — an hourly processing job
+  that "reports what it processed" to a person is spam by construction.
+- **A message for a person** (a reminder, a morning briefing, a watch-for-X alert) →
+  `deliver_to: <their name>` (default: whoever you're scheduling for now). Their conversation
+  loop relays the report in Sunny's voice. Write the prompt so reporting is CONDITIONAL:
+  "report only if <the thing worth saying exists>; otherwise reply exactly `<no-report/>`" —
+  never an unconditional "report what was processed" / "send a summary".
+
 The rest of this skill is about delegate_task specifically (the richest case);
-schedule_create share the same "brief completely, endow least authority" discipline.
+schedule_create shares the same "brief completely, endow least authority" discipline.
 
 ## 1. When to delegate — and when NOT to (the one rule that matters)
 
@@ -140,6 +155,10 @@ it (retry, drop, or tell the owner).
   that context (e.g. "my pushback on your second point" when they never saw a first point). Every
   time a report comes back, your very next reply to the owner must actually SUMMARIZE what it
   said — not just your reaction to it — before you add your own take.
+- **Your reply text can never reach a worker.** A report's sender is not your reply's
+  recipient: answering a child's blocker in your reply sends that text to the OWNER (who never
+  saw the report). To answer or steer a worker, call `message` with its id — and remember
+  workers continue without acknowledgments, so most reports need no steer at all.
 
 ## 7. Anti-patterns
 

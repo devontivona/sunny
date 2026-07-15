@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   attenuate,
-  audienceForSchedule,
   authorityForToolset,
   HOST_GRANTS,
   isAuthoritySubset,
@@ -26,41 +25,42 @@ describe('scheduleAudience', () => {
     // Devon creates a schedule in HIS thread FOR Kate — it must resolve to Kate, not his thread.
     const a = scheduleAudience({
       threadId: 'sendblue:x:devon',
-      outputTarget: 'user',
       audience: 'person:Kate',
     });
-    expect(a).toEqual({ kind: 'person', person: 'Kate' });
+    expect(a).toEqual({ kind: 'agent', mailbox: { by: 'person', person: 'Kate' } });
   });
 
-  it('a null audience derives from threadId + outputTarget (the common per-person case)', () => {
-    expect(
-      scheduleAudience({ threadId: 'sendblue:x:kate', outputTarget: 'user', audience: null }),
-    ).toEqual({
-      kind: 'thread',
-      threadId: 'sendblue:x:kate',
-    });
-    expect(
-      scheduleAudience({ threadId: 'sendblue:x:owner', outputTarget: 'silent', audience: null }),
-    ).toEqual({
-      kind: 'household',
+  it("a null audience means the creating thread's AGENT (the common per-person case)", () => {
+    // The retired output_target flag was backfilled into the audience encoding by
+    // migration 0013 — a null audience has exactly one meaning now.
+    expect(scheduleAudience({ threadId: 'sendblue:x:kate', audience: null })).toEqual({
+      kind: 'agent',
+      mailbox: { by: 'thread', threadId: 'sendblue:x:kate' },
     });
   });
 
-  it('audienceForSchedule: silent → household, else → thread', () => {
-    expect(audienceForSchedule('t', 'silent')).toEqual({ kind: 'household' });
-    expect(audienceForSchedule('t', 'user')).toEqual({ kind: 'thread', threadId: 't' });
+  it("stored 'nobody' and its legacy spelling 'household' both parse to nobody", () => {
+    for (const stored of ['nobody', 'household']) {
+      expect(scheduleAudience({ threadId: 't', audience: stored })).toEqual({ kind: 'nobody' });
+    }
   });
 });
 
 describe('subjectName', () => {
-  it('a person audience resolves to the roster name', () => {
-    expect(subjectName({ kind: 'person', person: 'Kate' }, config)).toBe('Kate');
-    expect(subjectName({ kind: 'person', person: '+17193146820' }, config)).toBe('Kate');
+  it('a byPerson mailbox resolves to the roster name', () => {
+    expect(
+      subjectName({ kind: 'agent', mailbox: { by: 'person', person: 'Kate' } }, config),
+    ).toBe('Kate');
+    expect(
+      subjectName({ kind: 'agent', mailbox: { by: 'person', person: '+17193146820' } }, config),
+    ).toBe('Kate');
   });
 
-  it('household and unresolved threads default to the owner', () => {
-    expect(subjectName({ kind: 'household' }, config)).toBe('Devon');
-    expect(subjectName({ kind: 'thread', threadId: 'internal:xyz' }, config)).toBe('Devon');
+  it('nobody and unresolved threads default to the owner', () => {
+    expect(subjectName({ kind: 'nobody' }, config)).toBe('Devon');
+    expect(
+      subjectName({ kind: 'agent', mailbox: { by: 'thread', threadId: 'internal:xyz' } }, config),
+    ).toBe('Devon');
   });
 });
 

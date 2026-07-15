@@ -330,6 +330,8 @@ async function start(): Promise<Runtime> {
             // explicit `person:` (scheduled FOR someone), else its creating thread, else
             // `household` (record-only) for a silent maintenance schedule.
             audience: scheduleAudience(schedule),
+            // Attribution for the run's reports (`<label> (scheduled): …`, voice-layer D-VL2).
+            label: schedule.label ?? undefined,
             // The grants the run is endowed ({ audience, authority }); null → the memory default.
             authority: schedule.authority ?? undefined,
           },

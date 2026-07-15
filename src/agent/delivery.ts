@@ -254,16 +254,6 @@ export function stripSentinel(
   return { text: '', sentinel: true };
 }
 
-/** The conversation turn's silence parse (see NO_REPLY_SENTINEL). */
-export function stripNoReply(finalText: string): { text: string; sentinel: boolean } {
-  return stripSentinel(finalText, NO_REPLY_SENTINEL);
-}
-
-/** The delegated child's silence parse (see NO_REPORT_SENTINEL). */
-export function stripNoReport(finalText: string): { text: string; sentinel: boolean } {
-  return stripSentinel(finalText, NO_REPORT_SENTINEL);
-}
-
 /**
  * Extract complete `<report>…</report>` blocks from a child's text (subagent
  * text-unification): mid-task progress a child deliberately writes for its orchestrator.
@@ -285,8 +275,8 @@ export function extractReportBlocks(text: string): { reports: string[]; rest: st
 
 /**
  * Classify a TEXT-mode turn from its extracted signals. Callers pass the final text
- * AFTER `stripNoReply` (any reply containing the sentinel arrives here as empty +
- * silent=true — sentinel presence means silence, see `stripSentinel`). Final text wins
+ * AFTER the voice layer's speaker parse (`finalizeSpeech(text, 'speaker')` — any reply
+ * containing the sentinel arrives here as empty + silent=true). Final text wins
  * FIRST — this ordering now only bites legacy rows: the stay_silent-spam pathology
  * (PR #30 transcripts) showed the model can write a real reply and ALSO call the old
  * stay_silent tool; when final text exists it is the reply and must be delivered.

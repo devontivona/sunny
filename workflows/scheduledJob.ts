@@ -1,9 +1,8 @@
 import { tool } from '@ai-sdk/provider-utils';
 import { buildTurnModel, type MockResponseDescriptor } from '../src/agent/turnModel.js';
 import { MESSAGE_SPEC } from '../src/agent/tools/messageSpec.js';
-import { SEND_IMAGE_SPEC } from '../src/agent/tools/sendImageSpec.js';
-import { type Audience, subjectName } from '../src/agent/audience.js';
-import { stripNoReply } from '../src/agent/delivery.js';
+import { type Audience, type RunIdentity, subjectName } from '../src/agent/audience.js';
+import { finalizeSpeech } from '../src/agent/voice.js';
 import type { McpToolDef } from '../src/mcp/turnTools.js';
 import { deliver, finalAssistantText, grantTools, streamAgent } from './runShell.js';
 
@@ -18,22 +17,27 @@ import { deliver, finalAssistantText, grantTools, streamAgent } from './runShell
  * the same host/readonly vocabulary as delegate_task — attenuated against the creator), mapped
  * through the shared `grantTools` builder. Legacy rows (null authority, pre-preset) get the
  * memory tools. How the run SPEAKS is the AUDIENCE axis, not a grant: every scheduled run can
- * `message` the roster (a household run's only voice — its terminal result is recorded, not
- * sent), and delivering runs get `send_image`. No `schedule`/`delegate` grants ever
- * (anti-recursion, D-SC4 — a scheduled run
+ * `message` the roster (a nobody-audience run's only voice — its terminal result is recorded,
+ * not sent). No `schedule`/`delegate` grants ever (anti-recursion, D-SC4 — a scheduled run
  * cannot create schedules or spawn children). Tool `execute`s are step-wrapped so a replay
- * never re-applies a non-idempotent action. The outcome is always recorded (`recordRun`); the
- * reply is reported to the schedule's audience via the shared bus — so a `household`
- * maintenance schedule (nightly memory consolidation) records its result but sends NO 2am text.
+ * never re-applies a non-idempotent action. The outcome is always recorded (`recordRun`);
+ * the run is a REPORTER (unified-voice-layer D-VL1): its final text is an attributed report
+ * to its audience's conversation loop, mediated by a woken relay turn — never a direct
+ * gateway send — and a `nobody`-audience maintenance schedule (nightly memory consolidation)
+ * records its result while waking nothing.
  */
 export interface ScheduledJobInput {
   scheduleId: string;
   runId: string;
   prompt: string;
   ownerName: string;
-  /** Who the fired run is for — resolved to a delivery thread through the bus (run-audiences
-   *  D-RA2). `household` = record-only (structurally silent, e.g. nightly consolidation). */
+  /** Who the fired run is for — its reports land on this audience's conversation loop
+   *  (unified-voice-layer D-VL1). `nobody` = record-only (structurally silent, e.g.
+   *  nightly consolidation). */
   audience: Audience;
+  /** The schedule's label, used to attribute the run's reports (`<label> (scheduled): …`,
+   *  D-VL2); omitted → a generic "schedule". */
+  label?: string;
   /** The grants this run is endowed (D-RA5); omitted → the memory-maintenance default. */
   authority?: string[];
   /** Model id for this run (D-DS9); defaults to the standard job model. */
@@ -50,16 +54,34 @@ const DEFAULT_SCHEDULE_GRANTS = ['memory_read', 'memory_write'];
 export async function runScheduledJob(input: ScheduledJobInput): Promise<void> {
   'use workflow';
 
+  // The one-speaker constructibility gate (D-VL10): a worker input can never carry a chat
+  // audience — only the router mints chat runs. Defense against hand-crafted inputs; the
+  // spawn surfaces themselves only produce nobody/agent.
+  if (input.audience.kind === 'chat') {
+    throw new Error('a scheduled run cannot have a chat audience (one-speaker rule, D-VL10)');
+  }
+
   const grants = input.authority ?? DEFAULT_SCHEDULE_GRANTS;
   const setup = await buildSetup(input.model ?? DEFAULT_SCHEDULED_MODEL, input.audience, grants);
+
+  // The run's identity stamps every report it emits (D-VL2/D-VL10).
+  const identity: RunIdentity = {
+    id: input.scheduleId,
+    name: input.label ?? 'schedule',
+    kind: 'scheduled',
+  };
+  // The audience's bound thread, when it has one (Langfuse session + run-scoped tools).
+  const boundThreadId =
+    input.audience.kind !== 'nobody' && input.audience.mailbox.by === 'thread'
+      ? input.audience.mailbox.threadId
+      : undefined;
 
   const { result } = await streamAgent({
     // `observe` gives the fired run exactly-once generation spans in Langfuse. Session = the
     // audience's thread when it has one; otherwise group the schedule's firings together.
     model: buildTurnModel(setup.modelId, setup.testModelResponses, {
       functionId: 'scheduled-job',
-      sessionId:
-        input.audience.kind === 'thread' ? input.audience.threadId : `schedule:${input.scheduleId}`,
+      sessionId: boundThreadId ?? `schedule:${input.scheduleId}`,
     }),
     instructions: setup.instructions,
     tools: {
@@ -69,47 +91,46 @@ export async function runScheduledJob(input: ScheduledJobInput): Promise<void> {
       ...grantTools(grants, {
         ownerScope: setup.subject === input.ownerName,
         runs: {
-          threadId: input.audience.kind === 'thread' ? input.audience.threadId : '',
+          threadId: boundThreadId ?? '',
           subject: setup.subject,
         },
         mcpTools: setup.mcpTools,
       }),
       // How the run SPEAKS is the AUDIENCE axis, never a grant (D-RA14 revised 2026-07-07):
       // - message: EVERY scheduled run can deliberately fan out to roster members — including a
-      //   household run (whose terminal result is recorded only; the message tool is its one way
-      //   to reach people, e.g. a household job briefing each member). Roster-only; a delivering
-      //   run is refused its OWN subject (that person gets the terminal result — no double-send).
-      // - send_image: delivering (thread/person) audiences get the one outbound-media verb, same
-      //   as the conversation profile — a household run has no single recipient for it.
+      //   nobody-audience run (whose terminal result is recorded only; the message tool is its
+      //   one way to reach people, e.g. a job briefing each member). Roster-only; a delivering
+      //   run is refused its OWN subject (that person gets the terminal report — no double-send).
+      // No send_image (unified-voice-layer D-VL9): a reporter references produced media by path
+      // in its report; the mediating conversation turn sends it with its own send_image.
       message: tool({
         ...MESSAGE_SPEC,
-        execute: ({ recipient, text }) => scheduledMessageStep(input.audience, recipient, text),
+        execute: ({ recipient, text }) => scheduledMessage(input.audience, recipient, text),
       }),
-      ...(input.audience.kind !== 'household'
-        ? {
-            send_image: tool({
-              ...SEND_IMAGE_SPEC,
-              execute: ({ pathOrUrl, caption }) =>
-                scheduledSendImageStep(input.audience, caption ?? '', pathOrUrl),
-            }),
-          }
-        : {}),
     },
     providerOptions: {
       anthropic: { thinking: { type: 'adaptive', display: 'omitted' }, effort: 'high' },
     },
     messages: [{ role: 'user', content: input.prompt }],
+    // Mid-task <report> blocks deliver as they complete (the reporter voice block PROMISES
+    // immediate delivery — code-review 2026-07-15: the prompt contract without this wiring
+    // silently dropped blocker reports written before a later tool step).
+    reportBlocks: { send: (text) => deliver(input.audience, text, identity) },
   });
 
-  // Record-always ⟂ emit-by-target (D-DS14): the outcome is recorded regardless of output target
-  // (so a `silent` run is still inspectable), then reported only when not silent. `recoverOnMiss:
-  // 'rawtext'` — the agent's final text is the deliverable. Silence is the same <no-reply/>
-  // sentinel as the conversation profile (unified 2026-07-13): its presence means the run has
-  // nothing to send — the RAW text (sentinel and any working notes included) still lands in
-  // `schedule_runs`, but nothing reaches the audience.
+  // Record-always ⟂ report-by-audience (D-DS14; unified-voice-layer D-VL1): the RAW outcome is
+  // recorded first (so every run is inspectable), then the parsed speech is dispatched as ONE
+  // attributed report to the audience's conversation loop — never a direct gateway send. A
+  // `nobody` audience records only (deliver no-ops); a final containing the silence sentinel
+  // delivers nothing. Leftover <report> blocks in the FINAL text (never seen by the
+  // step-boundary scan) are folded into the terminal report rather than delivered separately —
+  // each agent delivery wakes the relay loop, so N separate sends could drive N relay turns
+  // (code-review 2026-07-15).
   const text = finalAssistantText(result.messages);
   await recordRun(input.runId, text);
-  await deliver(input.audience, stripNoReply(text).text);
+  const speech = finalizeSpeech(text, 'reporter');
+  const terminal = [...speech.reports, speech.final].filter(Boolean).join('\n\n');
+  await deliver(input.audience, terminal, identity);
 }
 
 interface ScheduledSetup {
@@ -149,7 +170,7 @@ async function buildSetup(
   const core = loadCore(memoryPaths(config.runtimeDir));
   const skillsIndex = renderSkillIndex(loadAllSkills(config), config.skills);
   // Frame the run for its subject (D-RA4), derived from the audience — a schedule fired in Kate's
-  // thread reports for Kate, not the owner. `household` (consolidation) → owner framing.
+  // thread reports for Kate, not the owner. `nobody` (consolidation) → owner framing.
   const subject = subjectName(audience, config);
 
   // Live MCP tool discovery (mcp D-MCP6/7) — only for runs endowed the `mcp` grant. No owner
@@ -166,7 +187,6 @@ async function buildSetup(
 
   return {
     instructions: buildJobPrompt(config, core, skillsIndex, {
-      autonomous: true,
       memoryTools: grants.includes('memory_read') || grants.includes('memory_write'),
       hostTools: grants.includes('bash'),
       subject,
@@ -179,68 +199,54 @@ async function buildSetup(
 }
 
 /**
- * Proactively message a roster member from a scheduled run (run-audiences D-RA10, Phase 3.1).
- * Self-contained `'use step'` (resolves via the shared `resolveRosterMember`, sends via the gateway
- * inline) so it composes as a tool execute without nesting the `deliver` step. Roster-only. A
- * DELIVERING run is refused its OWN audience subject — that person is reached by the terminal
- * result, so self-messaging would double-send. A HOUSEHOLD run has no terminal delivery, so it may
- * message anyone on the roster (fan-out is its only voice).
+ * Resolve a roster recipient for a scheduled run's deliberate fan-out (run-audiences D-RA10,
+ * Phase 3.1). Roster-only; a DELIVERING run is refused its OWN audience subject — that person
+ * is reached by the terminal report, so self-messaging would double-send. A nobody-audience
+ * run has no terminal delivery, so it may message anyone (fan-out is its only voice). The
+ * SEND itself rides the bus (`scheduledMessage` composes this step + `deliver`) — this step
+ * only resolves + refuses with model-facing strings.
  */
-async function scheduledMessageStep(
+async function scheduledResolveRecipientStep(
   audience: Audience,
   recipient: string,
-  text: string,
-): Promise<string> {
+): Promise<string | { threadId: string; name: string }> {
   'use step';
 
   const { getRuntime } = await import('../src/runtime.js');
   const { resolveRosterMember, resolveMemberThread } = await import('../src/agent/audience.js');
-  const { config, store, gateway } = await getRuntime();
+  const { config, store } = await getRuntime();
 
   const member = resolveRosterMember(recipient, config);
   if (!member) {
     const known = [config.owner.name, ...config.family.map((f) => f.name)].join(', ');
     return `I can only message the family roster (${known}); "${recipient}" isn't one, so I sent nothing.`;
   }
-  // No self-send on a DELIVERING run: its own subject already receives the terminal result.
-  // A household run delivers nothing terminally, so nobody is excluded.
-  if (audience.kind !== 'household' && member.name === subjectName(audience, config)) {
-    return `${member.name} already receives this run's result — put it in your final reply instead of messaging them.`;
+  if (audience.kind !== 'nobody' && member.name === subjectName(audience, config)) {
+    return `${member.name}'s conversation already receives this run's report — put it in your final report instead of messaging them.`;
   }
-  // Existing DM if we have one, else a constructed Sendblue DM id (shared resolve tail). Null ⟺
-  // no thread AND no from-number.
   const threadId = await resolveMemberThread(store, member.identity);
   if (!threadId) return `I don't have a conversation with ${member.name} yet and can't start one.`;
-  await gateway.send(threadId, { text }, { persist: true });
-  return `Sent to ${member.name}.`;
+  return { threadId, name: member.name };
 }
 
-/**
- * Send an image from a delivering scheduled run to its OWN audience (the audience axis's one
- * outbound-media verb, mirroring the conversation profile — e.g. a daily chart). Resolves the
- * audience to its bound thread the same way the terminal `deliver` does: thread → direct;
- * person → roster member's DM. `'use step'` — a replay never re-sends.
- */
-async function scheduledSendImageStep(
+/** Deliberate addressed fan-out through the bus: chat speech to the resolved member's DM,
+ *  persisted (it is real conversation content in their thread). The message tool is the one
+ *  sanctioned chat construction outside the conversation profile — deliberate + roster-guarded
+ *  (the one-speaker gate governs TERMINAL audiences, which stay nobody/agent for workers). */
+async function scheduledMessage(
   audience: Audience,
-  caption: string,
-  pathOrUrl: string,
+  recipient: string,
+  text: string,
 ): Promise<string> {
-  'use step';
-
-  const { getRuntime } = await import('../src/runtime.js');
-  const { resolveRosterMember, resolveMemberThread } = await import('../src/agent/audience.js');
-  const { config, store, gateway } = await getRuntime();
-
-  let threadId: string | null = null;
-  if (audience.kind === 'thread') threadId = audience.threadId;
-  else if (audience.kind === 'person') {
-    const member = resolveRosterMember(audience.person, config);
-    if (member) threadId = await resolveMemberThread(store, member.identity);
-  }
-  if (!threadId) return `I can't resolve where to send that image, so I sent nothing.`;
-  await gateway.send(threadId, { text: caption, attachment: { pathOrUrl } }, { persist: true });
-  return 'Image sent.';
+  const target = await scheduledResolveRecipientStep(audience, recipient);
+  if (typeof target === 'string') return target;
+  await deliver(
+    { kind: 'chat', mailbox: { by: 'thread', threadId: target.threadId } },
+    text,
+    undefined,
+    { persist: true },
+  );
+  return `Sent to ${target.name}.`;
 }
 
 async function recordRun(runId: string, output: string): Promise<void> {

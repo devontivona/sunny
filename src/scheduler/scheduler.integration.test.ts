@@ -1,8 +1,9 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  composeScheduleFile,
   createSchedule,
   fileScheduleId,
   FileScheduleRegistry,
@@ -205,7 +206,7 @@ describe('scheduler ticker (integration)', () => {
     const dream = defs.find((d) => d.name === 'dreaming');
     expect(dream).toBeDefined();
     expect(dream!.cron).toBe('30 */4 * * *');
-    expect(dream!.outputTarget).toBe('silent');
+    expect(dream!.audience).toBe('nobody'); // record-only — the silent maintenance case
     expect(dream!.authority).toEqual([
       'memory_read',
       'memory_write',
@@ -225,10 +226,23 @@ describe('scheduler ticker (integration)', () => {
 
     const def = parseScheduleFile(
       'dreaming',
-      '---\ncron: "30 */4 * * *"\noutputTarget: silent\nauthority: memory_read, bash\n---\nDream.',
+      '---\ncron: "30 */4 * * *"\naudience: nobody\nauthority: memory_read, bash\n---\nDream.',
     );
     expect(def.authority).toEqual(['memory_read', 'bash']);
-    expect(def.outputTarget).toBe('silent');
+    expect(def.audience).toBe('nobody');
+  });
+
+  it('legacy outputTarget frontmatter migrates to the audience it implied (D-VL5)', () => {
+    const silent = parseScheduleFile(
+      'x',
+      '---\ncron: "* * * * *"\noutputTarget: silent\n---\nbody',
+    );
+    expect(silent.audience).toBe('nobody');
+    const user = parseScheduleFile('x', '---\ncron: "* * * * *"\noutputTarget: user\n---\nbody');
+    expect(user.audience).toBeUndefined(); // absent → the owner's conversation loop
+    // The composed round-trip never re-emits the retired key.
+    expect(composeScheduleFile(silent)).not.toContain('outputTarget');
+    expect(composeScheduleFile(silent)).toContain('audience: nobody');
   });
 
   it('parseScheduleFile rejects invalid definitions loudly', () => {
@@ -239,7 +253,57 @@ describe('scheduler ticker (integration)', () => {
     );
     expect(() =>
       parseScheduleFile('x', '---\ncron: "* * * * *"\noutputTarget: shout\n---\nbody'),
-    ).toThrow(/invalid outputTarget/);
+    ).toThrow(/invalid legacy outputTarget/);
+    expect(() =>
+      parseScheduleFile('x', '---\ncron: "* * * * *"\naudience: everyone\n---\nbody'),
+    ).toThrow(/invalid audience/);
+    // The pre-collapse spelling still parses, canonicalized.
+    expect(
+      parseScheduleFile('x', '---\ncron: "* * * * *"\naudience: household\n---\nbody').audience,
+    ).toBe('nobody');
+  });
+
+  it('legacy files with BOTH audience and outputTarget parse with the audience winning (code-review)', () => {
+    // The pre-collapse composeScheduleFile wrote `outputTarget:` UNCONDITIONALLY, so every
+    // old file created with an explicit audience carries both keys — throwing here would
+    // silently kill those schedules at boot (warn-and-skip). The audience wins, matching the
+    // old runtime's fire-time precedence.
+    const both = parseScheduleFile(
+      'x',
+      '---\ncron: "* * * * *"\naudience: person:Kate\noutputTarget: user\n---\nbody',
+    );
+    expect(both.audience).toBe('person:Kate');
+    const silentBoth = parseScheduleFile(
+      'x',
+      '---\ncron: "* * * * *"\naudience: household\noutputTarget: silent\n---\nbody',
+    );
+    expect(silentBoth.audience).toBe('nobody');
+    // And the rewrite drops the retired key entirely.
+    expect(composeScheduleFile(both)).not.toContain('outputTarget');
+  });
+
+  it('load-time migration: legacy FRONTMATTER is rewritten once; a body mentioning outputTarget is not (code-review)', () => {
+    const dir = standingSchedulesDir(runtimeDir);
+    mkdirSync(dir, { recursive: true });
+    // Legacy frontmatter → rewritten canonically on load, schedule still registered.
+    writeFileSync(
+      join(dir, 'legacy.md'),
+      '---\ncron: "0 9 * * *"\noutputTarget: silent\n---\nDo the thing.\n',
+    );
+    // Canonical frontmatter whose BODY documents the file format — the detection must be
+    // frontmatter-scoped or this file is rewritten (and state-committed) on EVERY boot.
+    const canonical =
+      '---\ncron: "0 9 * * *"\naudience: nobody\n---\nSchedule files once used outputTarget: user in frontmatter.\n';
+    writeFileSync(join(dir, 'canonical.md'), canonical);
+
+    const reg = FileScheduleRegistry.load({ runtimeDir, threadId: OWNER_THREAD, timezone: TZ });
+    const legacy = reg.list().find((s) => s.label === 'legacy');
+    expect(legacy?.audience).toBe('nobody');
+    const rewritten = readFileSync(join(dir, 'legacy.md'), 'utf8');
+    expect(rewritten).not.toContain('outputTarget');
+    expect(rewritten).toContain('audience: nobody');
+    // The canonical file is byte-untouched despite its body.
+    expect(readFileSync(join(dir, 'canonical.md'), 'utf8')).toBe(canonical);
   });
 
   it('a standing schedule created live fires through dispatch under its stable id, and stops when deleted', async () => {
@@ -287,15 +351,19 @@ describe('scheduler ticker (integration)', () => {
 
   it('migrateCronRowsToStanding converts cron rows to standing files and deletes them', async () => {
     const registry = new FileScheduleRegistry({ runtimeDir, threadId: OWNER_THREAD, timezone: TZ });
-    await createSchedule(tdb.db, {
+    // A legacy silent cron row post-0013 carries audience 'nobody' (the migration backfilled
+    // output_target before dropping it); the row-to-standing-file migration must preserve it.
+    await tdb.db.insert(schedules).values({
       kind: 'cron',
       spec: '0 5 * * *',
       prompt: 'Run the daily Craft resource-tagging job.',
       threadId: OWNER_THREAD,
       timezone: TZ,
       label: 'craft-daily-resource-tagging',
-      outputTarget: 'silent',
+      audience: 'nobody',
       authority: ['memory_read', 'bash'],
+      nextRunAt: new Date(Date.now() + 60_000),
+      active: true,
     });
     await createSchedule(tdb.db, {
       kind: 'once',
@@ -312,13 +380,15 @@ describe('scheduler ticker (integration)', () => {
     const migrated = registry.list().find((f) => f.label === 'craft-daily-resource-tagging');
     expect(migrated?.fileClass).toBe('standing');
     expect(migrated?.spec).toBe('0 5 * * *');
-    expect(migrated?.outputTarget).toBe('silent');
+    // The legacy silent flag became the audience it implied (D-VL5).
+    expect(migrated?.audience).toBe('nobody');
     expect(migrated?.authority).toEqual(['memory_read', 'bash']);
-    // Round-trips through the file on disk.
+    // Round-trips through the file on disk — in the audience format, never the retired key.
     const raw = readFileSync(
       join(standingSchedulesDir(runtimeDir), 'craft-daily-resource-tagging.md'),
       'utf8',
     );
+    expect(raw).not.toContain('outputTarget');
     expect(parseScheduleFile('craft-daily-resource-tagging', raw).cron).toBe('0 5 * * *');
   });
 

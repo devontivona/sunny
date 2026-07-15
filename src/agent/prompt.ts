@@ -1,9 +1,10 @@
 import type { SunnyConfig } from '../config/index.js';
 import type { MemoryCore } from '../memory/index.js';
+import { voiceBlock } from './voice.js';
 
 /**
  * System-prompt builders. The interactive turn (`buildSystemPrompt`) and the
- * durable jobs (`buildJobPrompt`, used by `workflows/job.ts` + `scheduledJob.ts`)
+ * durable jobs (`buildJobPrompt`, used by `workflows/scheduledJob.ts`)
  * share the delivery-AGNOSTIC pieces — identity, iMessage voice, memory semantics,
  * the skills index, and the always-on memory core — so a job inherits the same
  * behavior and skill-awareness as the main thread and never drifts from it. The one
@@ -226,9 +227,13 @@ export function buildSystemPrompt(
 
 // --- durable jobs (background + scheduled) ---------------------------------
 
+/** How a job's reporter lane names its reader (D-VL7): the conversation loop that speaks for
+ *  the run's subject — the run itself never composes the user-facing text. */
+function reporterRecipient(subject: string): string {
+  return `the conversation that speaks for ${subject}`;
+}
+
 export interface JobPromptOptions {
-  /** Fully autonomous scheduled run (vs an owner-initiated background task). */
-  autonomous?: boolean;
   /** Whom this run acts for and reports to (run-audiences D-RA4 — the audience's subject).
    *  Defaults to the owner; a family-scoped job/schedule frames + addresses this person instead,
    *  so a run fired in Kate's thread is no longer framed as (or addressed to) the owner. Sunny's
@@ -259,10 +264,9 @@ export function buildJobPrompt(
   const subject = opts.subject ?? owner;
   const forSubject = subject === owner ? '' : ` for ${subject}`;
   const lines: string[] = [
-    `You are Sunny, ${owner}'s personal AI assistant, completing a task${forSubject} ${
-      opts.autonomous ? 'on a schedule' : 'in the background'
-    } — no human is watching live, so you cannot ask follow-up questions. Make reasonable`,
-    `assumptions and finish the task end to end.`,
+    `You are Sunny, ${owner}'s personal AI assistant, completing a task${forSubject} on a`,
+    `schedule — no human is watching live, so you cannot ask follow-up questions. Make`,
+    `reasonable assumptions and finish the task end to end.`,
     ``,
   ];
 
@@ -285,19 +289,10 @@ export function buildJobPrompt(
     lines.push(...memorySection(owner), ``);
   }
 
-  lines.push(
-    `When the task is done, reply with a concise, friendly result for ${subject} over iMessage —`,
-    `plain text, no markdown (e.g. the finished link).` +
-      (opts.autonomous
-        ? // Silence-by-sentinel, same contract as the conversation turn (2026-07-04 grid:
-          // "reply with nothing" is the instruction models can't follow — they invent their
-          // own sentinels; give them the real one). Presence = silence: any reply containing
-          // the token sends nothing, so working notes around it are never delivered.
-          ` If there is nothing worth sending, make your reply exactly <no-reply/> —` +
-          ` a reply containing that token sends ${subject} nothing at all.`
-        : ` If you genuinely could not complete it, say so plainly and briefly explain why; do` +
-          ` not fabricate a result.`),
-  );
+  // The reporter speech contract (unified-voice-layer D-VL1/7): a scheduled run's final text
+  // is a REPORT mediated by the subject's conversation loop — never a direct iMessage. The
+  // shared voice layer states the whole contract; nothing delivery-related is hand-written here.
+  lines.push(...voiceBlock({ lane: 'reporter', recipient: reporterRecipient(subject) }));
 
   const memory = `${lines.join('\n')}\n\n${memoryCoreBlock(core)}`;
   // Every run profile carries the full skills index (2026-07-07): even a memory-only run
@@ -331,17 +326,9 @@ export function buildSubagentPrompt(
     `You have real tools — USE them, do not describe using them. NEVER write a tool call as text;`,
     `only real tool calls do anything. (Your available tools are limited to what the task needs.)`,
     ``,
-    `How you report:`,
-    `- Your FINAL text is your report — it is delivered to your orchestrator verbatim when you`,
-    `  finish. End your turn on the report itself.`,
-    `- Make it a COMPACT, STRUCTURED summary — the answer, not a transcript. Do NOT paste raw`,
-    `  tool output. State what you found / did and any caveats, briefly.`,
-    `- Most tasks need no progress report. For a genuinely long task, or when you hit something`,
-    `  your orchestrator should know NOW (a blocker, a surprise), write <report>…</report> on its`,
-    `  own lines mid-task — its content is delivered immediately and you keep working. Everything`,
-    `  outside these blocks and your final text is private working space.`,
-    `- If there is genuinely nothing your orchestrator needs back, make your entire final text`,
-    `  <no-report/> — that delivers nothing.`,
+    // The reporter speech contract comes from the shared voice layer (D-VL3) — same lane as a
+    // scheduled run, read by "your orchestrator" instead of a conversation loop.
+    ...voiceBlock({ lane: 'reporter', recipient: 'your orchestrator' }),
     `- Stay strictly within your task's boundaries; do not take actions beyond what was asked.`,
     ``,
     `Your run has a hard model-usage budget (~$50) and a step cap; you'll get a budget notice`,
@@ -361,20 +348,14 @@ export function buildSubagentPrompt(
 /**
  * Text delivery (the text-as-reply architecture, 2026-07): the model's reply text IS the
  * message — the trained "final text answers the user" prior becomes the correct behavior,
- * so history reinforces instead of poisons (the PR #30 finding). The text a turn ENDS on is
- * delivered as one message; text written between tool calls is interim narration that a cheap
- * translator relays as progress updates on long turns. The ack framing in the silence bullet
- * is kept VERBATIM from the PR #30 composer arm (it held silence 5/6 there — don't reword it).
+ * so history reinforces instead of poisons (the PR #30 finding). The speech CONTRACT itself
+ * (verbatim-one-message, working-notes privacy, silence sentinel, worker-report addressing)
+ * comes from the shared voice layer (`voiceBlock`, unified-voice-layer D-VL3) — this function
+ * only adds the interactive-conversation framing around it.
  */
 function howYouSpeakText(owner: string): string[] {
   return [
-    `How you speak — read carefully:`,
-    `- Your reply IS the message: the text you end your turn with is delivered to ${owner} as`,
-    `  one iMessage, exactly as written. Write it the way a person texting back would —`,
-    `  concise, warm, plain text, no markdown.`,
-    `- While you're working with tools, brief working notes as you go are fine — they're the`,
-    `  source material for short progress updates relayed to ${owner} during long tasks; the`,
-    `  notes themselves aren't delivered. Jot what you're doing and what you found as you go.`,
+    ...voiceBlock({ lane: 'speaker', subject: owner }),
     `- Your final text must stand on its own as the complete reply: by the time it arrives, the`,
     `  work is done — so never end a turn on "let me check…" or "one sec"; end it on the answer.`,
     `  (For genuinely long work, delegate it instead and say you're on it.)`,
@@ -390,11 +371,5 @@ function howYouSpeakText(owner: string): string[] {
     `- To send an image, call send_image with its local file path (a file you produced) or a`,
     `  URL — never paste raw bytes or describe an image as if it were attached. Check it with`,
     `  view_image FIRST; send only the final version, once.`,
-    `- Silence is valid: when ${owner}'s message just closes the loop — a 👍 or reaction, "ok",`,
-    `  "thanks", "got it", "sounds good" — and you have nothing genuinely useful to add, reply`,
-    `  with exactly <no-reply/> and nothing else. A reply containing that token is not sent —`,
-    `  ${owner} receives no message — and it is the ONLY way to say nothing. Don't acknowledge`,
-    `  every acknowledgment — that's noise. But the instant there IS something worth saying,`,
-    `  just say it.`,
   ];
 }

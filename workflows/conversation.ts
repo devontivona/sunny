@@ -14,6 +14,7 @@ import {
   GROUP_AUTHORITY,
   OWNER_DM_AUTHORITY,
   TRUSTED_DM_AUTHORITY,
+  parseAudienceRef,
   type Authority,
 } from '../src/agent/audience.js';
 import type { ChildToolset } from './subagent.js';
@@ -25,12 +26,12 @@ import {
   extractFinalText,
   extractInterimText,
   extractToolResultText,
-  stripNoReply,
   translatorPart,
   usageOf,
   type Delivery,
 } from '../src/agent/delivery.js';
-import { grantTools, listRunsStep, streamAgent } from './runShell.js';
+import { finalizeSpeech } from '../src/agent/voice.js';
+import { deliver, grantTools, listRunsStep, streamAgent } from './runShell.js';
 
 /**
  * Tier-1 durable conversational turn (durable-main-loop). ONE run = ONE turn (design D1,
@@ -144,7 +145,7 @@ export async function runConversation(input: ConversationInput): Promise<void> {
       // live-pane publish (translator sends never ride the model stream, so without
       // this the dashboard's live view can't show them).
       send: async (text) => {
-        await sendStep(threadId, text);
+        await deliver(chatAudience(threadId), text);
         await publishTranslatorLiveStep(threadId, text);
       },
     },
@@ -235,14 +236,15 @@ async function finalizeTurn(args: {
   let recovered = false;
 
   const interim = extractInterimText(parts);
-  // Silence is the <no-reply/> sentinel reply, parsed out here; the raw text (sentinel
-  // included) still persists in the row, so history carries the exact silence precedent.
-  const parsed = stripNoReply(extractFinalText(parts));
-  let finalText = parsed.text;
+  // Silence is the <no-reply/> sentinel reply, parsed by the shared voice layer (speaker
+  // lane); the raw text (sentinel included) still persists in the row, so history carries
+  // the exact silence precedent.
+  const speech = finalizeSpeech(extractFinalText(parts), 'speaker');
+  let finalText = speech.final;
   let delivered: Delivery = classifyTextDelivery(
     finalText,
     interim,
-    parsed.sentinel,
+    speech.sentinel,
     args.finishReason,
   );
   // Whether the user actually received something this turn (a reply, or a delivered backstop).
@@ -254,7 +256,7 @@ async function finalizeTurn(args: {
   if (delivered === 'text') {
     // One message per reply (2026-07-05: bubble-splitting on blank lines was too noisy —
     // a multi-paragraph reply arrives as a single text).
-    await sendStep(threadId, finalText);
+    await deliver(chatAudience(threadId), finalText);
     sent = true;
   } else if (delivered === 'fallback_text') {
     // Abnormal turn end: the turn narrated work but never wrote the reply (step limit,
@@ -265,7 +267,7 @@ async function finalizeTurn(args: {
     recovered = true;
     const recoveryText = await recoverDelivery(threadId, subject, priorMessages, interim);
     if (recoveryText) {
-      await sendStep(threadId, recoveryText);
+      await deliver(chatAudience(threadId), recoveryText);
       // Recorded as a PLAIN TEXT part — never a synthetic tool part (tool_use id hygiene).
       // Replayed as history it reads as the turn's final reply text, so the persisted
       // precedent reinforces the correct shape (the PR #30 self-reinforcement argument).
@@ -320,7 +322,7 @@ async function finalizeTurn(args: {
   //  - a failed backstop → NOT answered, even if the turn did tool work (no reply reached the user).
   //  - tool activity but no text/sentinel (e.g. an image sent via a tool) → answered (work landed).
   //  - nothing deliverable at all → NOT answered.
-  if (sent || parsed.sentinel) return true;
+  if (sent || speech.sentinel) return true;
   if (backstopFailed) return false;
   if (parts.some((p) => p.type.startsWith('tool-'))) return true;
   return false;
@@ -364,8 +366,16 @@ function buildTools(ctx: {
       ...SEND_IMAGE_SPEC,
       // Params typed explicitly: with `toModelOutput` in the spec, tool()'s overload
       // inference can no longer derive them from the zod schema.
-      execute: ({ pathOrUrl, caption }: { pathOrUrl: string; caption?: string }) =>
-        sendStep(threadId, caption ?? '', pathOrUrl),
+      execute: async ({ pathOrUrl, caption }: { pathOrUrl: string; caption?: string }) => {
+        // Speech through the bus (audience collapse): required media — an undeliverable
+        // image aborts the whole send (image-send-integrity); the outcome step builds the
+        // model-facing result (incl. the self-vision preview) from the journaled SendResult.
+        const result = await deliver(chatAudience(threadId), {
+          text: caption ?? '',
+          attachment: { pathOrUrl, required: true },
+        });
+        return imageOutcomeStep(result);
+      },
     }),
     // view_image (self-vision, image-send-integrity) is NOT registered here: it rides the
     // `file_read` grant in `grantTools` — every run that can read files can see images.
@@ -406,7 +416,7 @@ function buildTools(ctx: {
       ? {
           message: tool({
             ...MESSAGE_SPEC,
-            execute: ({ recipient, text, image }) => messageStep(threadId, recipient, text, image),
+            execute: ({ recipient, text, image }) => relayToPerson(threadId, recipient, text, image),
           }),
         }
       : {}),
@@ -467,6 +477,22 @@ async function setupTurn(threadId: string, isGroup: boolean): Promise<TurnSetup>
     if (seen.has(id)) continue;
     seen.add(id);
     familyRefs.push({ id, name: m.senderName ?? m.senderId, identity: m.senderId });
+  }
+  // A never-contacted family DM has no user rows yet, but the thread id itself encodes who
+  // the conversation is WITH — e.g. a person-audience schedule's first report waking Kate's
+  // constructed DM (audience collapse follow-up, code-review 2026-07-15). Without this the
+  // relay turn is framed for the OWNER while its replies land on Kate's phone. The owner
+  // case needs no fallback: owner framing is already the default.
+  if (!isGroup && !ownerPresent && familyRefs.length === 0) {
+    const { rosterMemberOfThread } = await import('../src/agent/audience.js');
+    const encoded = rosterMemberOfThread(threadId, config);
+    if (encoded && encoded.name !== config.owner.name) {
+      familyRefs.push({
+        id: personId(encoded.identity),
+        name: encoded.name,
+        identity: encoded.identity,
+      });
+    }
   }
   const docs = await ensureAndLoadPeople(config, familyRefs);
   const people = docs.length > 0 ? { ownerPresent, docs } : undefined;
@@ -614,27 +640,26 @@ async function waitStep(seconds?: number): Promise<string> {
 /** Deliver a message by threadId (REST send via the gateway; D2). Memoized as a step so a
  *  replayed turn does NOT re-send. Returns the media outcome for the persisted turn.
  *
- *  Image sends (image-send-integrity, 2026-07-10) are REQUIRED media: the gateway waits
- *  for the file to be ready and otherwise aborts the whole send (no caption-only text —
- *  the Jul 10 spam incident), and this step reports the failure as a structured
- *  `not_sent` the tool surfaces as an error instead of the old lying bare 'delivered'.
- *  A delivered image comes back with a downscaled `preview` so the model SEES what the
- *  user received (`sendImageToModelOutput`); the preview is stripped at persist. */
-async function sendStep(
-  threadId: string,
-  text: string,
-  image?: string,
+/** The conversational turn's own voice on the bus (audience collapse): the ONE chat audience
+ *  this profile speaks to — its thread's people. Every reply-lane egress (terminal reply,
+ *  backstop, translator updates, send_image) is a `deliver(chatAudience(threadId), …)` call,
+ *  so the bus's chat lane is the live — and only — gateway-speech seam. Pure constructor;
+ *  only this router-minted profile builds a chat audience (one-speaker rule, D-VL10). */
+function chatAudience(threadId: string) {
+  return { kind: 'chat', mailbox: { by: 'thread', threadId } } as const;
+}
+
+/** send_image's model-facing outcome from the journaled SendResult (image-send-integrity,
+ *  2026-07-10): REQUIRED media means the gateway aborted the whole send if the image wasn't
+ *  deliverable (no caption-only text — the Jul 10 spam incident), reported here as a
+ *  structured `not_sent`. A delivered image comes back with a downscaled `preview` so the
+ *  model SEES what the user received (`sendImageToModelOutput`); the preview is stripped at
+ *  persist. Its own step (previewFromFile reads the filesystem). */
+async function imageOutcomeStep(
+  result: Awaited<ReturnType<typeof deliver>>,
 ): Promise<SendImageOutput | string> {
   'use step';
 
-  const { getRuntime } = await import('../src/runtime.js');
-  const { gateway } = await getRuntime();
-  const result = await gateway.send(
-    threadId,
-    { text, ...(image ? { attachment: { pathOrUrl: image, required: true } } : {}) },
-    { persist: false },
-  );
-  if (!image) return 'delivered';
   if (result?.mediaError || !result?.media) {
     return {
       status: 'not_sent',
@@ -881,8 +906,7 @@ async function messageStep(
   parentThreadId: string,
   recipient: string,
   text: string,
-  image?: string,
-): Promise<string> {
+): Promise<string | { refusal: string } | { threadId: string; name: string }> {
   'use step';
 
   const { getRuntime } = await import('../src/runtime.js');
@@ -903,59 +927,59 @@ async function messageStep(
           `more from it, delegate a fresh task (include the prior result in the brief).`;
   }
 
-  // Person recipient — relay to a roster member on their own bound thread.
-  return personRelayStepBody(rt, recipient, text, image);
+  // Person recipient: resolve here (model-facing refusals — better than the bus's
+  // owner-notify for a tool call); the SEND itself rides the bus below, outside this step.
+  const { resolveRosterMember, resolveMemberThread } = await import('../src/agent/audience.js');
+  const member = resolveRosterMember(recipient, rt.config);
+  if (!member) {
+    const known = [rt.config.owner.name, ...rt.config.family.map((f) => f.name)].join(', ');
+    return {
+      refusal:
+        `I can only text people in your family roster (right now: ${known}). ` +
+        `"${recipient}" isn't one of them, so I didn't send anything.`,
+    };
+  }
+  const dmThreadId = await resolveMemberThread(rt.store, member.identity);
+  if (!dmThreadId) {
+    return {
+      refusal: `I don't have a conversation with ${member.name} yet and can't start one right now.`,
+    };
+  }
+  return { threadId: dmThreadId, name: member.name };
 }
 
 /**
- * Relay body for a person recipient (multiplayer-family: cross-thread sends). Resolves the
- * recipient against the owner/family roster (ROSTER-ONLY — arbitrary numbers are refused), finds
- * their existing bound DM thread (or constructs one), and proactively sends + persists into THAT
- * thread. Runs INSIDE `messageStep`'s `'use step'`, so it takes the resolved runtime (not its own
- * step) and a durable replay never double-texts.
+ * Relay to a person via the bus (multiplayer-family cross-thread sends; audience collapse):
+ * deliberate ADDRESSED chat speech to the member's own DM — `deliver(chat(byThread(dm)))`,
+ * persisted (a relay is real conversation content in the recipient's thread), with an
+ * optional REQUIRED image exactly like send_image (image-send-integrity: an unready file
+ * aborts the whole send, never degrades to caption-only). Resolution happens in
+ * `messageStep` (model-facing refusals); this composes the two journaled steps + pure
+ * formatting, so a durable replay never double-texts.
  */
-async function personRelayStepBody(
-  rt: Awaited<ReturnType<typeof import('../src/runtime.js').getRuntime>>,
-  person: string,
+async function relayToPerson(
+  parentThreadId: string,
+  recipient: string,
   text: string,
   image?: string,
 ): Promise<string> {
-  const { resolveRosterMember, resolveMemberThread } = await import('../src/agent/audience.js');
-  const { config, store, gateway } = rt;
-
-  // Resolve the recipient against the roster (owner + family) — the SINGLE shared matcher.
-  const member = resolveRosterMember(person, config);
-  if (!member) {
-    const known = [config.owner.name, ...config.family.map((f) => f.name)].join(', ');
-    return (
-      `I can only text people in your family roster (right now: ${known}). ` +
-      `"${person}" isn't one of them, so I didn't send anything.`
-    );
-  }
-
-  // Address their existing DM if we have one; otherwise construct a Sendblue DM id (the shared
-  // resolve-roster-member → find-thread → fallback tail). Null ⟺ no thread AND no from-number.
-  const threadId = await resolveMemberThread(store, member.identity);
-  if (!threadId) {
-    return `I don't have a conversation with ${member.name} yet and can't start one right now.`;
-  }
-
-  // An optional image rides along as a single outbound attachment, exactly like send_image's
-  // path: REQUIRED media (image-send-integrity) — if the file isn't ready the whole send is
-  // aborted and reported, never silently degraded to a text that claims an image.
-  const result = await gateway.send(
-    threadId,
+  const target = await messageStep(parentThreadId, recipient, text);
+  if (typeof target === 'string') return target; // child-steer outcome
+  if ('refusal' in target) return target.refusal;
+  const result = await deliver(
+    chatAudience(target.threadId),
     { text, ...(image ? { attachment: { pathOrUrl: image, required: true } } : {}) },
+    undefined,
     { persist: true },
   );
   if (image && (result?.mediaError || !result?.media)) {
     return (
-      `NOT sent to ${member.name}: ${result?.mediaError ?? 'the channel could not attach the image'}. ` +
+      `NOT sent to ${target.name}: ${result?.mediaError ?? 'the channel could not attach the image'}. ` +
       `Nothing was delivered (not even the text). Fix the image (view_image shows you the ` +
       `finished file) and retry, or resend without the image.`
     );
   }
-  return image ? `Sent to ${member.name} (with image).` : `Sent to ${member.name}.`;
+  return image ? `Sent to ${target.name} (with image).` : `Sent to ${target.name}.`;
 }
 
 /**
@@ -977,6 +1001,8 @@ async function scheduleCreateStep(
     spec: string;
     prompt: string;
     label?: string;
+    deliver_to?: string;
+    /** Deprecated alias of deliver_to — models imitate old calls from recorded history. */
     for?: string;
     toolset?: 'host' | 'readonly';
   },
@@ -988,16 +1014,23 @@ async function scheduleCreateStep(
   const { rosterMatch, attenuate, authorityForToolset } = await import('../src/agent/audience.js');
   const { db, config, fileSchedules } = await getRuntime();
 
-  // "for" schedules this on behalf of ANOTHER family member (run-audiences #4): store an explicit
-  // `person:<name>` audience so the fired run acts for + delivers to them, not the creating thread.
+  // deliver_to is the AUDIENCE axis (unified-voice-layer D-VL6): whose conversation loop
+  // receives the fired run's reports — a roster member (`person:<name>`), or `nobody`
+  // (a silent artifact/pipeline job, record-only). Omitted → the current subject. The
+  // deprecated `for` alias is honored so an old-shape call never silently drops addressing.
+  const deliverTo = args.deliver_to ?? args.for;
   let audience: string | undefined;
-  if (args.for) {
-    const name = rosterMatch(args.for, config);
-    if (!name) {
-      const known = [config.owner.name, ...config.family.map((f) => f.name)].join(', ');
-      return `I can only schedule for family roster members (${known}); "${args.for}" isn't one.`;
+  if (deliverTo) {
+    if (deliverTo.trim().toLowerCase() === 'nobody') {
+      audience = 'nobody';
+    } else {
+      const name = rosterMatch(deliverTo, config);
+      if (!name) {
+        const known = [config.owner.name, ...config.family.map((f) => f.name)].join(', ');
+        return `I can only schedule for family roster members (${known}) or "nobody"; "${deliverTo}" isn't one.`;
+      }
+      audience = `person:${name}`;
     }
-    audience = `person:${name}`;
   }
 
   // Monotone attenuation (D-RA5): the preset's grants intersected with this turn's authority —
@@ -1024,9 +1057,8 @@ async function scheduleCreateStep(
         audience,
         authority,
       });
-      const forWhom = audience ? ` for ${audience.slice('person:'.length)}` : '';
       return (
-        `Standing schedule "${standing.label}" created (cron ${args.spec})${forWhom}; next run ` +
+        `Standing schedule "${standing.label}" created (cron ${args.spec})${describeAudience(audience)}; next run ` +
         `${standing.nextRunAt?.toISOString() ?? 'n/a'}. It lives at state/schedules/` +
         `${standing.label}.md — part of your portable identity, restored on any machine.`
       );
@@ -1042,11 +1074,22 @@ async function scheduleCreateStep(
       audience,
       authority,
     });
-    const forWhom = audience ? ` for ${audience.slice('person:'.length)}` : '';
-    return `Scheduled ${row.id} (${row.kind})${forWhom}; next run ${row.nextRunAt?.toISOString() ?? 'n/a'}.`;
+    return `Scheduled ${row.id} (${row.kind})${describeAudience(audience)}; next run ${row.nextRunAt?.toISOString() ?? 'n/a'}.`;
   } catch (err) {
     return `ERROR: ${err instanceof Error ? err.message : String(err)}`;
   }
+}
+
+/** Confirmation-string suffix for a schedule's audience (D-VL6), read through the ONE
+ *  shared ref parser — no local string surgery on the encoding. */
+function describeAudience(audience: string | undefined): string {
+  if (!audience) return '';
+  const parsed = parseAudienceRef(audience);
+  if (parsed?.kind === 'nobody') return ' (silent — outcomes recorded, nobody woken)';
+  if (parsed?.kind === 'agent' && parsed.mailbox.by === 'person') {
+    return ` for ${parsed.mailbox.person}`;
+  }
+  return '';
 }
 
 /**

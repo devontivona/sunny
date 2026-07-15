@@ -1,3 +1,4 @@
+import { finalizeSpeech } from '../agent/voice.js';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { and, desc, eq, isNull, sql } from 'drizzle-orm';
@@ -26,7 +27,6 @@ import {
   extractFinalText,
   extractInterimText,
   extractTranslatorUpdates,
-  stripNoReply,
 } from '../agent/delivery.js';
 
 /**
@@ -786,7 +786,7 @@ function toConversationMessage(row: typeof messages.$inferSelect, senderRole: Ro
     ? [
         ...extractTranslatorUpdates(uiParts).map((u) => u.text),
         // The <no-reply/> sentinel persists in the row but was never delivered.
-        ...[stripNoReply(extractFinalText(uiParts)).text].filter(Boolean),
+        ...[finalizeSpeech(extractFinalText(uiParts), 'speaker').final].filter(Boolean),
       ]
     : parts.map(sendMessageText).filter((t): t is string => t !== null);
   const scratch = (

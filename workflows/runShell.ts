@@ -26,7 +26,8 @@ import {
 } from '../src/agent/tools/credentialManageSpecs.js';
 import { MCP_MANAGE_SPEC, type McpManageInput } from '../src/agent/tools/mcpManageSpecs.js';
 import type { McpToolDef } from '../src/mcp/turnTools.js';
-import type { Audience, Authority } from '../src/agent/audience.js';
+import type { Audience, Authority, RunIdentity } from '../src/agent/audience.js';
+import type { SendResult } from '../src/gateway/types.js';
 
 /**
  * Shared durable-run shell (durable-subagents D-DS11/D-DS14). The conversational turn, background
@@ -327,80 +328,97 @@ function stepNarration(
   return lines.join('\n').trim();
 }
 
+/** What a run speaks: plain text, or text with one outbound attachment (the chat lane's
+ *  media path — required media aborts the whole send when undeliverable, per
+ *  image-send-integrity). Reports (agent lane) are text-only: media rides by PATH in the
+ *  report and the mediating turn sends it (D-VL9). */
+export interface SpeechContent {
+  text: string;
+  attachment?: { pathOrUrl: string; required?: boolean };
+}
+
 /**
- * The single delivery bus (run-audiences D-RA15). Resolve an `Audience` to a Thread and dispatch on
- * its binding — the ONE outward seam every profile uses (the conversation's reply bubbles, the
- * `message` tool, a child's report, AND a run's terminal deliver). Memoized as a `'use step'`, so a replayed run never re-emits.
- *  - household → nothing (no single recipient; the run fans out via the `message` tool). A household
- *                run with no messaging grant is thus structurally silent.
- *  - parent    → append to the parent run's inbox + wake its run-supply (attributed via from*),
- *                folded by `loadSteers` — the detached-mailbox path (D-DS4).
- *  - person    → resolve the roster member to their BOUND DM at delivery time; if unresolvable
- *                (never-contacted / removed), record nothing here and notify the owner (D-RA2).
- *  - thread    → bound (a real conversation) → gateway; detached (`subagent:` inbox) → append+wake.
+ * The single delivery bus (run-audiences D-RA15; unified-voice-layer, audience collapse).
+ * Dispatch on WHO READS the text — the three audience kinds — after resolving the mailbox
+ * (byPerson → the roster member's bound DM at delivery time, notifying the owner when
+ * unresolvable, D-RA2; byThread → that thread). Memoized as a `'use step'`, so a replayed run
+ * never re-emits.
+ *  - nobody → nothing (the run's result is recorded elsewhere; fan-out is the `message` tool).
+ *  - agent  → the mailbox's AGENT reads it: appended as an attributed report
+ *             (`<from.name> (<from.kind>): …`) and — for a real conversation thread — the
+ *             thread's run-supply is woken so a conversational turn mediates it. A detached
+ *             (`subagent:`) inbox is appended without waking (an in-flight recipient folds it
+ *             via `loadSteers`; a finished one is run-to-completion). `from` (the reporting
+ *             run's identity) is REQUIRED — every agent delivery is attributed. Text-only.
+ *  - chat   → the mailbox's PEOPLE read it: gateway-delivered, returning the SendResult so the
+ *             caller can inspect media outcomes. THE one gateway-speech seam: the conversation's
+ *             reply lane (terminal reply, backstop, translator updates, send_image) rides this
+ *             branch — only the router-minted chat profile constructs the audience (the
+ *             one-speaker rule as a constructibility gate at the spawn surfaces).
  */
-export async function deliver(audience: Audience, text: string): Promise<void> {
+export async function deliver(
+  audience: Audience,
+  content: string | SpeechContent,
+  from?: RunIdentity,
+  opts?: { persist?: boolean },
+): Promise<SendResult | undefined> {
   'use step';
 
-  if (!text || audience.kind === 'household') return;
+  const speech: SpeechContent = typeof content === 'string' ? { text: content } : content;
+  if ((!speech.text && !speech.attachment) || audience.kind === 'nobody') return undefined;
 
   const { getRuntime } = await import('../src/runtime.js');
-  const { isChildThread, appendInterRunMessage, reportToParent } =
-    await import('../src/agent/delegation.js');
+  const { reportToParent } = await import('../src/agent/delegation.js');
   const runtime = await getRuntime();
 
-  if (audience.kind === 'parent') {
-    await reportToParent(
-      runtime,
-      { threadId: audience.threadId, fromId: audience.fromId, fromName: audience.fromName },
-      text,
-    );
-    return;
-  }
-
-  // Resolve a `person` audience to a concrete bound thread, or notify the owner it's undeliverable.
+  // Resolve the mailbox to a concrete thread.
   let threadId: string;
-  if (audience.kind === 'person') {
-    const resolved = await resolvePersonThread(runtime, audience.person);
+  if (audience.mailbox.by === 'person') {
+    const resolved = await resolvePersonThread(runtime, audience.mailbox.person);
     if (!resolved) {
-      await notifyOwnerUndeliverable(runtime, audience.person, text);
-      return;
+      await notifyOwnerUndeliverable(runtime, audience.mailbox.person, speech.text);
+      return undefined;
     }
     threadId = resolved;
   } else {
-    threadId = audience.threadId;
+    threadId = audience.mailbox.threadId;
   }
 
-  // Dispatch on the mailbox binding: detached (internal `subagent:` inbox) → append only; bound →
-  // gateway. A detached inbox is NOT woken here — an in-flight recipient folds it via `loadSteers`,
-  // a finished one is run-to-completion. This mirrors `reportToParent`, which deliberately does not
-  // wake a child inbox (waking would wrongly start a conversation turn on an internal thread).
-  if (isChildThread(threadId)) {
-    await appendInterRunMessage(runtime.store, threadId, { id: 'run', name: 'run' }, text);
-  } else {
-    await runtime.gateway.send(threadId, { text });
+  if (audience.kind === 'agent') {
+    if (!from) throw new Error('agent-audience delivery requires the reporting run identity');
+    // reportToParent appends the attributed report and wakes a REAL conversation thread's
+    // run-supply; a detached (`subagent:`) inbox is appended without waking (an in-flight
+    // recipient folds it via `loadSteers`, a finished one is run-to-completion).
+    await reportToParent(
+      runtime,
+      { threadId, fromId: from.id, fromName: from.name },
+      speech.text,
+      from.kind,
+    );
+    return undefined;
   }
+
+  // chat: the run participates in the conversation itself.
+  return runtime.gateway.send(
+    threadId,
+    { text: speech.text, ...(speech.attachment ? { attachment: speech.attachment } : {}) },
+    { persist: opts?.persist ?? false },
+  );
 }
 
 /** Resolve a roster member to their existing bound DM thread, or construct one from
- *  `SENDBLUE_FROM_NUMBER`. Returns null when the person is off-roster or no thread can be formed. */
+ *  `SENDBLUE_FROM_NUMBER`. Returns null when the person is off-roster or no thread can be
+ *  formed. Matching + the resolve tail are the SHARED helpers (resolveRosterMember /
+ *  resolveMemberThread) — this was the last hand-copied duplicate of that tail
+ *  (code-review 2026-07-15). */
 async function resolvePersonThread(
   runtime: Awaited<ReturnType<typeof import('../src/runtime.js').getRuntime>>,
   person: string,
 ): Promise<string | null> {
-  const { normalize } = await import('../src/gateway/auth.js');
-  const { sendblueDmThreadId } = await import('../src/gateway/threadId.js');
-  const { resolveRosterMember } = await import('../src/agent/audience.js');
+  const { resolveRosterMember, resolveMemberThread } = await import('../src/agent/audience.js');
   const member = resolveRosterMember(person, runtime.config);
   if (!member) return null;
-  // Matching is centralized (resolveRosterMember); thread ENCODING uses the gateway's `normalize`
-  // (the same canonicalization the adapter uses for thread ids), so a resolved member addresses
-  // the same thread the adapter would.
-  const identity = normalize(member.identity);
-  const existing = await runtime.store.findDmThreadForSender(identity);
-  if (existing) return existing;
-  const from = process.env.SENDBLUE_FROM_NUMBER;
-  return from ? sendblueDmThreadId(from, identity) : null;
+  return resolveMemberThread(runtime.store, member.identity);
 }
 
 /** A `person` audience that couldn't be resolved at delivery time (D-RA2): don't drop the message
