@@ -62,7 +62,12 @@ export async function runScheduledJob(input: ScheduledJobInput): Promise<void> {
   }
 
   const grants = input.authority ?? DEFAULT_SCHEDULE_GRANTS;
-  const setup = await buildSetup(input.model ?? DEFAULT_SCHEDULED_MODEL, input.audience, grants);
+  const setup = await buildSetup(
+    input.model ?? DEFAULT_SCHEDULED_MODEL,
+    input.audience,
+    grants,
+    input.label,
+  );
 
   // The run's identity stamps every report it emits (D-VL2/D-VL10).
   const identity: RunIdentity = {
@@ -158,6 +163,7 @@ async function buildSetup(
   modelId: string,
   audience: Audience,
   grants: string[],
+  label?: string,
 ): Promise<ScheduledSetup> {
   'use step';
 
@@ -187,6 +193,7 @@ async function buildSetup(
 
   return {
     instructions: buildJobPrompt(config, core, skillsIndex, {
+      label,
       memoryTools: grants.includes('memory_read') || grants.includes('memory_write'),
       hostTools: grants.includes('bash'),
       subject,

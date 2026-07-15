@@ -32,9 +32,10 @@ export interface SpeakerVoice {
 
 export interface ReporterVoice {
   lane: 'reporter';
-  /** Short prose naming who reads the report — e.g. "your orchestrator" for a subagent,
-   *  or "the conversation that speaks for Devon" for a scheduled run. */
-  recipient: string;
+  /** Whom the run's work is FOR (the audience's subject). The report itself is always
+   *  addressed to SUNNY — workers are named assistants of Sunny, not Sunny (worker-identity,
+   *  2026-07-15) — and Sunny decides what the subject hears. */
+  subject: string;
 }
 
 export type VoiceSpec = SpeakerVoice | ReporterVoice;
@@ -51,7 +52,7 @@ export function laneSentinel(lane: VoiceLane): string {
  * don't reword it).
  */
 export function voiceBlock(spec: VoiceSpec): string[] {
-  return spec.lane === 'speaker' ? speakerBlock(spec.subject) : reporterBlock(spec.recipient);
+  return spec.lane === 'speaker' ? speakerBlock(spec.subject) : reporterBlock(spec.subject);
 }
 
 function speakerBlock(subject: string): string[] {
@@ -71,8 +72,8 @@ function speakerBlock(subject: string): string[] {
     `  ${subject} receives no message — and it is the ONLY way to say nothing. Don't acknowledge`,
     `  every acknowledgment — that's noise. But the instant there IS something worth saying,`,
     `  just say it.`,
-    `- Messages labeled "<name> (subagent):" or "<name> (scheduled):" are reports from your own`,
-    `  workers — ${subject} has NOT seen them. Your reply still goes to ${subject}, never to a`,
+    `- Messages labeled "<name> (subagent):" or "<name> (scheduled):" are reports addressed`,
+    `  to YOU from your own named assistant agents — ${subject} has NOT seen them. Your reply still goes to ${subject}, never to a`,
     `  worker: relay what the report means for ${subject}, in your own voice, folded into the`,
     `  live conversation — don't re-announce what was just discussed, and don't interrupt an`,
     `  active exchange for a low-value update (<no-reply/> is fine; the report stays on record).`,
@@ -83,22 +84,26 @@ function speakerBlock(subject: string): string[] {
   ];
 }
 
-function reporterBlock(recipient: string): string[] {
+function reporterBlock(subject: string): string[] {
   return [
     `How you report:`,
-    `- Your FINAL text is your report — it is delivered verbatim, as one message, to`,
-    `  ${recipient} when you finish. End your turn on the report itself.`,
-    `- Your reader is another agent, not a person: report COMPACT, STRUCTURED facts — what`,
-    `  happened, what matters, any suggested emphasis — not finished user-facing prose and not`,
-    `  raw tool output. The conversation relays it in Sunny's own voice.`,
-    `- If you produced files or images someone should see, put their paths in the report — the`,
-    `  conversation sends media; you don't.`,
+    `- Your FINAL text is your report TO SUNNY — delivered verbatim, as one message, when you`,
+    `  finish. End your turn on the report itself.`,
+    `- Address Sunny, never ${subject}: you are writing to your orchestrator about work done`,
+    `  for ${subject}. Never write as if you were Sunny, and never speak to ${subject} in`,
+    `  first person — Sunny reads your report inside the conversation with ${subject} and`,
+    `  decides what (and whether) to say, in Sunny's own voice.`,
+    `- Report COMPACT, STRUCTURED facts — what happened, what matters for ${subject}, any`,
+    `  suggested emphasis — not finished user-facing prose and not raw tool output.`,
+    `- If you produced files or images ${subject} should see, put their paths in the report —`,
+    `  Sunny sends media; you don't.`,
     `- Most tasks need no progress report. For a genuinely long task, or when you hit something`,
-    `  ${recipient} should know NOW (a blocker, a surprise), write <report>…</report> on its`,
-    `  own lines mid-task — its content is delivered immediately and you keep working. Everything`,
+    `  Sunny should know NOW (a blocker, a surprise), write <report>…</report> on its own`,
+    `  lines mid-task — its content is delivered immediately and you keep working. Everything`,
     `  outside these blocks and your final text is private working space.`,
-    `- If there is genuinely nothing ${recipient} needs, make your reply exactly <no-report/> —`,
-    `  a reply containing that token delivers nothing at all.`,
+    `- If there is genuinely nothing Sunny needs, make your ENTIRE reply exactly <no-report/>.`,
+    `  Decide BEFORE you write: the token cannot be un-written — a reply that contains it`,
+    `  delivers NOTHING, even if you continue with real content after it. If in doubt, report.`,
     `- Never narrate delivery mechanics into the report (no "sending this through", no notes`,
     `  about which path it takes) — the report is only the content itself.`,
   ];
