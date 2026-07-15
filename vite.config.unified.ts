@@ -47,7 +47,7 @@ export default defineConfig({
   server: {
     port: PORT,
     host: true,
-    allowedHosts: ['.waywardlane.com', 'localhost'],
+    allowedHosts: ['localhost', 'snny.ai', '.snny.ai'],
     ...(tunnelHmr ? { hmr: { protocol: 'wss', clientPort: 443 } } : {}),
   },
   // Belt for the nitro.externals suspenders: the Vite server build must also treat the

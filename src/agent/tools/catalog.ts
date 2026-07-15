@@ -7,6 +7,7 @@ import { VIEW_IMAGE_SPEC } from './viewImageSpec.js';
 import { WAIT_SPEC } from './waitSpec.js';
 import { DELEGATE_TASK_SPEC } from './delegationSpecs.js';
 import { MESSAGE_SPEC } from './messageSpec.js';
+import { OAUTH_CALLBACK_SPEC } from './oauthCallbackSpec.js';
 import { createScheduleTools } from './schedule.js';
 import { RUNS_TOOL_SPECS } from './scheduleSpecs.js';
 import { createCredentialTools } from './credentialManage.js';
@@ -102,6 +103,7 @@ export function toolCatalog(config: SunnyConfig): ToolCatalogEntry[] {
   const ownerOnly: Record<string, ToolLike> = {
     delegate_task: DELEGATE_TASK_SPEC,
     message: MESSAGE_SPEC,
+    oauth_callback: OAUTH_CALLBACK_SPEC,
     ...createScheduleTools(inertDb, '', config.timezone),
     ...RUNS_TOOL_SPECS,
     ...createCredentialTools(config, undefined),
