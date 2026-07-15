@@ -416,7 +416,7 @@ function buildTools(ctx: {
       ? {
           message: tool({
             ...MESSAGE_SPEC,
-            execute: ({ recipient, text, image }) => messageStep(threadId, recipient, text, image),
+            execute: ({ recipient, text, image }) => relayToPerson(threadId, recipient, text, image),
           }),
         }
       : {}),
@@ -477,6 +477,22 @@ async function setupTurn(threadId: string, isGroup: boolean): Promise<TurnSetup>
     if (seen.has(id)) continue;
     seen.add(id);
     familyRefs.push({ id, name: m.senderName ?? m.senderId, identity: m.senderId });
+  }
+  // A never-contacted family DM has no user rows yet, but the thread id itself encodes who
+  // the conversation is WITH — e.g. a person-audience schedule's first report waking Kate's
+  // constructed DM (audience collapse follow-up, code-review 2026-07-15). Without this the
+  // relay turn is framed for the OWNER while its replies land on Kate's phone. The owner
+  // case needs no fallback: owner framing is already the default.
+  if (!isGroup && !ownerPresent && familyRefs.length === 0) {
+    const { rosterMemberOfThread } = await import('../src/agent/audience.js');
+    const encoded = rosterMemberOfThread(threadId, config);
+    if (encoded && encoded.name !== config.owner.name) {
+      familyRefs.push({
+        id: personId(encoded.identity),
+        name: encoded.name,
+        identity: encoded.identity,
+      });
+    }
   }
   const docs = await ensureAndLoadPeople(config, familyRefs);
   const people = docs.length > 0 ? { ownerPresent, docs } : undefined;
@@ -890,8 +906,7 @@ async function messageStep(
   parentThreadId: string,
   recipient: string,
   text: string,
-  image?: string,
-): Promise<string> {
+): Promise<string | { refusal: string } | { threadId: string; name: string }> {
   'use step';
 
   const { getRuntime } = await import('../src/runtime.js');
@@ -912,59 +927,59 @@ async function messageStep(
           `more from it, delegate a fresh task (include the prior result in the brief).`;
   }
 
-  // Person recipient — relay to a roster member on their own bound thread.
-  return personRelayStepBody(rt, recipient, text, image);
+  // Person recipient: resolve here (model-facing refusals — better than the bus's
+  // owner-notify for a tool call); the SEND itself rides the bus below, outside this step.
+  const { resolveRosterMember, resolveMemberThread } = await import('../src/agent/audience.js');
+  const member = resolveRosterMember(recipient, rt.config);
+  if (!member) {
+    const known = [rt.config.owner.name, ...rt.config.family.map((f) => f.name)].join(', ');
+    return {
+      refusal:
+        `I can only text people in your family roster (right now: ${known}). ` +
+        `"${recipient}" isn't one of them, so I didn't send anything.`,
+    };
+  }
+  const dmThreadId = await resolveMemberThread(rt.store, member.identity);
+  if (!dmThreadId) {
+    return {
+      refusal: `I don't have a conversation with ${member.name} yet and can't start one right now.`,
+    };
+  }
+  return { threadId: dmThreadId, name: member.name };
 }
 
 /**
- * Relay body for a person recipient (multiplayer-family: cross-thread sends). Resolves the
- * recipient against the owner/family roster (ROSTER-ONLY — arbitrary numbers are refused), finds
- * their existing bound DM thread (or constructs one), and proactively sends + persists into THAT
- * thread. Runs INSIDE `messageStep`'s `'use step'`, so it takes the resolved runtime (not its own
- * step) and a durable replay never double-texts.
+ * Relay to a person via the bus (multiplayer-family cross-thread sends; audience collapse):
+ * deliberate ADDRESSED chat speech to the member's own DM — `deliver(chat(byThread(dm)))`,
+ * persisted (a relay is real conversation content in the recipient's thread), with an
+ * optional REQUIRED image exactly like send_image (image-send-integrity: an unready file
+ * aborts the whole send, never degrades to caption-only). Resolution happens in
+ * `messageStep` (model-facing refusals); this composes the two journaled steps + pure
+ * formatting, so a durable replay never double-texts.
  */
-async function personRelayStepBody(
-  rt: Awaited<ReturnType<typeof import('../src/runtime.js').getRuntime>>,
-  person: string,
+async function relayToPerson(
+  parentThreadId: string,
+  recipient: string,
   text: string,
   image?: string,
 ): Promise<string> {
-  const { resolveRosterMember, resolveMemberThread } = await import('../src/agent/audience.js');
-  const { config, store, gateway } = rt;
-
-  // Resolve the recipient against the roster (owner + family) — the SINGLE shared matcher.
-  const member = resolveRosterMember(person, config);
-  if (!member) {
-    const known = [config.owner.name, ...config.family.map((f) => f.name)].join(', ');
-    return (
-      `I can only text people in your family roster (right now: ${known}). ` +
-      `"${person}" isn't one of them, so I didn't send anything.`
-    );
-  }
-
-  // Address their existing DM if we have one; otherwise construct a Sendblue DM id (the shared
-  // resolve-roster-member → find-thread → fallback tail). Null ⟺ no thread AND no from-number.
-  const threadId = await resolveMemberThread(store, member.identity);
-  if (!threadId) {
-    return `I don't have a conversation with ${member.name} yet and can't start one right now.`;
-  }
-
-  // An optional image rides along as a single outbound attachment, exactly like send_image's
-  // path: REQUIRED media (image-send-integrity) — if the file isn't ready the whole send is
-  // aborted and reported, never silently degraded to a text that claims an image.
-  const result = await gateway.send(
-    threadId,
+  const target = await messageStep(parentThreadId, recipient, text);
+  if (typeof target === 'string') return target; // child-steer outcome
+  if ('refusal' in target) return target.refusal;
+  const result = await deliver(
+    chatAudience(target.threadId),
     { text, ...(image ? { attachment: { pathOrUrl: image, required: true } } : {}) },
+    undefined,
     { persist: true },
   );
   if (image && (result?.mediaError || !result?.media)) {
     return (
-      `NOT sent to ${member.name}: ${result?.mediaError ?? 'the channel could not attach the image'}. ` +
+      `NOT sent to ${target.name}: ${result?.mediaError ?? 'the channel could not attach the image'}. ` +
       `Nothing was delivered (not even the text). Fix the image (view_image shows you the ` +
       `finished file) and retry, or resend without the image.`
     );
   }
-  return image ? `Sent to ${member.name} (with image).` : `Sent to ${member.name}.`;
+  return image ? `Sent to ${target.name} (with image).` : `Sent to ${target.name}.`;
 }
 
 /**

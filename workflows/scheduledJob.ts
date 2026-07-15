@@ -105,7 +105,7 @@ export async function runScheduledJob(input: ScheduledJobInput): Promise<void> {
       // in its report; the mediating conversation turn sends it with its own send_image.
       message: tool({
         ...MESSAGE_SPEC,
-        execute: ({ recipient, text }) => scheduledMessageStep(input.audience, recipient, text),
+        execute: ({ recipient, text }) => scheduledMessage(input.audience, recipient, text),
       }),
     },
     providerOptions: {
@@ -199,40 +199,54 @@ async function buildSetup(
 }
 
 /**
- * Proactively message a roster member from a scheduled run (run-audiences D-RA10, Phase 3.1).
- * Self-contained `'use step'` (resolves via the shared `resolveRosterMember`, sends via the gateway
- * inline) so it composes as a tool execute without nesting the `deliver` step. Roster-only. A
- * DELIVERING run is refused its OWN audience subject — that person is reached by the terminal
- * result, so self-messaging would double-send. A HOUSEHOLD run has no terminal delivery, so it may
- * message anyone on the roster (fan-out is its only voice).
+ * Resolve a roster recipient for a scheduled run's deliberate fan-out (run-audiences D-RA10,
+ * Phase 3.1). Roster-only; a DELIVERING run is refused its OWN audience subject — that person
+ * is reached by the terminal report, so self-messaging would double-send. A nobody-audience
+ * run has no terminal delivery, so it may message anyone (fan-out is its only voice). The
+ * SEND itself rides the bus (`scheduledMessage` composes this step + `deliver`) — this step
+ * only resolves + refuses with model-facing strings.
  */
-async function scheduledMessageStep(
+async function scheduledResolveRecipientStep(
   audience: Audience,
   recipient: string,
-  text: string,
-): Promise<string> {
+): Promise<string | { threadId: string; name: string }> {
   'use step';
 
   const { getRuntime } = await import('../src/runtime.js');
   const { resolveRosterMember, resolveMemberThread } = await import('../src/agent/audience.js');
-  const { config, store, gateway } = await getRuntime();
+  const { config, store } = await getRuntime();
 
   const member = resolveRosterMember(recipient, config);
   if (!member) {
     const known = [config.owner.name, ...config.family.map((f) => f.name)].join(', ');
     return `I can only message the family roster (${known}); "${recipient}" isn't one, so I sent nothing.`;
   }
-  // No self-send on a DELIVERING run: its own subject already receives the terminal result.
-  // A nobody-audience run delivers nothing terminally, so no one is excluded.
   if (audience.kind !== 'nobody' && member.name === subjectName(audience, config)) {
     return `${member.name}'s conversation already receives this run's report — put it in your final report instead of messaging them.`;
   }
-  // Existing DM if we have one, else a constructed Sendblue DM id (shared resolve tail). Null ⟺
-  // no thread AND no from-number.
   const threadId = await resolveMemberThread(store, member.identity);
   if (!threadId) return `I don't have a conversation with ${member.name} yet and can't start one.`;
-  await gateway.send(threadId, { text }, { persist: true });
-  return `Sent to ${member.name}.`;
+  return { threadId, name: member.name };
+}
+
+/** Deliberate addressed fan-out through the bus: chat speech to the resolved member's DM,
+ *  persisted (it is real conversation content in their thread). The message tool is the one
+ *  sanctioned chat construction outside the conversation profile — deliberate + roster-guarded
+ *  (the one-speaker gate governs TERMINAL audiences, which stay nobody/agent for workers). */
+async function scheduledMessage(
+  audience: Audience,
+  recipient: string,
+  text: string,
+): Promise<string> {
+  const target = await scheduledResolveRecipientStep(audience, recipient);
+  if (typeof target === 'string') return target;
+  await deliver(
+    { kind: 'chat', mailbox: { by: 'thread', threadId: target.threadId } },
+    text,
+    undefined,
+    { persist: true },
+  );
+  return `Sent to ${target.name}.`;
 }
 
 async function recordRun(runId: string, output: string): Promise<void> {

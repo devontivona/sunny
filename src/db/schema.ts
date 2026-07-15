@@ -67,13 +67,11 @@ export const schedules = pgTable(
     spec: text('spec').notNull(), // ISO timestamp | duration (e.g. '2h') | cron expr
     prompt: text('prompt').notNull(), // what Sunny should do when it fires
     threadId: text('thread_id').notNull(), // delivery target (default: owner DM)
-    /** Output target for the fired run (durable-subagents D-DS1): 'user' | 'silent'. A `silent`
-     *  schedule records its result but sends no proactive message (e.g. nightly consolidation). */
-    outputTarget: text('output_target').notNull().default('user'),
-    /** Optional explicit audience (run-audiences #4: cross-person scheduling). When set (e.g.
-     *  `person:Kate`), the fired run is for/delivered to that party regardless of the creating
-     *  thread — so the owner can schedule a reminder FOR a family member. When null, the audience
-     *  is derived from `threadId` + `outputTarget` (the common per-person case). */
+    /** Optional explicit audience (run-audiences #4; unified-voice-layer D-VL10):
+     *  `person:<name>` | `nobody` | `thread:<id>` — the fired run is for that party regardless
+     *  of the creating thread. Null → the creating thread's agent (the common per-person
+     *  case). The retired `output_target` column was backfilled into this encoding
+     *  (`silent` → `nobody`) and dropped in migration 0013. */
     audience: text('audience'),
     /** The grants the fired run is endowed ({ audience, authority } — tool-access spec; D-RA5).
      *  Attenuated against the creating turn's authority at creation. Null (legacy rows / default)

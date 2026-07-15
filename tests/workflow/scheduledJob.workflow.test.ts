@@ -26,7 +26,7 @@ describe('runScheduledJob (workflow integration — real Local World)', () => {
     if (ctx) await teardownTestRuntime(ctx);
   });
 
-  async function seedScheduleRun(outputTarget: 'user' | 'silent'): Promise<{ runId: string }> {
+  async function seedScheduleRun(audience?: string): Promise<{ runId: string }> {
     const [sched] = await ctx.db.db
       .insert(schedules)
       .values({
@@ -35,7 +35,7 @@ describe('runScheduledJob (workflow integration — real Local World)', () => {
         prompt: 'consolidate memory',
         threadId: 'imessage:owner',
         timezone: 'America/Denver',
-        outputTarget,
+        audience: audience ?? null,
         active: true,
       })
       .returning();
@@ -48,7 +48,7 @@ describe('runScheduledJob (workflow integration — real Local World)', () => {
 
   it('silent: records the result but sends nothing (the 2am fix)', async () => {
     ctx = await setupTestRuntime();
-    const { runId } = await seedScheduleRun('silent');
+    const { runId } = await seedScheduleRun('nobody');
     setTurnModel([{ type: 'text', text: 'tidied 3 facts' }]);
 
     const run = await start(runScheduledJob, [
@@ -74,7 +74,7 @@ describe('runScheduledJob (workflow integration — real Local World)', () => {
 
   it('one speaker (D-VL1): a delivering run REPORTS to its thread — attributed inbound + wake, no gateway send', async () => {
     ctx = await setupTestRuntime();
-    const { runId } = await seedScheduleRun('user');
+    const { runId } = await seedScheduleRun();
     setTurnModel([{ type: 'text', text: 'reminder due: call mom at 6pm' }]);
 
     const run = await start(runScheduledJob, [
@@ -107,7 +107,7 @@ describe('runScheduledJob (workflow integration — real Local World)', () => {
     // silence — no report is appended, no relay turn wakes; the raw text still lands in
     // schedule_runs for inspection.
     ctx = await setupTestRuntime();
-    const { runId } = await seedScheduleRun('user');
+    const { runId } = await seedScheduleRun();
     const rawFinal = 'All four sources checked; nothing new.\n\n<no-report/>';
     setTurnModel([{ type: 'text', text: rawFinal }]);
 
@@ -138,7 +138,7 @@ describe('runScheduledJob (workflow integration — real Local World)', () => {
 
   it('family-correct: a schedule fired for a family member reports to THEIR thread, not the owner', async () => {
     ctx = await setupTestRuntime({ family: [{ name: 'Kate', identities: ['+17193146820'] }] });
-    const { runId } = await seedScheduleRun('user');
+    const { runId } = await seedScheduleRun();
     const kateThread = 'sendblue:owner:kate';
     setTurnModel([{ type: 'text', text: 'Leo is due for a feed 🍼' }]);
 
@@ -166,7 +166,7 @@ describe('runScheduledJob (workflow integration — real Local World)', () => {
 
   it('audience: a nobody-audience run can deliberately fan out to a roster member (message is its only voice)', async () => {
     ctx = await setupTestRuntime({ family: [{ name: 'Kate', identities: ['+17193146820'] }] });
-    const { runId } = await seedScheduleRun('silent');
+    const { runId } = await seedScheduleRun('nobody');
     const kateThread = 'sendblue:owner:kate';
     await ctx.store.appendInbound(
       makeChannelEvent({ threadId: kateThread, senderId: '+17193146820', senderName: 'Kate', isOwner: false }),
@@ -206,7 +206,7 @@ describe('runScheduledJob (workflow integration — real Local World)', () => {
     // conversation turn owns send_image. Structurally: the report text (with the path) is
     // appended, and nothing with an attachment ever reaches the gateway from the run.
     ctx = await setupTestRuntime();
-    const { runId } = await seedScheduleRun('user');
+    const { runId } = await seedScheduleRun();
     setTurnModel([{ type: 'text', text: 'Daily chart ready at /tmp/chart.png (up 3% WoW).' }]);
 
     const run = await start(runScheduledJob, [
@@ -231,7 +231,7 @@ describe('runScheduledJob (workflow integration — real Local World)', () => {
 
   it('authority: a run endowed host grants can act on the host (bash) — the craft-tagging gap', async () => {
     ctx = await setupTestRuntime();
-    const { runId } = await seedScheduleRun('user');
+    const { runId } = await seedScheduleRun();
     setTurnModel([
       {
         type: 'tool-call',
@@ -271,7 +271,7 @@ describe('runScheduledJob (workflow integration — real Local World)', () => {
     // the bash tool exports it), which also keeps this test machine-agnostic: the old
     // hardcoded /home/tivona path passed locally and failed on the CI runner.
     ctx = await setupTestRuntime();
-    const { runId } = await seedScheduleRun('silent');
+    const { runId } = await seedScheduleRun('nobody');
     setTurnModel([
       {
         type: 'tool-call',
@@ -312,7 +312,7 @@ describe('runScheduledJob (workflow integration — real Local World)', () => {
 
   it('proactive fan-out (D-RA10): a delivering scheduled run can message a roster member via the bus', async () => {
     ctx = await setupTestRuntime({ family: [{ name: 'Kate', identities: ['+17193146820'] }] });
-    const { runId } = await seedScheduleRun('user');
+    const { runId } = await seedScheduleRun();
     const kateThread = 'sendblue:owner:kate';
     // Give Kate an existing DM so the roster resolution finds her bound thread.
     await ctx.store.appendInbound(
@@ -349,7 +349,7 @@ describe('runScheduledJob (workflow integration — real Local World)', () => {
     // (production: started by the router on wake) mediates it; only THAT turn's reply reaches
     // the gateway — and it answers the human, marking the report answered.
     ctx = await setupTestRuntime();
-    const { runId } = await seedScheduleRun('user');
+    const { runId } = await seedScheduleRun();
     setTurnModel([{ type: 'text', text: 'Mercury flags an uncashed $113.79 check, 20 days old.' }]);
     const run = await start(runScheduledJob, [
       {

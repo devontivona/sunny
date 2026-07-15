@@ -30,9 +30,8 @@ export interface CreateScheduleInput {
   threadId: string;
   timezone: string;
   label?: string;
-  /** Explicit audience (run-audiences #4; D-VL5), e.g. `person:Kate` or `nobody` — the run
-   *  is for that party regardless of the creating thread. Null/omitted → the creating thread.
-   *  (The DB's legacy `output_target` column survives read-only for pre-migration rows.) */
+  /** Explicit audience (run-audiences #4; D-VL5/10), e.g. `person:Kate` or `nobody` — the run
+   *  is for that party regardless of the creating thread. Null/omitted → the creating thread. */
   audience?: string;
   /** The grants the fired run is endowed ({ audience, authority }; D-RA5) — validated as a
    *  subset of the creator's authority at the tool layer. Omitted → the memory default. */
@@ -267,11 +266,6 @@ function resolveFileSchedule(
     spec: def.cron,
     prompt: def.prompt,
     threadId,
-    // ScheduleRow-shape filler only (the DB column survives for one-shot rows): the file
-    // format speaks audience alone (D-VL5), and every reader goes through scheduleAudience,
-    // which consults outputTarget only when audience is null — so this value is never read
-    // when an explicit audience is set, and 'user' is the only value the null case can see.
-    outputTarget: 'user',
     audience: def.audience ?? null,
     authority: def.authority ?? null,
     timezone,
@@ -482,8 +476,7 @@ export async function migrateCronRowsToStanding(
         name,
         cron: row.spec,
         prompt: row.prompt,
-        // The legacy row's silent flag becomes the audience it implied (D-VL5).
-        audience: row.audience ?? (row.outputTarget === 'silent' ? 'nobody' : undefined),
+        audience: row.audience ?? undefined,
         authority: row.authority ?? undefined,
       });
     } catch (err) {

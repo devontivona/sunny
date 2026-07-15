@@ -28,7 +28,7 @@ A scheduled run's terminal output SHALL be a **report**, dispatched through the 
 ## ADDED Requirements
 
 ### Requirement: Standing schedules declare their audience; outputTarget is retired
-A standing-schedule file SHALL declare its addressing with an `audience:` frontmatter key — `person:<roster name>` (the default when absent is the owner) or `nobody` (record-only; `household` accepted as the legacy spelling and normalized on load) — replacing the retired `outputTarget: user|silent` field. The loader SHALL migrate a legacy `outputTarget:` key or legacy spelling on first read (rewriting the file and logging the migration once). Builtin schedule files use the same format. Persisted one-shot schedule rows MAY retain the legacy column, read through the existing audience-derivation shim; no destructive DB migration is required.
+A standing-schedule file SHALL declare its addressing with an `audience:` frontmatter key — `person:<roster name>` (the default when absent is the owner) or `nobody` (record-only; `household` accepted as the legacy spelling and normalized on load) — replacing the retired `outputTarget: user|silent` field. The loader SHALL migrate a legacy `outputTarget:` key or legacy spelling on first read (rewriting the file and logging the migration once). Builtin schedule files use the same format. The persisted `output_target` column is backfilled into the audience encoding (`silent` → `nobody`) and dropped (migration 0013); a null stored audience means the creating thread's agent.
 
 #### Scenario: Legacy frontmatter migrates once
 - **WHEN** the loader reads a standing-schedule file carrying `outputTarget: silent`

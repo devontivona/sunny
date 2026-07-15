@@ -351,8 +351,8 @@ describe('scheduler ticker (integration)', () => {
 
   it('migrateCronRowsToStanding converts cron rows to standing files and deletes them', async () => {
     const registry = new FileScheduleRegistry({ runtimeDir, threadId: OWNER_THREAD, timezone: TZ });
-    // A LEGACY row (pre-audience `output_target: silent`) inserted directly — the creation
-    // surface no longer speaks outputTarget (D-VL5), but old rows must still migrate.
+    // A legacy silent cron row post-0013 carries audience 'nobody' (the migration backfilled
+    // output_target before dropping it); the row-to-standing-file migration must preserve it.
     await tdb.db.insert(schedules).values({
       kind: 'cron',
       spec: '0 5 * * *',
@@ -360,7 +360,7 @@ describe('scheduler ticker (integration)', () => {
       threadId: OWNER_THREAD,
       timezone: TZ,
       label: 'craft-daily-resource-tagging',
-      outputTarget: 'silent',
+      audience: 'nobody',
       authority: ['memory_read', 'bash'],
       nextRunAt: new Date(Date.now() + 60_000),
       active: true,

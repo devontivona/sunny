@@ -134,13 +134,17 @@ table; changing the dreaming/household record-only path.
   remains the documented addressed-fan-out exception (D-VL9), and `runScheduledJob` rejects
   a chat audience at the input seam.
 
-- **D-VL9 — What deliberately does NOT change.** The `message` tool (addressed fan-out) still
-  gateway-sends directly from any profile that holds it — it is deliberate, addressed speech
-  with a self-send refusal guard; mediating it is a follow-up only if voice problems appear.
-  `send_image` from a delivering scheduled run is retired with direct delivery (an image-
-  producing job reports the file path; the relay turn sends it with `send_image` — one less
-  autonomous egress). The recovery backstop, translator cadence, steering, and compaction are
-  untouched.
+- **D-VL9 (revised 2026-07-15) — the `message` tool rides the bus too.** Addressed fan-out is
+  deliberate chat speech: the tool resolves its roster recipient in a step (model-facing
+  refusals, self-send guard) and then delivers via `deliver(chat(byThread(dm)), …, {persist})`
+  — the one sanctioned chat construction outside the conversation's own reply lane (the
+  one-speaker gate governs TERMINAL audiences, which stay nobody/agent for workers). With
+  this, `gateway.send` for ALL agent speech has exactly one caller: the bus. `send_image`
+  from a scheduled run stays retired (an image-producing job reports the file path; the relay
+  turn sends it). The recovery backstop, translator cadence, steering, and compaction are
+  untouched. Mediating fan-out through the RECIPIENT's loop (reports instead of direct sends)
+  remains not-done, deliberately: `message` is judgment already exercised by an agent with
+  context, and double-mediating it would add a turn per relay for no confusion being solved.
 
 ## Risks / Trade-offs
 

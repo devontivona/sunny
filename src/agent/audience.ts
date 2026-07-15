@@ -131,18 +131,6 @@ export function authorityForToolset(toolset: 'host' | 'readonly' | undefined): A
 }
 
 /**
- * Build the audience a legacy schedule/job row implies (run-audiences D-RA11: derivable from
- * the existing `threadId` + `output_target`, so no destructive migration is needed): `silent`
- * → nobody (record-only); anything else → the creating thread's agent (a scheduled run is a
- * worker, so its terminal lane is always agent-addressed — the one-speaker rule).
- */
-export function audienceForSchedule(threadId: string, outputTarget: string): Audience {
-  return outputTarget === 'silent'
-    ? { kind: 'nobody' }
-    : { kind: 'agent', mailbox: { by: 'thread', threadId } };
-}
-
-/**
  * THE parser for a stored audience REFERENCE string — the encoding schedule rows and
  * standing-file frontmatter carry: `person:<name-or-identity>` | `nobody` | `thread:<id>`
  * (`household` accepted as the legacy spelling of `nobody`). Refs address WORKERS, so
@@ -176,23 +164,20 @@ export function canonicalAudienceRef(ref: string): string | null {
 }
 
 /**
- * The audience for a schedule row (run-audiences #4). An explicit `audience` column/frontmatter
- * wins (e.g. `person:Kate` — scheduled FOR a family member, so its reports land on their
- * conversation loop regardless of the creating thread); otherwise derived from `threadId` +
- * `outputTarget` (the common per-person case, where each person's schedules live in their own
- * thread).
+ * The audience for a schedule row (run-audiences #4; D-VL10). An explicit `audience`
+ * column/frontmatter wins (e.g. `person:Kate` — scheduled FOR a family member, so its reports
+ * land on their conversation loop regardless of the creating thread); a null audience means
+ * the creating thread's agent (the common per-person case, where each person's schedules live
+ * in their own thread). The retired `output_target` flag was backfilled into the audience
+ * encoding by migration 0013 — no shim survives.
  */
-export function scheduleAudience(row: {
-  threadId: string;
-  outputTarget: string;
-  audience: string | null;
-}): Audience {
+export function scheduleAudience(row: { threadId: string; audience: string | null }): Audience {
   const a = row.audience?.trim();
   if (a) {
     const parsed = parseAudienceRef(a);
     if (parsed) return parsed;
   }
-  return audienceForSchedule(row.threadId, row.outputTarget);
+  return { kind: 'agent', mailbox: { by: 'thread', threadId: row.threadId } };
 }
 
 /**
@@ -241,9 +226,14 @@ export function rosterMatch(person: string, config: SunnyConfig): string | null 
   return resolveRosterMember(person, config)?.name ?? null;
 }
 
-/** A thread id encodes its contact (Sendblue `...:<base64url(contact)>`); if that decodes to a
- *  roster identity we know whose thread it is. Best-effort — returns null for group/internal ids. */
-function subjectOfThread(threadId: string, config: SunnyConfig): string | null {
+/** A thread id encodes its contact (Sendblue `...:<base64url(contact)>`); if that decodes to
+ *  a roster member we know whose conversation it is — even before they have ever spoken in
+ *  it (a never-contacted DM minted by a person-audience report). Best-effort — null for
+ *  group/internal ids and off-roster contacts. */
+export function rosterMemberOfThread(
+  threadId: string,
+  config: SunnyConfig,
+): { name: string; identity: string } | null {
   const parts = threadId.split(':');
   if (parts.length < 3 || parts[2] === 'g') return null; // group or malformed
   let contact: string;
@@ -252,7 +242,12 @@ function subjectOfThread(threadId: string, config: SunnyConfig): string | null {
   } catch {
     return null;
   }
-  return rosterMatch(contact, config);
+  return resolveRosterMember(contact, config);
+}
+
+/** The roster NAME a thread id encodes (see {@link rosterMemberOfThread}). */
+function subjectOfThread(threadId: string, config: SunnyConfig): string | null {
+  return rosterMemberOfThread(threadId, config)?.name ?? null;
 }
 
 /**

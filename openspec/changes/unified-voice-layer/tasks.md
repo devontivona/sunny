@@ -103,6 +103,21 @@
       cleanups (shared person-resolution tail, RunIdentity adopted, stripNoReport deleted,
       dead non-autonomous prompt branch removed).
 
+## Phase 3d — Deferred-rationale re-audit (2026-07-15): three deferrals reversed
+
+- [x] 3d.1 `message` fan-out rides the bus (D-VL9 revised): conversation + scheduled relays
+      resolve in a step, deliver via `deliver(chat(byThread), …, {persist:true})`; the last
+      hand-rolled `gateway.send` speech callers are gone.
+- [x] 3d.2 Never-contacted family DM framing: a thread with no user rows derives its
+      participant from the thread-encoded roster identity (`rosterMemberOfThread`), so a
+      person-audience schedule's first relay turn frames for the recipient, not the owner.
+- [x] 3d.3 `output_target` column retired end-to-end: migration 0013 backfills
+      (`silent` → `nobody`) and drops the column; `audienceForSchedule` shim deleted; a null
+      stored audience has exactly one meaning (the creating thread's agent).
+- [ ] 3d.4 KEPT deferral (rationale survives): one-shell `workerRun(RunSpec)` over
+      subagent/scheduledJob — the remaining differences (brief vs prompt, budgets, steering,
+      link lifecycle, MCP timing) are genuine; unify when a third worker profile exists.
+
 ## Phase 4 — Deploy + live-state choreography (Devon's restart window)
 
 - [ ] 4.1 Pre-restart: update the four standing-schedule files (`heartbeat`, `task-assistant`,
