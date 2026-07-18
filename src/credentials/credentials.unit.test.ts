@@ -7,11 +7,13 @@ import { execCredentialManage } from '../agent/tools/credentialManage.js';
 import {
   buildReference,
   credentialsPath,
+  deleteCredential,
   isOpReference,
   listCredentials,
   loadRegistry,
   registerCredential,
   resolveByName,
+  updateCredential,
 } from './index.js';
 
 describe('isOpReference', () => {
@@ -180,5 +182,129 @@ describe('credential_manage tool', () => {
     });
     expect(out).toMatch(/not a resolvable reference/);
     expect(listCredentials(config.runtimeDir)).toEqual([]);
+  });
+});
+
+describe('credential registry edit/delete', () => {
+  const REF = 'op://Sunny/gmail/password';
+  const REF2 = 'op://Sunny/gmail2/password';
+
+  it('deletes a mapping and errors on an unknown name (never a silent no-op)', async () => {
+    const config = makeConfig();
+    await registerCredential(config.runtimeDir, 'gmail', REF);
+    const removed = await deleteCredential(config.runtimeDir, 'gmail');
+    expect(removed).toMatchObject({ name: 'gmail', reference: REF });
+    expect(listCredentials(config.runtimeDir)).toEqual([]);
+    await expect(deleteCredential(config.runtimeDir, 'gmail')).rejects.toThrow(/no credential/);
+  });
+
+  it('edits in place: rename + repoint + purpose', async () => {
+    const config = makeConfig();
+    await registerCredential(config.runtimeDir, 'amex', REF, { purpose: 'household account' });
+    const updated = await updateCredential(config.runtimeDir, 'amex', {
+      newName: 'amex-kate',
+      reference: REF2,
+      purpose: "Kate's login",
+    });
+    expect(updated).toMatchObject({ name: 'amex-kate', reference: REF2, purpose: "Kate's login" });
+    const names = listCredentials(config.runtimeDir).map((c) => c.name);
+    expect(names).toEqual(['amex-kate']); // old name gone, no duplicate left behind
+  });
+
+  it('edit refuses to clobber an existing name and errors on an unknown name', async () => {
+    const config = makeConfig();
+    await registerCredential(config.runtimeDir, 'a', REF);
+    await registerCredential(config.runtimeDir, 'b', REF2);
+    await expect(updateCredential(config.runtimeDir, 'a', { newName: 'b' })).rejects.toThrow(
+      /already exists/,
+    );
+    await expect(updateCredential(config.runtimeDir, 'nope', { purpose: 'x' })).rejects.toThrow(
+      /no credential/,
+    );
+  });
+
+  it('edit rejects an invalid replacement reference', async () => {
+    const config = makeConfig();
+    await registerCredential(config.runtimeDir, 'a', REF);
+    await expect(updateCredential(config.runtimeDir, 'a', { reference: 'bogus' })).rejects.toThrow(
+      /not a valid op:\/\/ reference/,
+    );
+  });
+});
+
+describe('credential_manage tool — edit/delete/save actions', () => {
+  const REF = 'op://Sunny/gmail/password';
+
+  it('delete reports what was removed, and errors on an unknown name', async () => {
+    const config = makeConfig();
+    await registerCredential(config.runtimeDir, 'gmail', REF);
+    const out = await execCredentialManage(config, undefined, { action: 'delete', name: 'gmail' });
+    expect(out).toContain('Deleted "gmail"');
+    expect(out).toContain(REF);
+    const again = await execCredentialManage(config, undefined, {
+      action: 'delete',
+      name: 'gmail',
+    });
+    expect(again).toMatch(/^ERROR: no credential/);
+  });
+
+  it('edit renames and re-verifies a repointed reference', async () => {
+    const config = makeConfig();
+    const resolver = new FakeResolver({ [REF]: 'pw' });
+    await registerCredential(config.runtimeDir, 'amex', 'op://Sunny/old/password');
+    const out = await execCredentialManage(config, resolver, {
+      action: 'edit',
+      name: 'amex',
+      newName: 'amex-devon',
+      reference: REF,
+    });
+    expect(out).toContain('Updated "amex-devon" (renamed from "amex")');
+    expect(out).toMatch(/verified it resolves/);
+  });
+
+  it('edit requires at least one change', async () => {
+    const config = makeConfig();
+    await registerCredential(config.runtimeDir, 'a', REF);
+    expect(await execCredentialManage(config, undefined, { action: 'edit', name: 'a' })).toMatch(
+      /at least one of/,
+    );
+  });
+
+  it('save creates the vault item and auto-registers the returned reference', async () => {
+    const config = makeConfig();
+    const resolver = new FakeResolver();
+    const out = await execCredentialManage(config, resolver, {
+      action: 'save',
+      name: 'ignav',
+      title: 'Ignav (Sunny-created)',
+      username: 'devon@tivona.me',
+      secretValue: 'generated-password-123',
+      purpose: 'ignav login',
+    });
+    expect(out).toContain('Saved "Ignav (Sunny-created)"');
+    expect(out).toContain('registered "ignav"');
+    expect(resolver.created).toHaveLength(1);
+    expect(resolver.created[0]).toMatchObject({ secretValue: 'generated-password-123' });
+    const [entry] = listCredentials(config.runtimeDir);
+    expect(entry).toMatchObject({ name: 'ignav', purpose: 'ignav login' });
+    expect(entry!.reference).toMatch(/^op:\/\//);
+  });
+
+  it('save fails cleanly without a resolver or without vault-write support', async () => {
+    const config = makeConfig();
+    expect(
+      await execCredentialManage(config, undefined, {
+        action: 'save',
+        name: 'x',
+        secretValue: 'v',
+      }),
+    ).toMatch(/no 1Password token/);
+    const readOnly = { resolve: () => Promise.resolve('v') };
+    expect(
+      await execCredentialManage(config, readOnly, { action: 'save', name: 'x', secretValue: 'v' }),
+    ).toMatch(/not available/);
+    expect(
+      await execCredentialManage(config, new FakeResolver(), { action: 'save', name: 'x' }),
+    ).toMatch(/requires secretValue/);
   });
 });

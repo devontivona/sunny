@@ -11,8 +11,8 @@ the model). Steps 1–4 are host setup you do once; step 5 deploys the skill; st
 
 ## Prerequisites
 
-- `OP_SERVICE_ACCOUNT_TOKEN` set for the Sunny process (the read-only Service Account for
-  the dedicated `Sunny` vault — see `.env.example`).
+- `OP_SERVICE_ACCOUNT_TOKEN` set for the Sunny process (the write-scoped Service Account
+  for the dedicated `Sunny` vault — see `.env.example`).
 - A mailbox to use. For Gmail / any 2FA account, generate an **app-specific password** —
   himalaya logs in over IMAP/SMTP, not OAuth.
 

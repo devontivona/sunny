@@ -14,7 +14,7 @@ describe('ConfigSchema defaults', () => {
     expect(c.owner).toEqual({ name: 'Devon', identities: [] });
     expect(c.allowGroups).toBe(true);
     expect(c.recentWindowSize).toBe(30);
-    expect(c.memory).toEqual({ userMaxChars: 8000, sunnyMaxChars: 6000, indexMaxChars: 2000 });
+    expect(c.memory).toEqual({ userMaxChars: 8000, sunnyMaxChars: 6000, indexMaxChars: 16_000 });
     expect(c.server).toEqual({ port: 8787, webhookPath: '/webhooks/sendblue' });
   });
 

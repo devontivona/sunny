@@ -275,3 +275,75 @@ describe('rowToUIMessage — legacy (pre-D-MG9, no payload) reconstruction', () 
     expect(rowToUIMessage(row, false)).toBe(payload);
   });
 });
+
+describe('renderInterimNoteParts — undelivered interim text is marked in history replay', () => {
+  const payload = {
+    id: 'a2',
+    role: 'assistant',
+    parts: [
+      { type: 'text', text: 'found a mis-registered CVV entry, removing it now' },
+      {
+        type: 'tool-bash',
+        toolCallId: 'b1',
+        state: 'output-available',
+        input: { command: 'ls' },
+        output: 'ok',
+      },
+      { type: 'text', text: 'All built and live.' },
+    ],
+    metadata: { delivered: 'text' },
+  };
+
+  it('wraps pre-boundary text as a private working note naming the subject; final text untouched', async () => {
+    const row = makeStoredMessage({ role: 'assistant', text: 'All built and live.', payload });
+    const json = JSON.stringify(
+      await toModelMessages([row], false, { translatorSubject: 'Devon' }),
+    );
+    expect(json).toContain('private working note — not sent to Devon');
+    expect(json).toContain('removing it now'); // content preserved inside the marker
+    expect(json).toContain('All built and live.');
+    expect(json).not.toContain('private working note — not sent to Devon: \\"All built');
+  });
+
+  it('does not wrap relayed translator updates (they WERE seen)', async () => {
+    const withTranslator = {
+      ...payload,
+      parts: [
+        payload.parts[0],
+        { type: 'data-translator', data: { text: 'cleaning up a bad entry', step: 1 } },
+        payload.parts[1],
+        payload.parts[2],
+      ],
+    };
+    const row = makeStoredMessage({
+      role: 'assistant',
+      text: 'All built and live.',
+      payload: withTranslator,
+    });
+    const json = JSON.stringify(
+      await toModelMessages([row], false, { translatorSubject: 'Devon' }),
+    );
+    expect(json).toContain('progress update relayed to Devon');
+    expect(json).not.toContain('private working note — not sent to Devon: \\"[progress update');
+  });
+
+  it('skips fallback_text turns (the recovery backstop delivered FROM the narration)', async () => {
+    const recovered = { ...payload, metadata: { delivered: 'fallback_text' } };
+    const row = makeStoredMessage({ role: 'assistant', text: 'x', payload: recovered });
+    const json = JSON.stringify(await toModelMessages([row], false));
+    expect(json).not.toContain('private working note');
+  });
+
+  it('leaves a turn with no tool parts untouched (all its text is final)', async () => {
+    const plain = {
+      id: 'a3',
+      role: 'assistant',
+      parts: [{ type: 'text', text: 'just a reply' }],
+      metadata: { delivered: 'text' },
+    };
+    const row = makeStoredMessage({ role: 'assistant', text: 'just a reply', payload: plain });
+    const json = JSON.stringify(await toModelMessages([row], false));
+    expect(json).not.toContain('private working note');
+    expect(json).toContain('just a reply');
+  });
+});

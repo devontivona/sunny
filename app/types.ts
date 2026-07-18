@@ -285,5 +285,7 @@ export type AuthState =
   | { state: 'authenticated' }
   | { state: 'open' } // dev-open (DASHBOARD_DEV_OPEN=1): no gate
   | { state: 'unconfigured' } // no session secret set: dashboard disabled
-  | { state: 'anonymous' }
-  | { state: 'pending'; requestId: string; deviceHint: string };
+  | { state: 'anonymous' } // transient while a request is pending — NOT a terminal outcome
+  | { state: 'pending'; requestId: string; deviceHint: string }
+  | { state: 'denied' } // terminal: the owner denied the request
+  | { state: 'expired' }; // terminal: the request timed out (10 min)

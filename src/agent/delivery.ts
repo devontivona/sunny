@@ -214,8 +214,10 @@ export function extractInterimText(parts: UIMessage['parts']): string {
 }
 
 /** Index of the last `tool-*` part, or -1 (data-* parts don't count — they're not turns
- *  of work, so translator updates never shift the final/interim boundary). */
-function lastToolIndex(parts: UIMessage['parts']): number {
+ *  of work, so translator updates never shift the final/interim boundary). Exported for
+ *  history replay: renderInterimNoteParts (turn.ts) marks text at/before this boundary
+ *  as never-delivered working notes. */
+export function lastToolIndex(parts: UIMessage['parts']): number {
   for (let i = parts.length - 1; i >= 0; i--) {
     if (parts[i]!.type.startsWith('tool-')) return i;
   }
@@ -391,6 +393,25 @@ export function usageOf(totalUsage: LanguageModelUsage): TurnUsage {
  * recall read. Shared by both tiers so the persisted shape is identical regardless of
  * which path produced the turn.
  */
+/**
+ * Scrub the credential save action's secret from tool parts bound for the persisted
+ * turn record. The `secretValue` input is the ONE place a plaintext secret crosses the
+ * tool boundary by design (credential_manage "save", D-CR3 revision); once the vault
+ * write happened, persisting it into `messages.payload` would put a live secret in the
+ * DB and every future context replay. Redacting here also keeps it out of recall.
+ */
+export function redactCredentialSecretParts(parts: UIMessage['parts']): UIMessage['parts'] {
+  let changed = false;
+  const out = parts.map((p) => {
+    if (p.type !== 'tool-credential_manage') return p;
+    const input = (p as { input?: Record<string, unknown> }).input;
+    if (!input || typeof input !== 'object' || input.secretValue === undefined) return p;
+    changed = true;
+    return { ...p, input: { ...input, secretValue: '[REDACTED]' } } as UIMessage['parts'][number];
+  });
+  return changed ? out : parts;
+}
+
 export function buildTurnRecord(
   assistant: UIMessage,
   parts: UIMessage['parts'],
@@ -405,7 +426,7 @@ export function buildTurnRecord(
 ): UIMessage {
   return {
     ...assistant,
-    parts,
+    parts: redactCredentialSecretParts(parts),
     metadata: {
       ...(assistant.metadata as Record<string, unknown> | undefined),
       createdAt: meta.createdAt ?? new Date().toISOString(),

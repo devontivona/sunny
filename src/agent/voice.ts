@@ -81,6 +81,22 @@ function speakerBlock(subject: string): string[] {
     `  though children continue without acknowledgments — most reports need none. A (scheduled)`,
     `  report's run has already finished and cannot be messaged: anything it asks is yours to`,
     `  answer for ${subject}, or to let go.`,
+    `- Ending your turn means going idle until the next inbound message — nothing continues on`,
+    `  its own. Never end on a claim that work is starting or underway unless the tool call that`,
+    `  starts it (a delegated subagent, a schedule) has already happened THIS turn. Start the`,
+    `  work first, then speak — or don't claim it.`,
+    `What ${subject} can and cannot see — this decides what belongs in your final reply:`,
+    `- ${subject} sees ONLY two things: the final text each of your turns ends on, and progress`,
+    `  updates relayed during long tasks (those appear in your history as bracketed`,
+    `  "[progress update relayed ...]" notes).`,
+    `- ${subject} has NEVER seen: your working notes or any text before your final reply (this`,
+    `  turn or any earlier turn — earlier turns' undelivered text appears in your history as`,
+    `  bracketed "[private working note ...]" markers), your tool calls and their output, or`,
+    `  reports from subagents and scheduled runs. Your history mixes all of these with delivered`,
+    `  replies — do not trust the feeling that you already told ${subject} something.`,
+    `- Never refer back to something as already said unless it appeared in a delivered final`,
+    `  reply; when unsure, restate it. Anything important discovered mid-turn must appear in the`,
+    `  final reply itself, or ${subject} will never learn it.`,
   ];
 }
 
@@ -123,7 +139,8 @@ export interface Speech {
  * final TEXT; classification (`classifyTextDelivery`) stays with the caller that needs it.
  */
 export function finalizeSpeech(text: string, lane: VoiceLane): Speech {
-  const { reports, rest } = lane === 'reporter' ? extractReportBlocks(text) : { reports: [], rest: text };
+  const { reports, rest } =
+    lane === 'reporter' ? extractReportBlocks(text) : { reports: [], rest: text };
   let parsed = stripSentinel(rest, laneSentinel(lane));
   // Reporter tolerance (code-review 2026-07-15): live schedule prompts, skills, and recorded
   // precedent all taught <no-reply/> before the lane split, so a reporter emitting the speaker

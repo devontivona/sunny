@@ -131,9 +131,13 @@ privilege**:
 
 ## Credentials
 
-- Backed by **1Password** via a read-only **Service Account scoped to a dedicated,
+- Backed by **1Password** via a write-scoped **Service Account scoped to a dedicated,
   minimal `Sunny` vault** — Service Accounts cannot reach the owner's Private vault,
-  so everything outside the Sunny vault is unreadable *by construction*. (D-CR1)
+  so everything outside the Sunny vault is unreadable *by construction*. Write access
+  (D-CR3 revision, 2026-07-18) exists so Sunny can save credentials it generated
+  itself; existing vault secrets still never round-trip through the model, and the
+  one write path (`credential_manage` save) redacts the value from persistence and
+  telemetry. (D-CR1)
 - **The model never sees secret values** — only `op://` references. Values resolve in
   the tool/command layer (`op run`) and are injected into a single subprocess's env,
   never into prompts, tool arguments, responses, or logs. (D-CR2)
