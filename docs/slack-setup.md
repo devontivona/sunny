@@ -17,6 +17,11 @@ display_information:
   name: Sunny
   description: Personal AI assistant
 features:
+  app_home:
+    # Without the messages tab, Slack shows "Sending messages to this app has
+    # been turned off" and DMs are impossible — this IS the product in v1.
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
   bot_user:
     display_name: sunny
     always_online: true
