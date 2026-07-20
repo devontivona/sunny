@@ -15,6 +15,38 @@ describe('normalize (identity)', () => {
   it('lowercases and trims emails (no + prefix)', () => {
     expect(normalize('  Devon@Example.COM ')).toBe('devon@example.com');
   });
+
+  it('passes Slack member ids through verbatim (lowercased) — never the phone strip', () => {
+    // Regression (add-slack-channel): ids that merely CONTAIN digits must not take
+    // the phone branch, or `U0123ABC` would collapse to `+0123` and collide.
+    expect(normalize('U0123ABC')).toBe('u0123abc');
+    expect(normalize(' U0AAAAAAA ')).toBe('u0aaaaaaa');
+    // Phone formatting variants still normalize as before.
+    expect(normalize('+1 (555) 123-4567')).toBe('+15551234567');
+  });
+});
+
+describe('Authorizer — Slack member ids as roster identities (add-slack-channel)', () => {
+  const config = makeConfig({
+    owner: { name: 'Devon', identities: ['+15551234567', 'U0AAAAAAA'] },
+    family: [],
+    allowGroups: true,
+  });
+
+  it('authorizes the owner by Slack member id in a DM', () => {
+    const auth = new Authorizer(config);
+    expect(auth.authorize('U0AAAAAAA', false)).toEqual({
+      authorized: true,
+      isTrusted: true,
+      isOwner: true,
+      role: 'owner',
+    });
+  });
+
+  it('rejects an unrostered Slack member id (fail-closed DM)', () => {
+    const auth = new Authorizer(config);
+    expect(auth.authorize('U9OUTSIDER', false).authorized).toBe(false);
+  });
 });
 
 describe('Authorizer.authorize — tiers (multiplayer-family)', () => {

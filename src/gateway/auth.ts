@@ -78,8 +78,12 @@ export class Authorizer {
 /** Loosely normalize identities so `+1 (555) 123-4567` and `+15551234567` match. */
 export function normalize(identity: string): string {
   const trimmed = identity.trim().toLowerCase();
-  // Phone numbers: strip everything but digits and a leading +.
-  if (/[0-9]/.test(trimmed) && !trimmed.includes('@')) {
+  // Phone numbers: strip everything but digits and a leading +. Only strings that
+  // LOOK like phone numbers (digits + phone punctuation, nothing else) take this
+  // branch — platform ids that merely CONTAIN digits (Slack's `U0123ABC`) must
+  // pass through verbatim, or `U0123ABC` would collapse to `+0123` and every
+  // Slack identity would collide (add-slack-channel).
+  if (/[0-9]/.test(trimmed) && /^[+0-9().\-\s]+$/.test(trimmed)) {
     const digits = trimmed.replace(/[^0-9+]/g, '');
     return digits.startsWith('+') ? digits : `+${digits}`;
   }

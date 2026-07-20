@@ -6,7 +6,7 @@ vi.mock('workflow/api', () => ({ start: vi.fn(), getRun: vi.fn() }));
 vi.mock('../../workflows/conversation.js', () => ({ runConversation: () => undefined }));
 
 import { getRun, start } from 'workflow/api';
-import { DurableTurnRouter } from './durableRouter.js';
+import { DurableTurnRouter, type CoalescePolicy } from './durableRouter.js';
 import { FakeGateway } from '../../tests/fakes/gateway.js';
 import { makeChannelEvent } from '../../tests/factories.js';
 
@@ -39,7 +39,7 @@ const META = {
 
 /** Serial-worker tests opt out of the inbound quiet period (multipart-coalesce) — the
  *  coalescing behavior itself is pinned in its own describe block below. */
-const NO_COALESCE = { quietMs: 0, quietMediaMs: 0 };
+const NO_COALESCE: CoalescePolicy = { quietMs: 0, quietMediaMs: 0 };
 
 const makeRouter = (
   gateway: FakeGateway,
@@ -172,6 +172,25 @@ describe('DurableTurnRouter (multipart-coalesce)', () => {
     expect(start).not.toHaveBeenCalled(); // beyond quietMs, still inside quietMediaMs
 
     await vi.waitFor(() => expect(start).toHaveBeenCalledTimes(1), { timeout: 500 });
+    release();
+  });
+
+  it('a per-channel override (slack: zero windows) starts immediately despite long defaults', async () => {
+    const { run, release } = fakeRun('r1');
+    vi.mocked(start).mockResolvedValue(run as never);
+    const store = fakeStore([true]);
+    // Sendblue-shaped defaults are LONG; slack's override is zero (add-slack-channel
+    // task 3.4 — Slack delivers one event per composer send, no multipart splitting).
+    const router = makeRouter(gateway, store, {
+      quietMs: 5_000,
+      quietMediaMs: 5_000,
+      perChannel: { slack: { quietMs: 0, quietMediaMs: 0 } },
+    });
+
+    router.route(
+      makeChannelEvent({ channel: 'slack', threadId: 'slack:D0DEVON:1721000000.000100' }),
+    );
+    await vi.waitFor(() => expect(start).toHaveBeenCalledTimes(1), { timeout: 300 });
     release();
   });
 

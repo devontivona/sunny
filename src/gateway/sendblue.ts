@@ -8,17 +8,14 @@ import { logger } from '../logger.js';
 import { Authorizer, normalize } from './auth.js';
 import {
   contentTypeForName,
-  isGenericBinaryType,
   kindForMediaType,
   outboundToken,
-  persistInbound,
+  persistInboundAttachments,
   persistOutbound,
   planOutbound,
   publicBaseUrl,
   publishOutbox,
-  sniffMediaType,
   waitForStableFile,
-  type AttachmentRef,
   type OutboundMediaResult,
 } from './media.js';
 import type { ConversationStore } from './store.js';
@@ -532,7 +529,10 @@ export class SendblueGateway implements Gateway {
     // Fetch + persist attachment bytes PROMPTLY (Sendblue URLs expire, D-MM2). A
     // per-attachment failure is non-fatal: the message + other attachments still
     // go through, with the failure recorded as a note.
-    const refs = event.attachments.length > 0 ? await this.persistAttachments(event) : [];
+    const refs =
+      event.attachments.length > 0
+        ? await persistInboundAttachments(this.config.runtimeDir, event)
+        : [];
 
     // Persist on arrival with dedup (D-DE1): a webhook retry of the same message
     // is a no-op and is not re-processed.
@@ -564,55 +564,6 @@ export class SendblueGateway implements Gateway {
       return;
     }
     await this.inboundHandler(event);
-  }
-
-  /**
-   * Fetch + persist each attachment's bytes to disk (D-MM2). Returns a ref per
-   * attachment (saved path, or `error` if the fetch failed — never throws, so one
-   * bad attachment can't drop the message). Bytes stay out of the log (D-MM8).
-   */
-  private async persistAttachments(event: ChannelEvent): Promise<AttachmentRef[]> {
-    const refs: AttachmentRef[] = [];
-    for (let i = 0; i < event.attachments.length; i++) {
-      const a = event.attachments[i]!;
-      const name = a.filename || `attachment-${i}`;
-      try {
-        const bytes = a.data ?? (a.fetchData ? await a.fetchData() : null);
-        if (!bytes || bytes.length === 0) throw new Error('no attachment content');
-        // Recover the real type when the transport left it unlabeled/generic (Sendblue
-        // often delivers a PDF as application/octet-stream): sniff the magic bytes so a
-        // PDF/image routes to NATIVE model ingestion instead of being read as raw text
-        // (which poisoned the durable turn). Keeps the declared type when it's specific.
-        const mediaType = isGenericBinaryType(a.mimeType)
-          ? sniffMediaType(bytes, a.mimeType || 'application/octet-stream')
-          : a.mimeType;
-        const path = persistInbound(this.config.runtimeDir, event.messageId, i, bytes, mediaType);
-        refs.push({
-          path,
-          mediaType,
-          kind: kindForMediaType(mediaType),
-          name,
-          size: bytes.length,
-          direction: 'inbound',
-        });
-      } catch (err) {
-        log.warn('inbound attachment fetch failed (non-fatal)', {
-          messageId: event.messageId,
-          index: i,
-          err: String(err),
-        });
-        refs.push({
-          path: null,
-          mediaType: a.mimeType,
-          kind: a.kind,
-          name,
-          size: a.size,
-          direction: 'inbound',
-          error: String(err),
-        });
-      }
-    }
-    return refs;
   }
 }
 

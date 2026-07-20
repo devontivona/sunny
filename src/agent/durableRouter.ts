@@ -77,9 +77,20 @@ export interface CoalescePolicy {
   quietMs: number;
   /** Quiet period when the newest inbound has attachments or is link-ish (multipart likely). */
   quietMediaMs: number;
+  /**
+   * Per-channel overrides — the multipart-splitting behavior above is a TRANSPORT
+   * property, not a universal one. Slack delivers one event per composer send, so
+   * it runs with no quiet window at all (add-slack-channel task 3.4); channels
+   * without an entry use the top-level windows.
+   */
+  perChannel?: Record<string, { quietMs: number; quietMediaMs: number }>;
 }
 
-const DEFAULT_COALESCE: CoalescePolicy = { quietMs: 2_000, quietMediaMs: 3_000 };
+const DEFAULT_COALESCE: CoalescePolicy = {
+  quietMs: 2_000,
+  quietMediaMs: 3_000,
+  perChannel: { slack: { quietMs: 0, quietMediaMs: 0 } },
+};
 
 /** A message that smells like part of a multipart send: it carries media, is media-only
  *  (empty text), or is a bare URL (a link bubble whose preview/attachment webhooks trail it). */
@@ -157,10 +168,12 @@ export class DurableTurnRouter {
     getLiveBus().publishThreadInbound(event.threadId);
     // Multipart-coalesce: remember when this inbound landed and how long the thread should
     // stay quiet before a turn starts. Each arrival OVERWRITES the entry, so a trickle of
-    // split webhooks keeps extending the wait until the whole send has landed.
+    // split webhooks keeps extending the wait until the whole send has landed. The window
+    // lengths are per-channel: single-event transports (Slack) run with zero wait.
+    const pol = this.coalesce.perChannel?.[event.channel] ?? this.coalesce;
     this.lastInbound.set(event.threadId, {
       at: Date.now(),
-      quietMs: multipartish(event) ? this.coalesce.quietMediaMs : this.coalesce.quietMs,
+      quietMs: multipartish(event) ? pol.quietMediaMs : pol.quietMs,
     });
     this.ensureWorker(event.threadId);
   }
