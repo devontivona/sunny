@@ -1,9 +1,11 @@
 import { tool } from 'ai';
 import type { SunnyConfig } from '../../config/index.js';
 import {
+  deleteCredential,
   isOpReference,
   listCredentials,
   registerCredential,
+  updateCredential,
   type CredentialResolver,
 } from '../../credentials/index.js';
 import { CREDENTIAL_MANAGE_SPEC, type CredentialManageInput } from './credentialManageSpecs.js';
@@ -78,6 +80,67 @@ export async function execCredentialManage(
             `check the reference with the owner: ${err instanceof Error ? err.message : String(err)}`
           );
         }
+      }
+      case 'edit': {
+        if (!input.name) return 'ERROR: edit requires name';
+        if (!input.newName && !input.reference && input.purpose === undefined) {
+          return 'ERROR: edit requires at least one of newName, reference, purpose';
+        }
+        const updated = await updateCredential(config.runtimeDir, input.name, {
+          newName: input.newName,
+          reference: input.reference,
+          purpose: input.purpose,
+        });
+        const renamed = updated.name !== input.name ? ` (renamed from "${input.name}")` : '';
+        if (input.reference && resolver) {
+          try {
+            await resolver.resolve(updated.reference);
+            return `Updated "${updated.name}"${renamed} → ${updated.reference}, verified it resolves. ✓`;
+          } catch (err) {
+            return (
+              `Updated "${updated.name}"${renamed} → ${updated.reference}, but it did NOT ` +
+              `resolve — check the reference with the owner: ` +
+              `${err instanceof Error ? err.message : String(err)}`
+            );
+          }
+        }
+        return `Updated "${updated.name}"${renamed} → ${updated.reference}. ✓`;
+      }
+      case 'delete': {
+        if (!input.name) return 'ERROR: delete requires name';
+        const removed = await deleteCredential(config.runtimeDir, input.name);
+        return `Deleted "${removed.name}" (was → ${removed.reference}). ✓`;
+      }
+      case 'save': {
+        if (!input.name) return 'ERROR: save requires name';
+        if (!input.secretValue) return 'ERROR: save requires secretValue';
+        if (!resolver) return 'ERROR: no 1Password token configured — cannot save to the vault.';
+        if (!resolver.createItem) return 'ERROR: saving to the vault is not available.';
+        let created;
+        try {
+          created = await resolver.createItem({
+            title: input.title ?? input.name,
+            username: input.username,
+            secretValue: input.secretValue,
+            notes: input.purpose,
+            vault: input.vault,
+          });
+        } catch (err) {
+          return (
+            `ERROR saving to the vault: ${err instanceof Error ? err.message : String(err)} ` +
+            `(the Service Account may lack write permission on the vault — the owner must ` +
+            `issue a write-scoped token).`
+          );
+        }
+        await registerCredential(config.runtimeDir, input.name, created.secretReference, {
+          purpose: input.purpose,
+          addedBy: config.owner.name,
+        });
+        return (
+          `Saved "${created.item}" to vault "${created.vault}" and registered ` +
+          `"${input.name}" → ${created.secretReference}. ✓ The stored value is now only in ` +
+          `1Password — never repeat it.`
+        );
       }
     }
   } catch (err) {

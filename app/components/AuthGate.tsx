@@ -13,8 +13,13 @@ type Phase =
   | { kind: 'idle' }
   | { kind: 'requesting' }
   | { kind: 'waiting'; requestId: string; deviceHint: string }
-  | { kind: 'denied' }
+  | { kind: 'denied'; reason: 'denied' | 'expired' }
   | { kind: 'error'; message: string };
+
+// Client-side wait backstop, matching the server's request TTL (ttl.request = 10 min).
+// The wait normally ends on an explicit terminal state from the server; this only
+// catches a lost `expired` response.
+const WAIT_DEADLINE_MS = 10 * 60_000;
 
 export function AuthGate({
   initial,
@@ -40,22 +45,35 @@ export function AuthGate({
     }
   }, []);
 
-  // Poll for approval while waiting.
+  // Poll for approval while waiting. Only an explicit terminal state (denied/expired)
+  // or the deadline ends the wait — a transient `anonymous` must NOT: the server
+  // returns it for non-terminal situations too (most notably a poll that races the
+  // approve→consumed transition while the session cookie is still landing), and
+  // treating it as final showed the owner "denied or timed out" seconds after approval.
   useEffect(() => {
     if (phase.kind !== 'waiting' || polling.current) return;
     polling.current = true;
+    const deadline = Date.now() + WAIT_DEADLINE_MS;
     const timer = setInterval(async () => {
       try {
         const s = await apiGet<AuthState>('/auth/status');
         if (s.state === 'authenticated' || s.state === 'open') {
           clearInterval(timer);
           onAuthenticated();
-        } else if (s.state === 'anonymous') {
-          clearInterval(timer);
-          setPhase({ kind: 'denied' });
+          return;
         }
+        if (s.state === 'denied' || s.state === 'expired') {
+          clearInterval(timer);
+          setPhase({ kind: 'denied', reason: s.state });
+          return;
+        }
+        // 'pending' or a transient 'anonymous': keep polling.
       } catch {
         /* transient; keep polling */
+      }
+      if (Date.now() > deadline) {
+        clearInterval(timer);
+        setPhase({ kind: 'denied', reason: 'expired' });
       }
     }, 3000);
     return () => {
@@ -102,7 +120,11 @@ export function AuthGate({
 
         {phase.kind === 'denied' && (
           <>
-            <p className="mb-md text-error">Access was not granted (denied or timed out).</p>
+            <p className="mb-md text-error">
+              {phase.reason === 'expired'
+                ? 'The request timed out before it was approved.'
+                : 'Access was denied by the owner.'}
+            </p>
             <LinkButton bracketed onClick={requestAccess}>
               request again
             </LinkButton>

@@ -5,6 +5,7 @@ import {
   readdirSync,
   readFileSync,
   renameSync,
+  rmSync,
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
@@ -291,6 +292,49 @@ function readStore(runtimeDir: string, serverName: string): OAuthStore {
  *  interactive consent mid-conversation; that happens via `mcp_manage`). */
 export function oauthTokensPresent(runtimeDir: string, serverName: string): boolean {
   return Boolean(readStore(runtimeDir, serverName).tokens?.access_token);
+}
+
+/**
+ * Delete a server's entire OAuth store (client registration + tokens + PKCE state), so
+ * the next connect runs a FRESH dynamic client registration. This is what `remove` and
+ * `reauthorize` call: the 2026-07-16 craft outage was a remove+re-add that silently
+ * reused a stale client file whose registered redirect pointed at a dead domain — the
+ * provider then rejected every consent link with "Unregistered redirect_uri".
+ */
+export function clearOAuthStore(runtimeDir: string, serverName: string): Promise<void> {
+  return serializeOAuthWrite(() => {
+    rmSync(oauthStorePath(runtimeDir, serverName), { force: true });
+  });
+}
+
+/**
+ * Detect the stale-client failure mode BEFORE the owner taps a doomed consent link:
+ * if the stored client registration carries redirect URIs and none of them is the
+ * current redirect (DASHBOARD_PUBLIC_URL moved since registration), the provider will
+ * reject consent with "Unregistered redirect_uri". Returns a model-facing hint, or
+ * null when the stored client is absent or consistent.
+ */
+export function staleRedirectHint(runtimeDir: string, serverName: string): string | null {
+  const info = readStore(runtimeDir, serverName).clientInformation as
+    | (OAuthClientInformation & { redirect_uris?: unknown })
+    | undefined;
+  const registered = Array.isArray(info?.redirect_uris)
+    ? info.redirect_uris.filter((u): u is string => typeof u === 'string')
+    : [];
+  if (registered.length === 0) return null;
+  let current: string;
+  try {
+    current = defaultRedirectUri();
+  } catch {
+    return null;
+  }
+  if (registered.includes(current)) return null;
+  return (
+    `WARNING: the stored OAuth client for "${serverName}" was registered with redirect ` +
+    `${registered.join(', ')} but the current redirect is ${current} — the provider will ` +
+    `reject this consent link with "Unregistered redirect_uri". Do NOT edit the link; run ` +
+    `mcp_manage action "reauthorize" to register a fresh client.`
+  );
 }
 
 /** Find which registered OAuth server an in-flight authorization `state` belongs to,

@@ -83,7 +83,10 @@ describe('text-as-reply extraction (text delivery mode)', () => {
 
   it('stripSentinel(NO_REPLY): a sentinel-only reply is silence; nothing else is touched', () => {
     expect(stripSentinel('<no-reply/>', NO_REPLY_SENTINEL)).toEqual({ text: '', sentinel: true });
-    expect(stripSentinel('  <no-reply/>  ', NO_REPLY_SENTINEL)).toEqual({ text: '', sentinel: true });
+    expect(stripSentinel('  <no-reply/>  ', NO_REPLY_SENTINEL)).toEqual({
+      text: '',
+      sentinel: true,
+    });
     expect(stripSentinel('here is your answer', NO_REPLY_SENTINEL)).toEqual({
       text: 'here is your answer',
       sentinel: false,
@@ -94,7 +97,10 @@ describe('text-as-reply extraction (text delivery mode)', () => {
     // Unified 2026-07-13: production runs (the heartbeat job) showed that when the model
     // writes the token it means "don't send this" for the whole reply — the text around it
     // is working notes, not a message. The raw text still persists in the row for inspection.
-    const parsed = stripSentinel('All four sources checked; nothing new.\n\n<no-reply/>', NO_REPLY_SENTINEL);
+    const parsed = stripSentinel(
+      'All four sources checked; nothing new.\n\n<no-reply/>',
+      NO_REPLY_SENTINEL,
+    );
     expect(parsed).toEqual({ text: '', sentinel: true });
     expect(classifyTextDelivery(parsed.text, '', parsed.sentinel)).toBe('silence');
   });
@@ -373,5 +379,36 @@ describe('image tool result persistence (image-send-integrity write boundary)', 
       (p) => p.type === 'tool-send_image',
     ) as any;
     expect(part.output).toBe('IMAGE NOT SENT: no file exists at /x');
+  });
+});
+
+describe('redactCredentialSecretParts — the save action secret never persists', () => {
+  it('redacts secretValue from tool-credential_manage inputs in the turn record', async () => {
+    const { redactCredentialSecretParts, buildTurnRecord } = await import('./delivery.js');
+    const parts = [
+      { type: 'text', text: 'saving the new login' },
+      {
+        type: 'tool-credential_manage',
+        toolCallId: 'c1',
+        state: 'output-available',
+        input: { action: 'save', name: 'ignav', secretValue: 'generated-pw-123' },
+        output: 'Saved.',
+      },
+    ] as UIMessage['parts'];
+    const record = buildTurnRecord({ id: 'a', role: 'assistant', parts } as UIMessage, parts, {
+      model: 'm',
+      usage: { in: null, out: null, cached: null, cacheWrite: null },
+      delivered: 'text',
+      recovered: false,
+      steps: 1,
+    });
+    const json = JSON.stringify(record);
+    expect(json).not.toContain('generated-pw-123');
+    expect(json).toContain('[REDACTED]');
+    expect(json).toContain('"action":"save"'); // the rest of the input survives
+
+    // Identity preserved when there is nothing to redact (prompt-cache hygiene).
+    const clean = [{ type: 'text', text: 'no tools' }] as UIMessage['parts'];
+    expect(redactCredentialSecretParts(clean)).toBe(clean);
   });
 });

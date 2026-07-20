@@ -8,7 +8,7 @@ import {
   McpAuthorizationRequired,
   type ConnectDeps,
 } from '../../mcp/connect.js';
-import type { OAuthConsentDriver } from '../../mcp/oauth.js';
+import { clearOAuthStore, staleRedirectHint, type OAuthConsentDriver } from '../../mcp/oauth.js';
 import {
   getMcpServer,
   listMcpServers,
@@ -151,7 +151,7 @@ export async function execMcpManage(
           const who = serverInfo ? ` (${serverInfo.name} ${serverInfo.version})` : '';
           return `"${input.name}"${who} exposes ${tools.length} tool(s):\n${lines.join('\n')}`;
         } catch (err) {
-          return probeError(input.name, err);
+          return probeError(input.name, err, config.runtimeDir);
         }
       }
 
@@ -168,14 +168,14 @@ export async function execMcpManage(
               `tool(s). Pass "tool" to invoke a specific low-consequence one.`
             );
           } catch (err) {
-            return probeError(input.name, err);
+            return probeError(input.name, err, config.runtimeDir);
           }
         }
         let client;
         try {
           client = await connectMcp(input.name, entry, connectDeps);
         } catch (err) {
-          return probeError(input.name, err);
+          return probeError(input.name, err, config.runtimeDir);
         }
         try {
           const tools = await client.tools();
@@ -210,9 +210,41 @@ export async function execMcpManage(
       case 'remove': {
         if (!input.name) return 'ERROR: remove requires name';
         const removed = await removeMcpServer(config.runtimeDir, input.name);
+        // Always clear the OAuth store too — a re-`add` that reuses a stale client
+        // registration fails consent with "Unregistered redirect_uri" (craft, 2026-07-16).
+        await clearOAuthStore(config.runtimeDir, input.name);
         return removed
-          ? `Removed MCP server "${input.name}".`
+          ? `Removed MCP server "${input.name}" (including any stored OAuth client/tokens).`
           : `No MCP server named "${input.name}".`;
+      }
+
+      case 'reauthorize': {
+        if (!input.name) return 'ERROR: reauthorize requires name';
+        const entry = getMcpServer(config.runtimeDir, input.name);
+        if (!entry) return `ERROR: no MCP server named "${input.name}" — add it first`;
+        if (entry.auth?.kind !== 'oauth') {
+          return (
+            `ERROR: "${input.name}" is not an OAuth server (${describeAuth(entry.auth)}) — ` +
+            `reauthorize only applies to OAuth. For header auth, update the credential instead.`
+          );
+        }
+        await clearOAuthStore(config.runtimeDir, input.name);
+        try {
+          await probeMcp(input.name, entry, connectDeps);
+          return (
+            `Cleared the stored OAuth client/tokens for "${input.name}" and reconnected ` +
+            `without needing consent.`
+          );
+        } catch (err) {
+          if (err instanceof McpAuthorizationRequired && err.authorizationUrl) {
+            return (
+              `Cleared the stored OAuth client/tokens for "${input.name}" and registered a ` +
+              `fresh client. Send the owner this consent link to authorize, then probe again:\n` +
+              `${err.authorizationUrl}`
+            );
+          }
+          return probeError(input.name, err, config.runtimeDir);
+        }
       }
     }
   } catch (err) {
@@ -224,12 +256,15 @@ function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-/** Shape a connect/probe failure — OAuth consent gets a clear request-and-tell hint. */
-function probeError(name: string, err: unknown): string {
+/** Shape a connect/probe failure — OAuth consent gets a clear request-and-tell hint,
+ *  plus a stale-client warning when the consent link is doomed to be rejected. */
+function probeError(name: string, err: unknown, runtimeDir: string): string {
   if (err instanceof McpAuthorizationRequired) {
+    const stale = staleRedirectHint(runtimeDir, name);
+    const warn = stale ? `\n${stale}` : '';
     return err.authorizationUrl
-      ? `"${name}" needs OAuth consent. Send the owner this link to authorize, then probe again:\n${err.authorizationUrl}`
-      : `"${name}" needs OAuth authorization — ask the owner to complete consent.`;
+      ? `"${name}" needs OAuth consent. Send the owner this link to authorize, then probe again:\n${err.authorizationUrl}${warn}`
+      : `"${name}" needs OAuth authorization — ask the owner to complete consent.${warn}`;
   }
   return `ERROR connecting to "${name}": ${errText(err)} (check the URL/auth with the owner).`;
 }

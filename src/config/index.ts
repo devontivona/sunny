@@ -107,9 +107,9 @@ export const ConfigSchema = z.object({
     .object({
       userMaxChars: z.number().int().positive().default(8000),
       sunnyMaxChars: z.number().int().positive().default(6000),
-      indexMaxChars: z.number().int().positive().default(2000),
+      indexMaxChars: z.number().int().positive().default(16_000),
     })
-    .default({ userMaxChars: 8000, sunnyMaxChars: 6000, indexMaxChars: 2000 }),
+    .default({ userMaxChars: 8000, sunnyMaxChars: 6000, indexMaxChars: 16_000 }),
   /** Durable `state` repository (runtime-home). Names the owner-controlled PRIVATE
    *  remote that backs `~/.sunny/state/` (memory + credentials + schedules + mcp.json —
    *  the code-written record; agent-authored artifacts live in `data/`). Mirrors how

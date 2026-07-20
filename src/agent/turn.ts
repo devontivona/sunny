@@ -10,7 +10,7 @@ import {
   type AttachmentRef,
   type PreparedImage,
 } from '../gateway/media.js';
-import { groupSpeakerPrefix as speakerPrefix } from './delivery.js';
+import { groupSpeakerPrefix as speakerPrefix, lastToolIndex } from './delivery.js';
 
 /**
  * Stored-row → model-message conversion + inbound media resolution (D-MG9 / D-MM3).
@@ -72,7 +72,12 @@ export function toModelMessages(
       resolveMedia(
         renderDeliveryFailureParts(
           renderTranslatorParts(
-            rowToUIMessage(row, isGroup),
+            // Interim notes are marked BEFORE translator parts render to text — a relayed
+            // update WAS seen and must never be wrapped as a private note.
+            renderInterimNoteParts(
+              rowToUIMessage(row, isGroup),
+              opts.translatorSubject ?? 'the user',
+            ),
             opts.translatorHistory ?? 'attributed',
             opts.translatorSubject ?? 'the user',
           ),
@@ -100,8 +105,7 @@ function ensureNonEmptyUserContent(m: ModelMessage): ModelMessage {
   const empty =
     typeof m.content === 'string'
       ? m.content.trim() === ''
-      : m.content.length === 0 ||
-        m.content.every((p) => p.type === 'text' && p.text.trim() === '');
+      : m.content.length === 0 || m.content.every((p) => p.type === 'text' && p.text.trim() === '');
   if (!empty) return m;
   return {
     ...m,
@@ -167,6 +171,39 @@ export function renderTranslatorParts(
         : p,
     ),
   };
+}
+
+/**
+ * Wrap a past assistant turn's INTERIM text parts — everything at/before its last tool
+ * call, i.e. text the user never received (only the final text is delivered; see
+ * extractFinalText) — as bracketed private-working-note lines for history replay. Without
+ * this the model re-reads its own undelivered narration as ordinary assistant text and
+ * believes it already told the user (the 2026-07-18 CVV-landmine confession that never
+ * left an interim part). Skips `fallback_text` turns: there the recovery backstop composed
+ * the delivered reply FROM the narration, so "not sent" would be the opposite lie.
+ * READ-time only (the translator/envelope pattern) — rows persist unchanged.
+ */
+export function renderInterimNoteParts(
+  msg: Omit<UIMessage, 'id'>,
+  subject: string,
+): Omit<UIMessage, 'id'> {
+  if (msg.role !== 'assistant') return msg;
+  const delivered = (msg.metadata as { delivered?: string } | undefined)?.delivered;
+  if (delivered === 'fallback_text') return msg;
+  const boundary = lastToolIndex(msg.parts);
+  if (boundary < 0) return msg;
+  let changed = false;
+  const parts = msg.parts.map((p, i) => {
+    if (i > boundary || p.type !== 'text') return p;
+    const text = (p as { text: string }).text;
+    if (!text.trim()) return p;
+    changed = true;
+    return {
+      type: 'text',
+      text: `[private working note — not sent to ${subject}: ${JSON.stringify(text)}]`,
+    } as UIMessage['parts'][number];
+  });
+  return changed ? { ...msg, parts } : msg;
 }
 
 /**

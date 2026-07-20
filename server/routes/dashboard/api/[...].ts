@@ -65,7 +65,12 @@ type AuthState =
   | { state: 'open' }
   | { state: 'unconfigured' }
   | { state: 'anonymous' }
-  | { state: 'pending'; requestId: string; deviceHint: string };
+  | { state: 'pending'; requestId: string; deviceHint: string }
+  // Terminal request outcomes, distinct from `anonymous`: the polling client must keep
+  // waiting through transient `anonymous` responses (e.g. the approve→consumed race) and
+  // stop ONLY on these.
+  | { state: 'denied' }
+  | { state: 'expired' };
 
 // Raster image content-types safe to serve INLINE on the dashboard origin. Anything
 // else the (sender-controlled) stored mediaType claims — image/svg+xml, text/html,
@@ -151,7 +156,11 @@ export default defineEventHandler(async (event) => {
         if (row.status === 'pending' && row.expiresAt.getTime() <= Date.now()) {
           await auth.setRequestStatus(row.id, 'expired');
           deleteCookie(event, PENDING_COOKIE, { path: '/' });
-          return { state: 'anonymous' };
+          return { state: 'expired' };
+        }
+        if (row.status === 'expired' || row.status === 'denied') {
+          deleteCookie(event, PENDING_COOKIE, { path: '/' });
+          return { state: row.status };
         }
         if (row.status === 'approved' && cfg.sessionSecret) {
           const session = await auth.createSession(row.deviceHint ?? '');

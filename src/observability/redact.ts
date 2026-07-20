@@ -125,7 +125,10 @@ export function createRedactor(options: RedactorOptions = {}): Redactor {
     }
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      out[k] = redact(v, seen);
+      // The credential save action's secret input (credential_manage "save") is a
+      // freshly generated value no env-derived literal or shape pattern can know —
+      // redact it by its exact key wherever it appears in a traced payload.
+      out[k] = k === 'secretValue' && typeof v === 'string' ? PLACEHOLDER : redact(v, seen);
     }
     return out as T;
   }

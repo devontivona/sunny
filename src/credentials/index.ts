@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import type { Client } from '@1password/sdk';
+import type { Client, ItemCategory, ItemFieldType } from '@1password/sdk';
 import { stateDir } from '../config/index.js';
 import { commitState } from '../state/index.js';
 import { logger } from '../logger.js';
@@ -19,11 +19,14 @@ const INTEGRATION_VERSION = '0.1.0';
  *
  * A `op://` reference (op://vault/item/field, optionally /section/field) is a
  * pointer, not a secret — only the resolved value is sensitive. The authorization
- * boundary is the vault itself (D-CR3): the Service Account is read-only, so Sunny
- * can never expand what it may use; the owner adding an item to the vault is the
- * grant. The name→reference mapping lives in the registry below (D-CR5), not in
- * code or skills. (No per-tool reference whitelist in the MVP — the vault boundary
- * plus action-gating suffice.)
+ * boundary is the vault itself (D-CR3, revised 2026-07-18): the Service Account is
+ * write-scoped so Sunny can SAVE credentials it generated itself (new accounts it
+ * created for the owner) — but a secret that already lives in the vault still never
+ * round-trips through the model; saves are for Sunny-authored values only, and the
+ * registry's git history plus the vault's own item history are the audit trail.
+ * The name→reference mapping lives in the registry below (D-CR5), not in code or
+ * skills. (No per-tool reference whitelist in the MVP — the vault boundary plus
+ * action-gating suffice.)
  */
 
 /** A 1Password secret reference: op://vault/item/field (3+ segments). */
@@ -57,6 +60,29 @@ export interface DiscoveredItem {
   fields: DiscoveredField[];
 }
 
+/** A new vault item to create (credential save). The secret value passes through
+ *  the tool layer once at save time and is never logged or persisted. */
+export interface CreateItemParams {
+  title: string;
+  /** Optional login username (saved as the built-in username field). */
+  username?: string;
+  /** The secret value (saved as the built-in concealed password field). */
+  secretValue: string;
+  notes?: string;
+  /** Vault TITLE to save into; required only when more than one vault is accessible. */
+  vault?: string;
+}
+
+/** The created item, described the same way discovery does: titles + constructed
+ *  `op://` references only — never values. */
+export interface CreatedItem {
+  vault: string;
+  item: string;
+  /** Reference to the concealed secret field (what gets registered). */
+  secretReference: string;
+  fields: DiscoveredField[];
+}
+
 /** Resolves `op://` references to values in the tool layer (D-CR2). Production
  *  uses {@link OnePasswordResolver}; tests inject a fake. */
 export interface CredentialResolver {
@@ -68,6 +94,12 @@ export interface CredentialResolver {
    * constructed references only; field values are NEVER included. Optional.
    */
   listItems?(): Promise<DiscoveredItem[]>;
+  /**
+   * Save a NEW login item to the vault (D-CR3 revision: write-scoped Service
+   * Account). For Sunny-generated credentials only. Optional — requires a
+   * write-capable token; fails with the provider's permission error otherwise.
+   */
+  createItem?(params: CreateItemParams): Promise<CreatedItem>;
 }
 
 /** Real resolver backed by a 1Password Service Account (D-CR1). The client is
@@ -130,6 +162,65 @@ export class OnePasswordResolver implements CredentialResolver {
       }
     }
     return result;
+  }
+
+  /** Create a new Login item. Picks the single accessible vault, or the one whose
+   *  title matches `params.vault` when several are accessible. */
+  async createItem(params: CreateItemParams): Promise<CreatedItem> {
+    const client = await this.client();
+    const vaults = await client.vaults.list();
+    if (vaults.length === 0) throw new Error('no vault accessible to the Service Account');
+    let vault = vaults[0]!;
+    if (vaults.length > 1) {
+      const wanted = params.vault?.trim().toLowerCase();
+      const match = wanted && vaults.find((v) => v.title.trim().toLowerCase() === wanted);
+      if (!match) {
+        throw new Error(
+          `several vaults are accessible — pass which one to save into: ${vaults
+            .map((v) => v.title)
+            .join(', ')}`,
+        );
+      }
+      vault = match;
+    }
+    // Enum members are plain strings in the SDK ('Login', 'Text', 'Concealed'); string
+    // literals + type-only imports keep this module free of a runtime SDK import that
+    // the bundler would inline (see client() above for why that crashloops).
+    const item = await client.items.create({
+      category: 'Login' as ItemCategory,
+      vaultId: vault.id,
+      title: params.title,
+      ...(params.notes ? { notes: params.notes } : {}),
+      fields: [
+        ...(params.username
+          ? [
+              {
+                id: 'username',
+                title: 'username',
+                fieldType: 'Text' as ItemFieldType,
+                value: params.username,
+              },
+            ]
+          : []),
+        {
+          id: 'password',
+          title: 'password',
+          fieldType: 'Concealed' as ItemFieldType,
+          value: params.secretValue,
+        },
+      ],
+    });
+    const fields = item.fields
+      .filter((f) => f.title.trim().length > 0)
+      .map((f) => ({ field: f.title, reference: buildReference(vault.id, item.id, f.id) }));
+    const secret = item.fields.find((f) => f.id === 'password') ?? item.fields[0];
+    if (!secret) throw new Error(`item "${item.title}" was created but came back with no fields`);
+    return {
+      vault: vault.title,
+      item: item.title,
+      secretReference: buildReference(vault.id, item.id, secret.id),
+      fields,
+    };
   }
 }
 
@@ -234,17 +325,73 @@ export function registerCredential(
       ...(meta.addedBy ? { addedBy: meta.addedBy } : {}),
     };
     registry[key] = entry;
-    const file = credentialsPath(runtimeDir);
-    mkdirSync(dirname(file), { recursive: true });
-    // Atomic write: a temp file + rename so a crash or concurrent reader never sees
-    // a torn/half-written registry (which would parse-fail and be quarantined).
-    const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
-    writeFileSync(tmp, `${JSON.stringify(registry, null, 2)}\n`, { mode: 0o644 });
-    renameSync(tmp, file);
-    // Commit the registry update to the `state` repo (runtime-home). Best-effort:
-    // never fails the registration, even with no repo.
-    await commitState(runtimeDir, `credentials: register ${key}`, ['credentials.json']);
+    await writeRegistry(runtimeDir, registry, `credentials: register ${key}`);
     return entry;
+  });
+}
+
+/** Atomic registry write (temp file + rename, so a crash or concurrent reader never
+ *  sees a torn file) + best-effort `state` repo commit — never fails the operation,
+ *  even with no repo. Callers hold the serializeRegistry lock. */
+async function writeRegistry(
+  runtimeDir: string,
+  registry: CredentialRegistry,
+  commitMessage: string,
+): Promise<void> {
+  const file = credentialsPath(runtimeDir);
+  mkdirSync(dirname(file), { recursive: true });
+  const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
+  writeFileSync(tmp, `${JSON.stringify(registry, null, 2)}\n`, { mode: 0o644 });
+  renameSync(tmp, file);
+  await commitState(runtimeDir, commitMessage, ['credentials.json']);
+}
+
+/** Remove a name → reference mapping. Errors on an unknown name — a delete must
+ *  never silently no-op (the 2026-07-18 "removing it now" that removed nothing). */
+export function deleteCredential(
+  runtimeDir: string,
+  name: string,
+): Promise<{ name: string } & CredentialEntry> {
+  return serializeRegistry(async () => {
+    const key = normalizeCredentialName(name);
+    const registry = loadRegistry(runtimeDir);
+    const entry = registry[key];
+    if (!entry) throw new Error(`no credential named "${key}" to delete`);
+    delete registry[key];
+    await writeRegistry(runtimeDir, registry, `credentials: delete ${key}`);
+    return { name: key, ...entry };
+  });
+}
+
+/** Edit an existing mapping in place: rename it and/or repoint its reference and/or
+ *  reword its purpose. Errors on an unknown name; a rename refuses to clobber an
+ *  existing entry (delete it first if that's really intended). */
+export function updateCredential(
+  runtimeDir: string,
+  name: string,
+  changes: { newName?: string; reference?: string; purpose?: string },
+): Promise<{ name: string } & CredentialEntry> {
+  return serializeRegistry(async () => {
+    const key = normalizeCredentialName(name);
+    const registry = loadRegistry(runtimeDir);
+    const existing = registry[key];
+    if (!existing) throw new Error(`no credential named "${key}" to edit`);
+    const ref = changes.reference?.trim();
+    if (ref && !isOpReference(ref)) throw new Error(`not a valid op:// reference: ${ref}`);
+    const nextKey = changes.newName ? normalizeCredentialName(changes.newName) : key;
+    if (nextKey !== key && registry[nextKey]) {
+      throw new Error(`a credential named "${nextKey}" already exists — delete it first`);
+    }
+    const entry: CredentialEntry = {
+      ...existing,
+      ...(ref ? { reference: ref } : {}),
+      ...(changes.purpose !== undefined ? { purpose: changes.purpose } : {}),
+    };
+    delete registry[key];
+    registry[nextKey] = entry;
+    const label = nextKey === key ? key : `${key} -> ${nextKey}`;
+    await writeRegistry(runtimeDir, registry, `credentials: edit ${label}`);
+    return { name: nextKey, ...entry };
   });
 }
 

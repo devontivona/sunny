@@ -6,6 +6,7 @@ import { and, eq, inArray, lte } from 'drizzle-orm';
 import { builtinSchedulesDir } from '../agentDir.js';
 import { canonicalAudienceRef } from '../agent/audience.js';
 import { stateDir } from '../config/index.js';
+import { AuthStore } from '../dashboard/auth/store.js';
 import type { Db } from '../db/client.js';
 import { schedules, scheduleRuns, type ScheduleRow } from '../db/schema.js';
 import { logger } from '../logger.js';
@@ -518,12 +519,28 @@ export function startScheduler(deps: SchedulerDeps): void {
   // ticker, so a boolean fully closes it: a fire that lands while a tick is in flight is skipped
   // (the still-due rows are simply picked up by the next tick).
   let ticking = false;
+  // Dashboard access-request housekeeping cadence (piggybacks on this ticker; the
+  // sweep was previously dead code, so timed-out `pending` rows lingered forever
+  // unless the requesting browser happened to poll them into `expired`). First sweep
+  // one interval AFTER boot — the boot tick belongs to catching up due schedules,
+  // and per-poll lazy expiry already covers the gap.
+  const AUTH_SWEEP_MS = 10 * 60_000;
+  let lastAuthSweep = Date.now();
 
   async function tick(): Promise<void> {
     if (ticking) return;
     ticking = true;
     try {
       const now = new Date();
+
+      if (now.getTime() - lastAuthSweep >= AUTH_SWEEP_MS) {
+        lastAuthSweep = now.getTime();
+        try {
+          await new AuthStore(db).expireStaleRequests();
+        } catch (err) {
+          log.warn('access-request sweep failed', { err: String(err) });
+        }
+      }
 
       // File-defined schedules first (they're few and system/identity-critical). Advance
       // the in-memory next BEFORE dispatch (same double-fire discipline as rows); fires

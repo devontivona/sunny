@@ -15,7 +15,7 @@ credentialed login that persists across runs.
 
 ## Prerequisites
 
-- `OP_SERVICE_ACCOUNT_TOKEN` set for the Sunny process (read-only Service Account for the
+- `OP_SERVICE_ACCOUNT_TOKEN` set for the Sunny process (write-scoped Service Account for the
   dedicated `Sunny` vault — see `.env.example`).
 - Node available on the host (agent-browser drives a CDP browser).
 
