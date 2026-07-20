@@ -54,12 +54,17 @@ oauth_config:
       - groups:read
       - mpim:history
       - mpim:read
-    user:
-      # Message search (future tool): `search.messages` requires a USER token
-      # (xoxp-…) with search:read — bots CANNOT search. Granting it now on the
-      # reinstall avoids a second re-authorization; the tool that stores/uses the
-      # user token is separate future work.
-      - search:read
+      # Message search (future tool): the granular search scopes are BOT scopes,
+      # so `search.messages` runs on the bot token — no separate user token.
+      # Broad by nature (private channels, DMs, files, users); granted now on the
+      # reinstall so the future tool needs no re-authorization. Trim to what the
+      # tool actually needs when it's built.
+      - search:read.public
+      - search:read.private
+      - search:read.im
+      - search:read.mpim
+      - search:read.files
+      - search:read.users
 settings:
   event_subscriptions:
     request_url: https://snny.ai/webhooks/slack
@@ -78,10 +83,9 @@ Note: the events URL must be live when you save it — Slack sends a
 `url_verification` challenge that the running service answers (the adapter
 handles it). Deploy the Slack-enabled build first, or re-verify after restart.
 
-Because this manifest adds a **user scope** (`search:read`), reinstalling the app
-prompts you to authorize it and produces a **User OAuth Token** (`xoxp-…`)
-alongside the bot token. The message-search tool that consumes it is future work
-— keep the token when you see it, but nothing in v1 requires it yet.
+The granular `search:read.*` scopes are **bot** scopes, so message search will
+run on the bot token already in `SLACK_BOT_TOKEN` — no separate user token. The
+tool that uses them is future work; nothing in v1 requires them yet.
 
 ## 2. Configure the host
 
