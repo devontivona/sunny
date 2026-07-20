@@ -2,9 +2,9 @@
 
 ## 1. Dependency upgrade (isolated for bisect)
 
-- [ ] 1.1 Upgrade `chat` to 4.34.0 and `@chat-adapter/state-memory` to match; add `@chat-adapter/slack@4.34.0`; confirm npm dedupes a single `chat` copy against `chat-adapter-sendblue@^4.23.0`
-- [ ] 1.2 Review the Chat SDK 4.30→4.34 changelog for Sendblue-relevant behavior changes; typecheck + full test suite
-- [ ] 1.3 Local production build (vite build is NOT in CI) and loopback-channel smoke to confirm the Sendblue driver still constructs and dispatches
+- [x] 1.1 Upgrade `chat` to 4.34.0 and `@chat-adapter/state-memory` to match; add `@chat-adapter/slack@4.34.0`; confirm npm dedupes a single `chat` copy against `chat-adapter-sendblue@^4.23.0`
+- [x] 1.2 Review the Chat SDK 4.30→4.34 changelog for Sendblue-relevant behavior changes; typecheck + full test suite
+- [x] 1.3 Local production build (vite build is NOT in CI) and loopback-channel smoke to confirm the Sendblue driver still constructs and dispatches
 
 ## 2. Slack driver
 
