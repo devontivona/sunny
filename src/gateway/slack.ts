@@ -110,6 +110,13 @@ export class SlackGateway implements Gateway {
       botToken,
       signingSecret,
       mode: 'webhook',
+      // Slack's Agent messaging experience (agent_view): upgrades the SAME DM —
+      // no separate panel — with a native thinking indicator, so the typing
+      // bridge (assistant.threads.setStatus, needs the `assistant:write` scope)
+      // actually renders instead of no-oping on a classic bot DM. Inert until the
+      // Slack app's manifest enables the agent feature + grants the scope
+      // (docs/slack-setup.md); message.im DMs work with or without it.
+      agentView: true,
       logger: new ConsoleLogger('info', 'slack'),
     });
     this.adapter = adapter as unknown as Adapter;

@@ -22,6 +22,12 @@ features:
     # been turned off" and DMs are impossible — this IS the product in v1.
     messages_tab_enabled: true
     messages_tab_read_only_enabled: false
+  # Agent messaging experience (agent_view): upgrades the DM in place with a
+  # native thinking indicator + suggested prompts (the driver sets
+  # `agentView: true`). Enabling the feature auto-adds the `assistant:write`
+  # scope. Without this the classic bot DM has no typing-indicator surface.
+  agent_view:
+    agent_description: Personal AI assistant
   bot_user:
     display_name: sunny
     always_online: true
@@ -36,6 +42,9 @@ oauth_config:
       - users:read
       - files:read
       - files:write
+      # Agent messaging experience — the thinking/status indicator. Slack
+      # auto-adds this when you enable the agent feature; listed for clarity.
+      - assistant:write
       # Future-proofing: group/@mention participation later is a roster/policy
       # change, not an app re-install. All of this traffic stays silent in v1.
       - app_mentions:read
@@ -45,12 +54,21 @@ oauth_config:
       - groups:read
       - mpim:history
       - mpim:read
+    user:
+      # Message search (future tool): `search.messages` requires a USER token
+      # (xoxp-…) with search:read — bots CANNOT search. Granting it now on the
+      # reinstall avoids a second re-authorization; the tool that stores/uses the
+      # user token is separate future work.
+      - search:read
 settings:
   event_subscriptions:
     request_url: https://snny.ai/webhooks/slack
     bot_events:
       - message.im
       - app_mention
+      # Agent messaging experience DM-open + active-view signals (agent_view).
+      - app_home_opened
+      - app_context_changed
   org_deploy_enabled: false
   socket_mode_enabled: false
   token_rotation_enabled: false
@@ -59,6 +77,11 @@ settings:
 Note: the events URL must be live when you save it — Slack sends a
 `url_verification` challenge that the running service answers (the adapter
 handles it). Deploy the Slack-enabled build first, or re-verify after restart.
+
+Because this manifest adds a **user scope** (`search:read`), reinstalling the app
+prompts you to authorize it and produces a **User OAuth Token** (`xoxp-…`)
+alongside the bot token. The message-search tool that consumes it is future work
+— keep the token when you see it, but nothing in v1 requires it yet.
 
 ## 2. Configure the host
 
@@ -72,10 +95,18 @@ handles it). Deploy the Slack-enabled build first, or re-verify after restart.
    your DMs get silence.
 4. Restart the service (`systemctl --user restart sunny` — deploy policy applies).
 
+Updating an already-installed app: paste the manifest changes on the app's
+**App Manifest** page, then **OAuth & Permissions → Reinstall to Workspace** to
+grant the new scopes (`assistant:write`, `search:read`). The bot token is
+unchanged; a User OAuth Token (`xoxp-…`) appears after you approve the user
+scope.
+
 ## 3. Verify
 
 - Slack app **Event Subscriptions** page shows the request URL **Verified**.
 - DM the bot → Sunny replies in the DM.
+- While Sunny is working on a longer DM turn → a native thinking indicator shows
+  in the conversation (agent_view + `assistant:write`).
 - Have a non-rostered coworker DM it → silence, and the drop appears in logs
   (`unauthorized sender; not triggering agent`).
 - @mention the bot in a channel → silence (`non-DM Slack event ignored`).
