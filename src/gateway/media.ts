@@ -31,6 +31,10 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
+import { logger } from '../logger.js';
+import type { ChannelEvent } from './types.js';
+
+const log = logger('gateway:media');
 
 /** Kinds of attachment, mirroring the transport's normalized `type`. */
 export type AttachmentKind = 'image' | 'file' | 'video' | 'audio';
@@ -278,7 +282,7 @@ export function publicBaseUrl(): string {
   if (!url) {
     throw new Error(
       'PUBLIC_BASE_URL / DASHBOARD_PUBLIC_URL is not set — cannot build a publicly ' +
-        'reachable media link. Set DASHBOARD_PUBLIC_URL to this host\'s public HTTPS URL.',
+        "reachable media link. Set DASHBOARD_PUBLIC_URL to this host's public HTTPS URL.",
     );
   }
   return url.replace(/\/+$/, '');
@@ -342,6 +346,57 @@ export function persistInbound(
   const path = join(dir, `${index}.${extForMediaType(mediaType)}`);
   writeFileSync(path, bytes);
   return path;
+}
+
+/**
+ * Fetch + persist each of an inbound event's attachments to disk (D-MM2), shared by
+ * every channel driver (Sendblue, Slack). Returns a ref per attachment (saved path,
+ * or `error` if the fetch failed — never throws, so one bad attachment can't drop
+ * the message). Generic/unlabeled MIME types are sniffed from the magic bytes so a
+ * PDF/image routes to native model ingestion instead of raw text. Bytes stay out of
+ * the log (D-MM8).
+ */
+export async function persistInboundAttachments(
+  runtimeDir: string,
+  event: ChannelEvent,
+): Promise<AttachmentRef[]> {
+  const refs: AttachmentRef[] = [];
+  for (let i = 0; i < event.attachments.length; i++) {
+    const a = event.attachments[i]!;
+    const name = a.filename || `attachment-${i}`;
+    try {
+      const bytes = a.data ?? (a.fetchData ? await a.fetchData() : null);
+      if (!bytes || bytes.length === 0) throw new Error('no attachment content');
+      const mediaType = isGenericBinaryType(a.mimeType)
+        ? sniffMediaType(bytes, a.mimeType || 'application/octet-stream')
+        : a.mimeType;
+      const path = persistInbound(runtimeDir, event.messageId, i, bytes, mediaType);
+      refs.push({
+        path,
+        mediaType,
+        kind: kindForMediaType(mediaType),
+        name,
+        size: bytes.length,
+        direction: 'inbound',
+      });
+    } catch (err) {
+      log.warn('inbound attachment fetch failed (non-fatal)', {
+        messageId: event.messageId,
+        index: i,
+        err: String(err),
+      });
+      refs.push({
+        path: null,
+        mediaType: a.mimeType,
+        kind: a.kind,
+        name,
+        size: a.size,
+        direction: 'inbound',
+        error: String(err),
+      });
+    }
+  }
+  return refs;
 }
 
 /** Persist a durable outbound copy (for dashboard rendering); returns the path. */

@@ -13,7 +13,8 @@ import { cleanupOutbox, ensureMediaDirs } from './gateway/media.js';
 import { SendblueGateway } from './gateway/sendblue.js';
 import { ShortLinker } from './gateway/shortlinks.js';
 import { LoopbackGateway } from './gateway/loopback.js';
-import { MultiChannelGateway } from './gateway/multiChannel.js';
+import { MultiChannelGateway, type MultiChannelExtras } from './gateway/multiChannel.js';
+import { SlackGateway } from './gateway/slack.js';
 import type { ChannelEvent, Gateway } from './gateway/types.js';
 import { assertAgentSurface } from './agentDir.js';
 import { initMemory } from './memory/index.js';
@@ -184,25 +185,35 @@ async function start(): Promise<Runtime> {
     process.env.SENDBLUE_FROM_NUMBER &&
     process.env.SENDBLUE_WEBHOOK_SECRET,
   );
+  // Slack DM channel (add-slack-channel): optional at boot, exactly like Sendblue —
+  // absent credentials mean the driver simply isn't wired (slack-channel spec
+  // "Configuration-gated boot"), and removing them turns the channel off.
+  const slackConfigured = Boolean(process.env.SLACK_BOT_TOKEN && process.env.SLACK_SIGNING_SECRET);
   // Outbound URL shortening (short-links spec): one ShortLinker shared by every
   // transport driver; a no-op until SHORT_LINK_BASE_URL is set.
   const shortener = new ShortLinker(db);
-  let gateway: Gateway;
+  let primary: Gateway;
   if (sendblueConfigured) {
-    const sendblue = new SendblueGateway({ config, store, shortener });
-    gateway = sendblue;
-    if (process.env.SUNNY_TEST_CHANNEL === '1') {
-      log.info('test channel enabled (loopback alongside Sendblue; SUNNY_TEST_CHANNEL=1)');
-      gateway = new MultiChannelGateway(sendblue, new LoopbackGateway({ config, store, shortener }));
-    }
+    primary = new SendblueGateway({ config, store, shortener });
   } else {
     log.warn(
       '=== MESSAGING TRANSPORT DISABLED === Sendblue is not configured (need SENDBLUE_API_KEY, ' +
         'SENDBLUE_API_SECRET, SENDBLUE_FROM_NUMBER, SENDBLUE_WEBHOOK_SECRET). iMessage will not ' +
         'work; the loopback test channel is serving instead. Run `npm run doctor` for setup help.',
     );
-    gateway = new LoopbackGateway({ config, store, shortener });
+    primary = new LoopbackGateway({ config, store, shortener });
   }
+  const extras: MultiChannelExtras = {};
+  if (sendblueConfigured && process.env.SUNNY_TEST_CHANNEL === '1') {
+    log.info('test channel enabled (loopback alongside Sendblue; SUNNY_TEST_CHANNEL=1)');
+    extras.loopback = new LoopbackGateway({ config, store, shortener });
+  }
+  if (slackConfigured) {
+    log.info('Slack channel enabled (DM-only v1; add-slack-channel)');
+    extras.slack = new SlackGateway({ config, store, shortener });
+  }
+  const gateway: Gateway =
+    extras.loopback || extras.slack ? new MultiChannelGateway(primary, extras) : primary;
 
   // Two inbound paths: ECHO (no LLM) and the durable Tier-1 loop — each turn is a per-thread
   // `runConversation` workflow run (durable-main-loop). The durable path is now the default and

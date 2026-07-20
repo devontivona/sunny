@@ -20,4 +20,12 @@ describe('isGroupThreadId', () => {
     expect(isGroupThreadId('sendblue:owner:group:x')).toBe(false); // 'group' !== 'g'
     expect(isGroupThreadId('a:b:g')).toBe(true);
   });
+
+  it('every Slack thread id reads as non-group (add-slack-channel D5 guard)', () => {
+    // Chat SDK Slack ids are `slack:<channelId>:<thread_ts>` — the third segment
+    // is a message timestamp and can never equal 'g', for DMs and channels alike.
+    expect(isGroupThreadId('slack:D0DEVON:1721000000.000100')).toBe(false);
+    expect(isGroupThreadId('slack:C0GENERAL:1721000000.000200')).toBe(false);
+    expect(isGroupThreadId('slack:G0LEGACY:1721000000.000300')).toBe(false);
+  });
 });
