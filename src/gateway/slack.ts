@@ -276,8 +276,31 @@ export class SlackGateway implements Gateway {
     }
   }
 
-  // No stopTyping: Slack's assistant status clears itself when the reply posts,
-  // so the Gateway's optional member is omitted (auto-expiring indicator).
+  /**
+   * Clear the thinking indicator. Unlike Sendblue typing (which auto-expires),
+   * Slack's assistant status persists until a message posts OR it's explicitly
+   * cleared — so on a SILENT turn (the no-reply sentinel), where nothing posts,
+   * the indicator sticks at "Typing…" forever (observed 2026-07-23). The router's
+   * turn-end `finally` calls this on every turn; `setAssistantStatus(channel,
+   * threadTs, '')` issues `assistant.threads.setStatus` with an empty status —
+   * the canonical clear. Best-effort: no-ops on a thread with no assistant
+   * thread_ts (a top-level DM before agent_view threading), and swallows errors.
+   */
+  async stopTyping(threadId: string): Promise<void> {
+    const [, channel, threadTs] = threadId.split(':');
+    if (!channel || !threadTs) return;
+    try {
+      const adapter = this.adapter as unknown as {
+        setAssistantStatus?: (channelId: string, threadTs: string, status: string) => Promise<void>;
+      };
+      if (typeof adapter.setAssistantStatus === 'function') {
+        await adapter.setAssistantStatus(channel, threadTs, '');
+      }
+      log.debug('typing indicator cleared', { threadId });
+    } catch (err) {
+      log.debug('stopTyping failed (non-fatal)', { threadId, err: String(err) });
+    }
+  }
 
   lastSentAt(threadId: string): number | undefined {
     return this.sentAt.get(threadId);
