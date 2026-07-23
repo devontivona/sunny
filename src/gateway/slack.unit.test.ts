@@ -310,3 +310,39 @@ describe('send — required attachment (image-send-integrity)', () => {
     expect(result.media).toBeUndefined();
   });
 });
+
+describe('stopTyping — clears the assistant status (stuck-typing on silent turns)', () => {
+  it('issues setAssistantStatus with an EMPTY status, decoding channel + threadTs', async () => {
+    const gw = new SlackGateway({ config: slackConfig(), store: {} as ConversationStore });
+    const setAssistantStatus = vi.fn(async () => {});
+    (gw as unknown as { adapter: { setAssistantStatus: unknown } }).adapter.setAssistantStatus =
+      setAssistantStatus;
+
+    // DM_THREAD = slack:D0DEVON:1721000000.000100
+    await gw.stopTyping(DM_THREAD);
+
+    expect(setAssistantStatus).toHaveBeenCalledTimes(1);
+    expect(setAssistantStatus).toHaveBeenCalledWith('D0DEVON', '1721000000.000100', '');
+  });
+
+  it('no-ops on a thread with no assistant thread_ts (top-level DM before agent_view)', async () => {
+    const gw = new SlackGateway({ config: slackConfig(), store: {} as ConversationStore });
+    const setAssistantStatus = vi.fn(async () => {});
+    (gw as unknown as { adapter: { setAssistantStatus: unknown } }).adapter.setAssistantStatus =
+      setAssistantStatus;
+
+    await gw.stopTyping('slack:D0DEVON:'); // empty threadTs segment
+
+    expect(setAssistantStatus).not.toHaveBeenCalled();
+  });
+
+  it('swallows adapter errors (best-effort, never throws)', async () => {
+    const gw = new SlackGateway({ config: slackConfig(), store: {} as ConversationStore });
+    (gw as unknown as { adapter: { setAssistantStatus: unknown } }).adapter.setAssistantStatus =
+      vi.fn(async () => {
+        throw new Error('slack api down');
+      });
+
+    await expect(gw.stopTyping(DM_THREAD)).resolves.toBeUndefined();
+  });
+});
